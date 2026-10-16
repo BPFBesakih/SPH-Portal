@@ -19,7 +19,7 @@ FK akun memakai `ON DELETE RESTRICT` agar penghapusan identitas Auth tidak diam-
 
 Pengelola sudah menjalankan kedua SQL akun melalui dashboard pada 16 Oktober 2026. Hasil migrasi menampilkan `public | app_users | true`; hasil penautan menampilkan `itadmin | ACTIVE | true` untuk kolom `username`, `status`, dan `must_change_password`. Ini mengonfirmasi tabel dan penautan awal; penolakan akses lintas akun baru diuji pada PostgreSQL terisolasi, belum melalui sesi Auth nyata di aplikasi.
 
-Penugasan role administrator sudah tersimpan melalui langkah dasar role di bawah; izin tindakan dan integrasinya masih perlu dibuat. Flag `must_change_password` sudah tersimpan, tetapi alur ganti password pertama pada frontend/backend Supabase belum dibuat. Persyaratan PRD tetap username + password, akun dibuat administrator, dan pemulihan tidak bergantung pada email/WhatsApp. Email akun pengelola pada Auth tidak mengubah persyaratan login pegawai tersebut. Simpan sumber SQL yang sama untuk pelacakan migrasi saat beralih dari dashboard ke CLI.
+Penugasan role administrator dan enam izin administrasi sudah tersimpan melalui langkah di bawah; integrasi otorisasi operasional masih perlu dibuat. Flag `must_change_password` sudah tersimpan, tetapi alur ganti password pertama pada frontend/backend Supabase belum dibuat. Persyaratan PRD tetap username + password, akun dibuat administrator, dan pemulihan tidak bergantung pada email/WhatsApp. Email akun pengelola pada Auth tidak mengubah persyaratan login pegawai tersebut. Simpan sumber SQL yang sama untuk pelacakan migrasi saat beralih dari dashboard ke CLI.
 
 ## Dasar role
 
@@ -29,9 +29,23 @@ Semua hak tulis untuk `anon`, `authenticated`, dan `service_role` dicabut pada k
 
 Pengelola mengonfirmasi kedua langkah berhasil melalui dashboard pada 16 Oktober 2026. Hasil migrasi menampilkan `app_roles` dan `app_user_roles` dengan RLS aktif; hasil penugasan menampilkan akun `itadmin`, role `SUPER_ADMIN`, scope `ALL`, status `ACTIVE`, serta `role_aktif = true`. Pemeriksaan autentikasi dan policy dengan sesi pengguna nyata masih perlu dilakukan setelah integrasi login tersedia.
 
-Ini baru dasar penyimpanan role, bukan izin operasional. Tabel permission, relasi role-permission, pemeriksaan cakupan unit/pos, audit administrasi, dan perlindungan administrator terakhir belum dipasang pada backend baru. Seluruh jalur perubahan role dari aplikasi masih ditutup; jangan membuka endpoint pengelolaan sebelum pemeriksaan izin, audit, dan perlindungan administrator terakhir tersedia. Tidak ada akses otomatis ke coaching atau berkas pegawai dari username atau kode role ini. Frontend/Edge Function operasional belum memakai data role ini.
+Tabel permission dan relasi role-permission sudah dipasang pada tahap berikutnya. Pemeriksaan cakupan unit/pos, audit administrasi, dan perlindungan administrator terakhir belum dipasang pada backend baru. Seluruh jalur perubahan role dari aplikasi masih ditutup; jangan membuka endpoint pengelolaan sebelum pemeriksaan izin, audit, dan perlindungan administrator terakhir tersedia. Tidak ada akses otomatis ke coaching atau berkas pegawai dari username atau kode role ini. Frontend/Edge Function operasional belum memakai data role ini.
 
 `scripts/verify-supabase-role-foundation.mjs` menguji SQL dasar role dan penugasan pada PostgreSQL dalam memori. Dua belas kelompok uji lulus, termasuk RLS lintas akun, penolakan perubahan langsung, konflik identitas, pengulangan, serta pelestarian staging. Cara pemanggilannya sama seperti pengujian akun di bawah.
+
+## Katalog izin tindakan
+
+`migrations/20261016000400_app_permissions.sql` menambah `app_permissions` dan `app_role_permissions` dengan RLS serta hak baca yang terbatas. Katalog mengikuti 43 kode pada `resourceActions` aplikasi saat ini. Membuat katalog tidak memberikan izin kepada role. Pengguna hanya dapat membaca kode izin dan relasi dari role aktif yang sudah ditugaskan kepadanya, melalui rangkaian policy yang juga memeriksa akun aktif. Pengguna tanpa penugasan tidak menerima izin dari username, kode role, atau user metadata.
+
+Sesudah hasil migrasi diperiksa, `setup/grant-super-admin-permissions.sql` memasang tepat enam izin: `admin.users.read`, `admin.users.manage`, `admin.users.reset`, `admin.roles.read`, `admin.roles.manage`, dan `admin.audit.read`. Script mensyaratkan identitas Auth pengelola terkonfirmasi, akun `itadmin` aktif, serta penugasan sistem `SUPER_ADMIN` aktif dengan scope `ALL`. Izin HR, keamanan, coaching, dan berkas pegawai tidak diberikan oleh script ini. Kode izin baru yang ditambahkan ke katalog juga tidak otomatis diberikan kepada role.
+
+Semua hak tulis pada kedua tabel dicabut dari `anon`, `authenticated`, dan `service_role`; perubahan masih dilakukan melalui SQL pengelola. Kode izin dan scope adalah data untuk otorisasi, bukan pengganti policy operasional atau pemeriksaan server. API/layar administrasi belum dibuka oleh langkah ini. Perlindungan administrator terakhir, audit, izin operasional per objek/unit/pos, alur login username, dan ganti password pertama masih perlu diintegrasikan sebelum endpoint terkait dibuka.
+
+Screenshot dashboard pada 16 Oktober 2026 mengonfirmasi enam kode administrasi tersebut terbaca ketika SQL Editor menetapkan identitas `itadmin` dan `SET LOCAL ROLE authenticated`. Query hanya membaca data dalam transaksi yang diakhiri `ROLLBACK`; salinannya tersedia di `checks/check-itadmin-permissions.sql`. Ini mengonfirmasi hasil policy pada database Supabase melalui simulasi identitas SQL, belum login atau validasi JWT aplikasi. Screenshot ini tidak memuat inventaris semua tabel/RLS atau jumlah katalog keseluruhan.
+
+`checks/check-permissions-without-user.sql` memeriksa role `authenticated` tanpa identitas, dengan hasil yang diharapkan `izin_tanpa_identitas = 0`. Pemeriksaan ini sudah disiapkan untuk langkah dashboard berikutnya, belum dikonfirmasi oleh pengelola.
+
+`scripts/verify-supabase-permissions.mjs` lulus 15 kelompok uji pada PostgreSQL terisolasi, mencakup kesesuaian 43 kode katalog, enam izin administrasi eksplisit, RLS lintas akun/role, penolakan perubahan langsung, pencabutan akses, constraints, kegagalan atomik, pengulangan, pemeriksaan dashboard baca saja, dan pelestarian staging. Cara pemanggilannya sama seperti pengujian akun di bawah. Script membaca katalog sumber sebagai teks; tidak mengimpor aplikasi SQLite dan tidak mengakses database nyata. Hasil lokal tidak menggantikan pengujian sesi pengguna nyata di Supabase.
 
 ## Uji SQL terisolasi
 

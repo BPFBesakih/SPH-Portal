@@ -65,7 +65,7 @@ Untuk tahap penyiapan Google OAuth, beranda dan halaman privasi publik tersedia 
 
 Fungsi diagnostik Supabase [`drive-connection-check`](supabase/functions/README.md) sudah diterapkan dan berhasil diuji melalui dashboard pada 16 Oktober 2026. Pemeriksaan mencakup pembaruan token Google, akses metadata folder yang sudah ada, serta izin menambah file. Integrasi unggahan foto dan login pegawai melalui Supabase masih perlu dikerjakan.
 
-[Persiapan akun Supabase](supabase/README.md) sudah mencakup tabel penghubung `public.app_users` dengan RLS, penautan username `itadmin`, dan penugasan eksplisit role `SUPER_ADMIN` berscope `ALL`. Izin tindakan, perlindungan administrator terakhir, alur login username, serta pergantian password pertama melalui backend baru masih perlu diintegrasikan.
+[Persiapan akun Supabase](supabase/README.md) sudah mencakup tabel penghubung `public.app_users` dengan RLS, penautan username `itadmin`, penugasan eksplisit role `SUPER_ADMIN` berscope `ALL`, serta katalog izin dan enam izin administrasi eksplisit. Keenam izin terbaca pada pemeriksaan RLS melalui simulasi identitas SQL di dashboard. Integrasi otorisasi operasional, perlindungan administrator terakhir, alur login username, serta pergantian password pertama melalui backend baru masih perlu dikerjakan.
 
 [Panduan deploy lengkap](docs/DEPLOYMENT.md) mencakup VPS Linux, Docker Compose, domain, HTTPS Caddy, inisialisasi akun, impor, update, backup, dan pemulihan. Berkas `Dockerfile`, `compose.yaml`, dan `Caddyfile` sudah tersedia. Deployment ditujukan untuk satu instance aplikasi dengan penyimpanan persisten pada server organisasi.
 
