@@ -64,9 +64,11 @@ Screenshot berikutnya mengonfirmasi pembacaan profil melalui `portal_current_acc
 
 Fungsi ini adalah pendukung integrasi akun. Backend login di bawah sudah disiapkan tetapi belum diterapkan atau diuji dengan Auth nyata. Pengelolaan sesi web dan perubahan password pertama masih perlu dibuat. Perubahan password harus diverifikasi sebelum flag dibersihkan, dan setiap endpoint operasional harus memeriksa status akun, kewajiban ganti password, izin, dan scope pada permintaan terkait. Jangan menggunakan hasil profil sebagai bukti bahwa JWT sudah diverifikasi atau sebagai pengganti pemeriksaan objek/unit/pos.
 
-## Pembatasan login (belum dikonfirmasi diterapkan)
+## Pembatasan login
 
 `migrations/20261016000600_login_rate_limit.sql` membuat counter privat dan fungsi `portal_take_login_slot(text, text)`. Hanya `service_role` dapat memanggilnya. Klien dan `service_role` tidak memperoleh akses langsung ke skema/tabel counter; RLS aktif tanpa policy klien. Backend menghitung hash SHA-256 dari username yang sudah dinormalisasi dan IP dari proxy tepercaya, lalu mengambil slot sebelum mencari identitas atau memanggil Auth. Browser tidak boleh menentukan hash atau alamat IP yang dipercaya backend.
+
+Pengelola menjalankan migrasi melalui dashboard pada 16 Oktober 2026. Screenshot mengonfirmasi fungsi `portal_take_login_slot` dengan `security_definer = true`, `anon_boleh = false`, `authenticated_boleh = false`, dan `backend_boleh = true`. Hasil ini memeriksa konfigurasi hak panggil; perilaku batas percobaan dan jendela waktu baru diuji pada PostgreSQL lokal, belum melalui endpoint login nyata.
 
 Batas awal berupa jendela 15 menit: **5 percobaan per username** dan **300 percobaan per IP**, termasuk percobaan yang berhasil. Batas IP mengakomodasi banyak pegawai pada jaringan kantor yang sama. Mengganti IP tidak melewati batas username; permintaan yang sudah dibatasi pada IP tidak membuat counter username baru. Update counter memakai UPSERT bersyarat, dengan urutan kunci IP lalu username. Pengulangan migrasi tidak mereset counter. Ini pembatasan frekuensi, tidak mengubah status akun menjadi `LOCKED` atau membersihkan flag wajib ganti password.
 
