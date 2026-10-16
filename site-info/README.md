@@ -1,6 +1,6 @@
 # Halaman informasi publik SPH Portal
 
-Folder ini berisi halaman informasi publik statis dan source Pages Functions untuk backend akun. Backend akun belum dikonfigurasi atau diuji pada runtime Cloudflare; form login frontend belum dibuat. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
+Folder ini berisi halaman informasi publik statis dan source Pages Functions untuk backend akun. Route backend sudah terjangkau di Cloudflare, tetapi konfigurasi Auth dan pengujian akun nyata belum selesai; form login frontend belum dibuat. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
 
 ## Pengaturan Cloudflare Pages dari Git
 
@@ -54,7 +54,7 @@ Lease memakai satu retry setelah 60 ms bila sibuk; konflik berlanjut menghasilka
 
 `node --test tests/cloudflare-auth.test.mjs tests/portal-login.test.mjs` lulus 32 uji: 20 uji backend Cloudflare dan 12 uji Edge Function. Enkripsi/dekripsi AES-GCM Web Crypto diuji nyata, termasuk penolakan ciphertext/key/AAD yang berubah; Auth, SDK, dan RPC memakai fixture. Uji mencakup cookie/CSRF, origin, IP tepercaya, profil/izin terkini tanpa menggabungkan scope antarrole, refresh/lease, logout, dan urutan ganti password. Ini belum membuktikan login atau perubahan password nyata melalui Cloudflare/browser. Status penerapan dan pengujian dashboard dicatat terpisah di [panduan Supabase](../supabase/README.md).
 
-Percobaan build lokal dengan CLI resmi Wrangler `4.151.0` belum berhasil karena resolver dependency cache pnpm di host tidak menemukan `undici`, lalu `unenv` setelah lokasi modul dilengkapi. Tidak ada deploy/login atau pembacaan `.env` pada percobaan ini; dependensi aplikasi tidak diubah. Kompilasi bundle Pages dan hasil deployment Cloudflare masih harus dikonfirmasi sebelum pengujian akun nyata.
+Percobaan build lokal dengan CLI resmi Wrangler `4.151.0` belum berhasil karena resolver dependency cache pnpm di host tidak menemukan `undici`, lalu `unenv` setelah lokasi modul dilengkapi. Tidak ada deploy/login atau pembacaan `.env` pada percobaan ini; dependensi aplikasi tidak diubah. Setelah source dipush, pemeriksaan HTTP publik pada 16 Oktober 2026 ke `GET https://sph-portal.pages.dev/api/auth/me` tanpa cookie/kredensial menghasilkan HTTP 503, `application/json`, dengan `error: AUTH_UNAVAILABLE` dan pesan umum layanan belum tersedia. Hasil ini mengonfirmasi route Functions sudah berjalan di Pages setelah deployment otomatis; konfigurasi runtime belum lengkap. Pemeriksaan entry point ini belum menguji Auth, cookie browser, refresh, logout, atau perubahan password nyata.
 
 ## Batas tahap persiapan
 
