@@ -37,12 +37,15 @@ function fixture(options = {}) {
     const body = init.body ? JSON.parse(init.body) : undefined;
     const headers = new Headers(init.headers);
     calls.push({ path, body, headers, method: init.method, redirect: init.redirect, signal: init.signal });
-    assert.equal(parsed.origin, env.SUPABASE_URL); assert.equal(init.redirect, 'error');
+    assert.equal(parsed.origin, env.SUPABASE_URL); assert.equal(init.redirect, 'manual');
     assert.equal(headers.get('user-agent'), 'SPH-Portal-Backend/1.0');
     assert.equal(headers.has('origin'), false);
     assert.equal(headers.has('cookie'), false);
     assert.ok(init.signal instanceof AbortSignal);
     const answer = (data, status = 200) => status === 204 ? new Response(null, { status }) : Response.json(data, { status });
+    if (path === options.redirectPath) return new Response('fixture-sensitive-upstream-error', {
+      status: options.redirectStatus ?? 302, headers: { Location: 'https://attacker.invalid/collect' },
+    });
     if (path === '/functions/v1/portal-login') {
       assert.equal(headers.get('apikey'), env.SUPABASE_SECRET_KEY);
       if (options.loginThrows) throw new TypeError('fixture-sensitive-upstream-error');
@@ -215,6 +218,22 @@ test('login diagnostics identify only fixed service, verification, context, and 
     const text = await response.text(); assertPrivate(text);
     assert.equal(JSON.parse(text).support_code, expected);
     assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ['error', 'message', 'ok', 'support_code']);
+  }
+});
+
+test('all backend calls use Workers-compatible manual redirects and reject 3xx without following a destination', async () => {
+  const paths = ['/functions/v1/portal-login', '/auth/v1/user', '/rest/v1/rpc/portal_current_account', '/rest/v1/rpc/portal_create_web_session'];
+  for (const path of paths) for (const status of [300, 301, 302, 303, 307, 308, 399]) {
+    const f = fixture({ redirectPath: path, redirectStatus: status });
+    const response = await f.handler(request('login', { body: credentials }), f.env);
+    assert.equal(response.status, 503);
+    assert.ok(f.calls.every((call) => call.redirect === 'manual'));
+    assert.equal(f.called('/collect').length, 0);
+    const text = await response.text(); assertPrivate(text);
+    if (path === '/functions/v1/portal-login') {
+      assert.equal(f.calls.length, 1);
+      assert.equal(JSON.parse(text).support_code, 'LOGIN_SERVICE_REDIRECT_RESPONSE');
+    }
   }
 });
 

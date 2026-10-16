@@ -85,7 +85,7 @@ function response(data, status = 200, setCookies = []) {
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
     'Strict-Transport-Security': 'max-age=31536000',
-    'X-SPH-Auth-Revision': '20261016.4',
+    'X-SPH-Auth-Revision': '20261016.5',
   });
   if ([409, 429].includes(status)) headers.set('Retry-After', status === 409 ? '1' : '900');
   if (status === 405) headers.set('Allow', 'GET, POST');
@@ -167,7 +167,10 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       requireValue(remaining > 0);
       let result;
       try { result = await fetchImpl(`${config.base}${path}`, {
-        method, redirect: 'error', signal: AbortSignal.timeout(Math.ceil(remaining)),
+        // workerd rejects redirect: 'error' before performing any network I/O.
+        // Manual mode plus an explicit 3xx rejection keeps credentials on the
+        // configured project origin without using that unsupported mode.
+        method, redirect: 'manual', signal: AbortSignal.timeout(Math.ceil(remaining)),
         headers: { apikey: admin ? config.secret : config.publishable,
           'User-Agent': 'SPH-Portal-Backend/1.0',
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
@@ -176,6 +179,10 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       }); } catch (error) {
         if (path === '/functions/v1/portal-login') throw new Failure('AUTH_UNAVAILABLE', 503, transportSupport(error));
         throw error;
+      }
+      if (result.status >= 300 && result.status < 400) {
+        try { await result.body?.cancel(); } catch {}
+        throw new Failure('AUTH_UNAVAILABLE', 503, path === '/functions/v1/portal-login' ? 'LOGIN_SERVICE_REDIRECT_RESPONSE' : undefined);
       }
       if (path === '/functions/v1/portal-login') loginStage = 'LOGIN_SERVICE_BODY';
       let data = null;
