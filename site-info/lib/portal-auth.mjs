@@ -17,7 +17,7 @@ const messages = {
   AUTH_UNAVAILABLE: 'Layanan masuk belum tersedia. Coba lagi nanti.',
 };
 class Failure extends Error {
-  constructor(code = 'AUTH_UNAVAILABLE', status = 503) { super(code); this.code = code; this.status = status; }
+  constructor(code = 'AUTH_UNAVAILABLE', status = 503, supportCode) { super(code); this.code = code; this.status = status; this.supportCode = supportCode; }
 }
 function requireValue(condition, code = 'AUTH_UNAVAILABLE', status = 503) {
   if (!condition) throw new Failure(code, status);
@@ -145,6 +145,7 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch, cryptoImpl = g
     let clear = false;
     let config; let key; let held; let pair; let currentAccount; let tokenHash; let leaseHash;
     let leaseOwned = false; let createdHash; let receivedLoginToken;
+    let loginStage;
     const deadline = now() + 40000;
     async function api(path, { body, token, admin = false, method = 'POST', cleanup = false } = {}) {
       const remaining = cleanup ? 4000 : Math.min(10000, deadline - now());
@@ -323,18 +324,26 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch, cryptoImpl = g
       requireValue(username.length > 0 && username.length <= 64 && typeof body.password === 'string'
         && body.password.length > 0 && body.password.length <= 128, 'INVALID_REQUEST', 400);
       // This IP comes from Cloudflare ingress, never from JSON or X-Forwarded-For.
+      loginStage = 'LOGIN_SERVICE_NETWORK';
       const result = await api('/functions/v1/portal-login', { admin: true,
         body: { action: 'login', username, password: body.password, client_ip: clientIp(request) } });
       if (result.status === 401 && result.data?.error === 'INVALID_CREDENTIALS') throw new Failure('INVALID_CREDENTIALS', 401);
       if (result.status === 429) throw new Failure('LOGIN_LIMITED', 429);
+      if ([401, 403].includes(result.status)) throw new Failure('AUTH_UNAVAILABLE', 503, 'LOGIN_SERVICE_AUTH');
+      if (result.status === 404) throw new Failure('AUTH_UNAVAILABLE', 503, 'LOGIN_SERVICE_MISSING');
+      loginStage = 'LOGIN_SERVICE_RESPONSE';
       requireValue(result.ok && result.data?.ok === true);
+      loginStage = 'LOGIN_SESSION_RESPONSE';
       pair = { access_token: result.data.session?.access_token, refresh_token: result.data.session?.refresh_token };
       // Capture any well-shaped returned JWT for cleanup even if the rest fails.
       if (typeof pair.access_token === 'string' && pair.access_token.length <= 8192
         && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(pair.access_token)) receivedLoginToken = pair.access_token;
       const claims = validatePair(pair);
+      loginStage = 'LOGIN_AUTH_VERIFICATION';
       await verifyTokens(pair, claims.sub, claims.session_id);
+      loginStage = 'LOGIN_ACCOUNT_CONTEXT';
       currentAccount = await profile(pair, claims.sub, username);
+      loginStage = 'LOGIN_SESSION_STORAGE';
       const token = random(); const csrf = random();
       tokenHash = await hash(token);
       const box = await encrypt(pair, tokenHash, claims.sub, claims.session_id);
@@ -363,7 +372,11 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch, cryptoImpl = g
         try { await rpc('portal_revoke_web_session', { p_token_hash: tokenHash }, true); } catch {}
         try { await signout(pair.access_token, 'global'); } catch {}
       }
-      return response({ ok: false, error: failure.code, message: messages[failure.code] ?? messages.AUTH_UNAVAILABLE }, failure.status, clear ? clearCookies : []);
+      // Fixed support labels only: never include an exception, upstream body,
+      // username, IP, identifier, credential, or request data in diagnostics.
+      const supportCode = failure.code === 'AUTH_UNAVAILABLE' ? failure.supportCode ?? loginStage : undefined;
+      return response({ ok: false, error: failure.code, message: messages[failure.code] ?? messages.AUTH_UNAVAILABLE,
+        ...(supportCode ? { support_code: supportCode } : {}) }, failure.status, clear ? clearCookies : []);
     } finally {
       if (leaseOwned) { try { await rpc('portal_release_web_session', { p_token_hash: tokenHash, p_lease_hash: leaseHash }, true); } catch {} }
     }

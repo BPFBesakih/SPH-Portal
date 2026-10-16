@@ -169,7 +169,28 @@ test('credential failures and rate limits use safe messages without forwarding u
   }
   const f = fixture({ loginStatus: 401, loginData: { error: { code: 'INVALID_API_KEY', message: env.SUPABASE_SECRET_KEY } } });
   const response = await f.handler(request('login', { body: credentials }), f.env);
-  assert.equal(response.status, 503); assertPrivate(await response.text());
+  assert.equal(response.status, 503);
+  const text = await response.text(); assertPrivate(text);
+  assert.equal(JSON.parse(text).support_code, 'LOGIN_SERVICE_AUTH');
+});
+
+test('login diagnostics identify only fixed service, verification, context, and session stages', async () => {
+  const variants = [
+    [{ loginStatus: 404 }, 'LOGIN_SERVICE_MISSING'],
+    [{ loginStatus: 503, loginData: { error: 'fixture-sensitive-upstream-error' } }, 'LOGIN_SERVICE_RESPONSE'],
+    [{ loginData: { ok: true } }, 'LOGIN_SESSION_RESPONSE'],
+    [{ verifyStatus: 500 }, 'LOGIN_AUTH_VERIFICATION'],
+    [{ profileData: {} }, 'LOGIN_ACCOUNT_CONTEXT'],
+    [{ registerFails: true }, 'LOGIN_SESSION_STORAGE'],
+  ];
+  for (const [options, expected] of variants) {
+    const f = fixture(options);
+    const response = await f.handler(request('login', { body: credentials }), f.env);
+    assert.equal(response.status, 503);
+    const text = await response.text(); assertPrivate(text);
+    assert.equal(JSON.parse(text).support_code, expected);
+    assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ['error', 'message', 'ok', 'support_code']);
+  }
 });
 
 test('upstream identity or profile failures cannot create a portal session and clean up the received Auth session', async () => {
