@@ -10,6 +10,7 @@ Backend aplikasi utama masih Node.js/SQLite. Berkas di sini menyiapkan komponen 
 - Akun Auth pengelola `bpfbesakih@gmail.com` sudah dibuat melalui dashboard dengan **Auto confirm user**. Password ditetapkan oleh pengelola dan tidak dimasukkan ke source atau chat. Akun Auth ini belum otomatis mendapat hak administrator aplikasi.
 - Reset password `itadmin` melalui fungsi pemulihan sementara sudah berhasil, lalu probe `portal-login` mengonfirmasi login password, konteks akun, dan signout sesi uji berhasil. Ringkasan akun memuat `must_change_password = true`, satu role, dan enam izin. Pengelola sudah mengonfirmasi deployment `portal-recover-itadmin` dihapus; source tetap disimpan. Frontend dan sesi portal belum terhubung.
 - Migrasi sesi web sudah diterapkan: screenshot mengonfirmasi lima fungsi hanya dapat dipanggil backend, serta tabel `web_sessions` dengan RLS aktif dan tanpa hak baca langsung bagi `anon`, `authenticated`, atau `service_role`. Ini konfigurasi skema/grants, belum pengujian cookie atau sesi browser nyata.
+- Migrasi penyelesaian ganti password sudah diterapkan: screenshot mengonfirmasi `portal_complete_password_change` dengan akses `anon/authenticated/backend = false/false/true`, serta `password_change_events` dengan RLS aktif dan akses langsung ketiganya `false`. Ini konfigurasi skema/grants; perubahan password melalui aplikasi belum diuji dan tidak dilakukan oleh penerapan migrasi.
 
 ## Tabel penghubung akun
 
@@ -21,7 +22,7 @@ FK akun memakai `ON DELETE RESTRICT` agar penghapusan identitas Auth tidak diam-
 
 Pengelola sudah menjalankan kedua SQL akun melalui dashboard pada 16 Oktober 2026. Hasil migrasi menampilkan `public | app_users | true`; hasil penautan menampilkan `itadmin | ACTIVE | true` untuk kolom `username`, `status`, dan `must_change_password`. Ini mengonfirmasi tabel dan penautan awal; penolakan akses lintas akun baru diuji pada PostgreSQL terisolasi, belum melalui sesi Auth nyata di aplikasi.
 
-Penugasan role administrator dan enam izin administrasi sudah tersimpan melalui langkah di bawah; integrasi otorisasi operasional masih perlu dibuat. Flag `must_change_password` sudah tersimpan; source backend ganti password sudah disiapkan, tetapi migrasi penyelesaiannya, konfigurasi runtime, frontend, dan pengujian nyata belum selesai. Persyaratan PRD tetap username + password, akun dibuat administrator, dan pemulihan tidak bergantung pada email/WhatsApp. Email akun pengelola pada Auth tidak mengubah persyaratan login pegawai tersebut. Simpan sumber SQL yang sama untuk pelacakan migrasi saat beralih dari dashboard ke CLI.
+Penugasan role administrator dan enam izin administrasi sudah tersimpan melalui langkah di bawah; integrasi otorisasi operasional masih perlu dibuat. Flag `must_change_password` sudah tersimpan; source backend ganti password sudah disiapkan dan migrasi penyelesaiannya sudah diterapkan, tetapi konfigurasi runtime, frontend, dan pengujian nyata belum selesai. Persyaratan PRD tetap username + password, akun dibuat administrator, dan pemulihan tidak bergantung pada email/WhatsApp. Email akun pengelola pada Auth tidak mengubah persyaratan login pegawai tersebut. Simpan sumber SQL yang sama untuk pelacakan migrasi saat beralih dari dashboard ke CLI.
 
 ## Dasar role
 
@@ -135,9 +136,9 @@ Setiap request backend memakai hash cookie sesi dan hash lease dari nilai acak b
 
 Rujukan integrasi berikutnya: [Pages Functions routing](https://developers.cloudflare.com/pages/functions/routing/) dan [binding/secret runtime](https://developers.cloudflare.com/pages/functions/bindings/).
 
-## Penyelesaian ganti password (belum diterapkan)
+## Penyelesaian ganti password
 
-`migrations/20261016000800_password_change_completion.sql` menambah timestamp `password_changed_at` yang awalnya `null`, tabel privat `password_change_events` dengan RLS tanpa grant API, dan RPC `portal_complete_password_change(text,text,bigint)` hanya untuk `service_role`. Migrasi belum dijalankan di dashboard dan tidak mengganti password akun yang ada. Ringkasan akhir menampilkan dua baris: satu fungsi dengan akses `false/false/true` serta satu tabel RLS dengan akses `false/false/false` untuk `anon/authenticated/backend`.
+`migrations/20261016000800_password_change_completion.sql` menambah timestamp `password_changed_at` yang awalnya `null`, tabel privat `password_change_events` dengan RLS tanpa grant API, dan RPC `portal_complete_password_change(text,text,bigint)` hanya untuk `service_role`. Pengelola sudah menjalankannya melalui SQL Editor pada 16 Oktober 2026. Screenshot mengonfirmasi dua baris: satu fungsi dengan akses `false/false/true` serta satu tabel RLS aktif dengan akses `false/false/false` untuk `anon/authenticated/backend`. Penerapan ini menyiapkan skema/fungsi; belum memanggil penyelesaian atau mengganti password akun melalui aplikasi.
 
 RPC tidak menerima password atau ID target; akun ditentukan dari sesi portal yang sedang di-lease. Fungsi mengunci akun lalu sesi, memeriksa status, versi, masa berlaku, lease, serta keberadaan sesi Auth. Setelah pemeriksaan lolos, fungsi membersihkan flag, mencatat waktu, menaikkan versi akun, dan menulis event tanpa kredensial. Trigger migrasi 007 mencabut seluruh sesi portal akun tersebut dan menghapus ciphertext. Semua perubahan ini berada dalam transaksi yang sama; kegagalan pencatatan event membatalkan perubahan profil maupun pencabutan sesi. Akun lain tidak berubah dan event tidak dapat dibaca lewat API.
 

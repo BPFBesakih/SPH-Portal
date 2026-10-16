@@ -54,7 +54,7 @@ Rujukan: [autentikasi Edge Functions](https://supabase.com/docs/guides/functions
 
 Mode bawaan `probe` mengembalikan ringkasan tanpa token dan meminta signout lokal sesi uji. Mode eksplisit `login` mengembalikan pasangan token kepada backend pemegang secret key untuk integrasi sesi web berikutnya; mode ini bukan pengujian dashboard. Fungsi membaca [API key bawaan runtime](https://supabase.com/docs/guides/functions/secrets#default-secrets), tidak memerlukan salinan password atau key pada source. Dua belas pengujian HTTP tiruan lulus; konfirmasi key SDK dan password Auth nyata berasal dari probe dashboard terpisah. Frontend, sesi web, dan alur ganti password pertama belum terhubung.
 
-[Source penghubung Cloudflare](../../site-info/README.md#backend-akun-cloudflare) sudah dibuat untuk memanggil mode `login`, memverifikasi Auth/profil kembali, dan menjaga sesi browser dengan cookie serta token terenkripsi di penyimpanan privat. Konfigurasi runtime serta pengujian nyata penghubung ini belum selesai. Migrasi 007 untuk fondasi sesi sudah dikonfirmasi di dashboard; migrasi 008 untuk penyelesaian ganti password belum diterapkan. Tidak perlu mengubah deployment Edge Function login untuk menyiapkan penghubung ini.
+[Source penghubung Cloudflare](../../site-info/README.md#backend-akun-cloudflare) sudah dibuat untuk memanggil mode `login`, memverifikasi Auth/profil kembali, dan menjaga sesi browser dengan cookie serta token terenkripsi di penyimpanan privat. Konfigurasi runtime serta pengujian nyata penghubung ini belum selesai. Migrasi 007 untuk fondasi sesi dan migrasi 008 untuk penyelesaian ganti password sudah dikonfirmasi di dashboard. Tidak perlu mengubah deployment Edge Function login untuk menyiapkan penghubung ini.
 
 ## Pemulihan pengelola sementara
 

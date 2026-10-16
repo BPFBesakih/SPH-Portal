@@ -33,7 +33,7 @@ Empat route ini belum membuka API administrasi, modul pegawai/keamanan, file, at
 
 ### Konfigurasi runtime yang masih diperlukan
 
-Migrasi Supabase 001–007 sudah diterapkan; 008 belum dikonfirmasi. Jangan menguji perubahan password nyata sebelum migrasi 008 serta seluruh konfigurasi runtime tersedia. Atur pada Cloudflare Pages **Settings → Variables and Secrets** untuk **Production**, lalu deploy ulang. [Dokumentasi Cloudflare](https://developers.cloudflare.com/pages/functions/bindings/#secrets) menjelaskan secret terenkripsi dan akses runtime melalui `context.env`. Preview tidak diberi rahasia produksi secara otomatis dan origin preview akan ditolak kecuali dikonfigurasi terpisah.
+Migrasi Supabase 001–008 sudah dikonfirmasi diterapkan; konfigurasi runtime dan pengujian akun nyata penghubung Cloudflare masih menunggu. Atur pada Cloudflare Pages **Settings → Variables and Secrets** untuk **Production**, lalu deploy ulang. [Dokumentasi Cloudflare](https://developers.cloudflare.com/pages/functions/bindings/#secrets) menjelaskan secret terenkripsi dan akses runtime melalui `context.env`. Preview tidak diberi rahasia produksi secara otomatis dan origin preview akan ditolak kecuali dikonfigurasi terpisah.
 
 | Nama | Jenis | Nilai/purpose |
 |---|---|---|
