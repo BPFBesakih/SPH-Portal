@@ -1,6 +1,6 @@
 # Halaman informasi publik SPH Portal
 
-Folder ini berisi halaman informasi publik, halaman masuk `/portal/`, serta Pages Functions untuk backend akun. Konfigurasi Production sudah disimpan dan deployment ulang berhasil; pemeriksaan tanpa sesi menghasilkan HTTP 401 yang diharapkan. Selain pengujian dengan API fiktif, pengelola sudah mengonfirmasi login nyata, tampilan akun setelah langkah ganti password, serta sesi yang tetap terbaca setelah muat ulang. Logout dan refresh token nyata masih perlu diuji. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
+Folder ini berisi halaman informasi publik, halaman masuk `/portal/`, serta Pages Functions untuk backend akun. Konfigurasi Production sudah disimpan dan deployment ulang berhasil; pemeriksaan tanpa sesi menghasilkan HTTP 401 yang diharapkan. Selain pengujian dengan API fiktif, pengelola sudah mengonfirmasi login nyata, tampilan akun setelah langkah ganti password, sesi setelah muat ulang, logout, serta login ulang memakai password baru. Refresh token dan kedaluwarsa nyata masih perlu diuji. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
 
 ## Pengaturan Cloudflare Pages dari Git
 
@@ -82,9 +82,9 @@ Setelah deployment commit `36e6d0b`, revisi `20261016.5` dikonfirmasi aktif. `GE
 
 ### Konfirmasi akun pengelola melalui browser
 
-Pada 16 Oktober 2026, sesudah perbaikan koneksi, pengelola mengonfirmasi layar wajib ganti password. Dalam kelanjutan alur tersebut, screenshot menampilkan **Akun terhubung**, username `itadmin`, dan halaman persiapan modul dengan tombol ganti password sukarela/logout. Frontend hanya menampilkan halaman akun ini ketika ringkasan backend menyatakan `must_change_password = false`. Pengelola kemudian memuat ulang halaman dan mengonfirmasi akun tetap terhubung.
+Pada 16 Oktober 2026, sesudah perbaikan koneksi, pengelola mengonfirmasi layar wajib ganti password. Dalam kelanjutan alur tersebut, screenshot menampilkan **Akun terhubung**, username `itadmin`, dan halaman persiapan modul dengan tombol ganti password sukarela/logout. Frontend hanya menampilkan halaman akun ini ketika ringkasan backend menyatakan `must_change_password = false`. Pengelola kemudian memuat ulang halaman dan mengonfirmasi akun tetap terhubung. Sesudah menekan **Keluar dari akun**, pengelola mengonfirmasi kembali ke form masuk, lalu masuk ulang sebagai `itadmin` memakai password baru dan mengonfirmasi **Akun terhubung** kembali tampil.
 
-Bukti ini mengonfirmasi login nyata, keadaan akun sesudah langkah ganti password, serta penyimpanan/pembacaan sesi browser melalui backend. Nilai password, key, cookie, dan token tetap diisi/dikelola secara privat; tidak diminta atau dicatat dalam repo/chat. Tidak ada pemeriksaan terpisah terhadap isi event audit, pencabutan semua sesi Auth, sesi perangkat lain, kedaluwarsa, atau rotasi refresh token. Muat ulang dalam sesi aktif tidak dengan sendirinya membuktikan refresh token. Logout melalui browser menjadi pemeriksaan berikutnya; modul operasional dan administrasi akun masih belum tersedia.
+Bukti ini mengonfirmasi login nyata, keadaan akun sesudah langkah ganti password, serta penyimpanan/pembacaan sesi browser melalui backend. Nilai password, key, cookie, dan token tetap diisi/dikelola secara privat; tidak diminta atau dicatat dalam repo/chat. Tidak ada pemeriksaan terpisah terhadap isi event audit, pencabutan semua sesi Auth, sesi perangkat lain, kedaluwarsa, atau rotasi refresh token. Muat ulang dalam sesi aktif tidak dengan sendirinya membuktikan refresh token. Logout dan login ulang telah dikonfirmasi pada tingkat perilaku browser; pencabutan sesi server/Auth lama tidak diperiksa secara terpisah. Modul operasional dan administrasi akun masih belum tersedia.
 
 ## Batas tahap persiapan
 
