@@ -27,3 +27,7 @@ Penerapan publik dilakukan sendiri oleh pengelola melalui dashboard Cloudflare s
 - Kontak mengikuti email dukungan pada Google Auth Platform. Konfirmasi kembali sebelum menerbitkan halaman.
 - Jangan memasukkan rahasia backend ke folder `dist/` atau environment variables frontend. Konfigurasi Drive tetap berada di Supabase Edge Function Secrets.
 - Verifikasi kepemilikan alamat situs dan kelengkapan Branding Google diselesaikan sesudah alamat Pages tersedia; tersedianya halaman tidak menjamin persetujuan Google.
+
+## Status verifikasi 16 Oktober 2026
+
+Google Search Console sudah mengonfirmasi kepemilikan properti URL-prefix `https://sph-portal.pages.dev/` melalui berkas HTML di atas. Google Auth Platform menampilkan status OAuth **In production**. Verifikasi Branding belum selesai: pesan Google meminta jeda 24 jam setelah verifikasi kepemilikan sebelum mencoba ulang. Status produksi OAuth tidak berarti portal operasional atau Branding sudah disetujui.
