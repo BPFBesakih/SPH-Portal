@@ -1,0 +1,40 @@
+services:
+  portal:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_ORIGIN: https://${DOMAIN:?Isi DOMAIN di .env}
+      COOKIE_SECURE: "true"
+      SESSION_HOURS: "8"
+      MAX_UPLOAD_MB: "10"
+    volumes:
+      - portal_data:/app/data
+      - portal_backups:/app/backups
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      portal:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?Isi DOMAIN di .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  portal_data:
+  portal_backups:
+  caddy_data:
+  caddy_config:
