@@ -89,6 +89,7 @@ export async function documentAllowed(db, user, action, doc) {
   });
 }
 export async function trainingAllowed(db, user, action, event) {
+  if (event.deleted_at) return false;
   const related = user.employee_id && await one(db, 'SELECT id FROM training_participants WHERE training_event_id=? AND employee_id=?', event.id, user.employee_id);
   return await can(db, user, `hr.training.${action}`, {
     org_unit_id: event.organizer_org_unit_id,

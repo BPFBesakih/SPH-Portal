@@ -50,7 +50,7 @@ Untuk menyiapkan ulang calon impor pada instalasi lain, lihat [panduan impor](do
 - Login/logout, password awal wajib diganti, sesi kedaluwarsa, pembatasan login, pemulihan sekali pakai, role buatan administrator, cakupan sendiri/unit/pos/seluruh organisasi, serta audit.
 - Pegawai, pencarian/filter, ekspor CSV sesuai akses, unit/posisi, riwayat penempatan dan atasan, kontrak serta lampiran privat.
 - Regulasi/SOP/standar layanan terpusat. Versi lama disimpan; aktivasi versi baru hanya setelah tanggal berlaku.
-- Kegiatan & Pelatihan, peserta tanpa wajib akun, kehadiran manual, materi unggahan atau referensi versi dokumen pusat, dan sertifikat per peserta.
+- Kegiatan & Pelatihan, peserta tanpa wajib akun, kehadiran manual, materi unggahan atau referensi versi dokumen pusat, dokumentasi foto JPG/PNG, dan sertifikat per peserta. Penghapusan kegiatan khusus akun `itadmin`, dengan riwayat audit tetap tersimpan.
 - Coaching terbatas bagi pihak terkait atau pengelola yang ditunjuk, dengan tindak lanjut, target, progres, dan catatan penyelesaian.
 - Jadwal keamanan: kelompok, pos, shift lintas tengah malam, anggota, kelayakan, ketidaktersediaan operasional, versi aturan/pola, anchor/fase, kebutuhan, dan penyesuaian bertanggal.
 - Generator deterministik, penugasan manual, kunci, kekurangan, validasi lintas periode, snapshot, revisi, dan publikasi atomik. Kebijakan awal memblokir publikasi dengan kekurangan; administrator dapat mengaktifkan pengakuan dengan alasan berdasarkan keputusan operasional.

@@ -56,3 +56,12 @@ Cakupan tambahan: Admin/SDM sebagai penerbit, pembaca lintas unit, draf dan gamb
 Pemeriksaan browser memakai database demo terpisah `data/mvp-qa-20261016` pada port 3001. Berhasil membuat teks → gambar → teks melalui editor, melihat pratinjau, menerbitkan, membuka detail, dan menandai sudah dibaca. Akun petugas dapat membaca pengumuman dengan status baca sendiri, tanpa tombol pengelolaan. Formulir Patroli dan Kejadian diperiksa pada viewport 390 × 844, dengan lebar konten mengikuti viewport, pelapor otomatis, placeholder, tombol kamera, tanpa pilihan berkas galeri, dan Kirim laporan dinonaktifkan sebelum bukti tersedia. Tampilan desktop diperiksa pada 1280 × 900. Label aksesibilitas tombol layar kecil dan pemilihan modul sesudah berganti akun diperbaiki.
 
 Batas verifikasi: pengambilan gambar melalui kamera fisik dan pembacaan posisi fisik HP belum diuji. Validasi bukti dan alur penyimpanan telah diuji melalui server/API dengan data uji. Lakukan uji perangkat Android/iOS di URL HTTPS tujuan sebelum dipakai petugas.
+
+
+## Kegiatan & Pelatihan — 17 Oktober 2026
+
+Seluruh 114 tes aplikasi dan 19 kelompok pemeriksaan PostgreSQL lulus. Cakupan baru: penghapusan hanya oleh username terverifikasi itadmin, penolakan versi data lama, retensi audit/relasi, pencabutan akses detail dan foto sesudah penghapusan, serta pemisahan foto dokumentasi dari materi. Migrasi SQLite diuji dari schema lama dan saat dibuka ulang tanpa kehilangan agenda atau materi.
+
+Pemeriksaan browser pada server lokal port 3017 memakai database di memori, tiga akun fiktif, dan gambar logo sebagai berkas uji: unggah JPG/PNG melalui pemilih berkas, simpan keterangan, tampilkan galeri, perbesar gambar, serta buka dan batalkan konfirmasi hapus. itadmin melihat tombol hapus; pengelola biasa dapat unggah tanpa tombol hapus; pembaca hanya dapat melihat foto. Tidak ada kegiatan atau berkas produksi yang diubah untuk pengujian ini.
+
+Status penerapan: migrasi kolom tambahan berhasil diterapkan pada proyek SPH-Portal. Pemeriksaan read-only mengonfirmasi deleted_at (text), deleted_by (uuid), serta usage_kind (text, default MATERIAL), dengan RLS dan privilege lama tetap. Health check produksi HTTP 200. Deployment backend tertahan pada review persetujuan otomatis; portal-api tetap versi 3 dan aset website belum dipush.

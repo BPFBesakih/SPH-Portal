@@ -36,6 +36,16 @@ export async function handleFormAction(action,el) {
     const l=await lookups('training');formDialog('Buat kegiatan atau pelatihan',field('Judul kegiatan atau pelatihan','title')+field('Topik','topic')+field('Unit penyelenggara','organizer_org_unit_id','select',nameOptions(l,'units'))+field('Nama penyelenggara','organizer_name','text','',optional)+fieldTime('Mulai','starts_at')+fieldTime('Selesai','ends_at')+field('Lokasi','location')+field('Deskripsi','description','textarea','',optional),async b=>{const t=await post('training',{...b,starts_at:toUTC(b.starts_at),ends_at:toUTC(b.ends_at)});await saved('training',t.id);});return true;
   }
   if(action==='training-status'){formDialog('Ubah status kegiatan atau pelatihan',field('Status','status','select',choices(['PLANNED','COMPLETED','CANCELLED'],d.status)),async b=>{await patch(`training/${d.id}`,{...b,row_version:d.row_version});await saved('training',d.id);});return true;}
+  if(action==='delete-training') {
+    formDialog('Hapus kegiatan?',`<p class="full detail-prose">Hapus kegiatan <strong>${esc(d.title)}</strong> dari daftar? Kegiatan beserta peserta, materi, sertifikat, dan dokumentasinya tidak lagi dapat diakses melalui modul ini.</p>`,async()=>{await api(`training/${d.id}`,{method:'DELETE',body:{row_version:d.row_version}});closeDetails();state.detail=null;await saved(null,null,'Kegiatan berhasil dihapus.');},{submit:'Hapus kegiatan'});return true;
+  }
+  if(action==='new-documentation') {
+    formDialog('Tambah dokumentasi',field('Foto kegiatan (JPG/PNG, maksimal 10 MB)','file','file','','accept=".jpg,.jpeg,.png"')+field('Keterangan foto','caption','text','',`${optional} maxlength="500"`),async b=>{if(!/\.(jpe?g|png)$/i.test(b.file?.name||''))throw new Error('Pilih foto JPG atau PNG.');const file=await uploadFile(b.file);await post(`training/${d.id}/documentation`,{file_id:file.id,caption:b.caption});await saved('training',d.id,'Foto dokumentasi berhasil ditambahkan.');});return true;
+  }
+  if(action==='documentation-photo') {
+    const photo=d.documentation?.find(f=>f.id===el.dataset.id);if(!photo||!d.can_view_documentation)return true;
+    dialog('Dokumentasi kegiatan',`<img class="image-expanded" src="/api/files/${encodeURIComponent(photo.id)}?inline=1" alt="${esc(photo.caption)}"><p class="detail-prose">${esc(photo.caption)}</p>`,{wide:true});return true;
+  }
   if(action==='new-participant'){const l=await lookups('training');formDialog('Tambah peserta',field('Pegawai','employee_id','select',nameOptions({...l,employees:l.employees.filter(e=>!d.participants.some(p=>p.employee_id===e.id))},'employees')),async b=>{await post(`training/${d.id}/participants`,b);await saved('training',d.id);});return true;}
   if(action==='attendance'){const participant=d.participants.find(p=>p.id===el.dataset.id);formDialog(`Kehadiran ${participant.full_name}`,field('Kehadiran','attendance_status','select',choices(['NOT_RECORDED','PRESENT','ABSENT'],participant.attendance_status))+field('Catatan','attendance_notes','textarea',participant.attendance_notes||'',optional),async b=>{await patch(`training/${d.id}/participants/${participant.id}`,{...b,row_version:participant.row_version});await saved('training',d.id);});return true;}
   if(action==='new-material') {

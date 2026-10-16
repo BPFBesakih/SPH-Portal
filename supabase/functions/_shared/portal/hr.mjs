@@ -278,7 +278,7 @@ export async function hrRoutes(c) {
     if (m === 'GET' && !id) {
       assert(await has(db, user, 'hr.training.read'), 'Akses ditolak.', 403);
       return {
-        items: await asyncFilter(await all(db, 'SELECT t.*,(SELECT count(*) FROM training_participants WHERE training_event_id=t.id) participant_count FROM training_events t ORDER BY starts_at DESC'), async t => await trainingAllowed(db, user, 'read', t))
+        items: await asyncFilter(await all(db, 'SELECT t.*,(SELECT count(*) FROM training_participants WHERE training_event_id=t.id) participant_count FROM training_events t WHERE t.deleted_at IS NULL ORDER BY starts_at DESC'), async t => await trainingAllowed(db, user, 'read', t))
       };
     }
     if (m === 'POST' && !id) return await tx(db, async () => {
@@ -305,19 +305,54 @@ export async function hrRoutes(c) {
     });
     if (id) {
       const event = await get(db, 'training_events', id);
+      assert(!event.deleted_at, 'Kegiatan tidak ditemukan.', 404);
       if (m === 'GET' && !action) {
         assert(await trainingAllowed(db, user, 'read', event), 'Akses ditolak.', 403);
         const manage = await trainingAllowed(db, user, 'participants', event);
         return {
           ...event,
+          can_delete: user.username === 'itadmin',
+          can_upload_documentation: await trainingAllowed(db, user, 'manage', event),
+          can_view_documentation: await trainingAllowed(db, user, 'download', event),
           participants: await asyncFilter(await all(db, 'SELECT tp.*,e.full_name,e.employee_no FROM training_participants tp JOIN employees e ON e.id=tp.employee_id WHERE tp.training_event_id=? ORDER BY e.full_name', id), async tp => manage || await can(db, user, 'hr.training.read', {
             org_unit_id: event.organizer_org_unit_id,
             employee_id: tp.employee_id
           })),
-          materials: await all(db, 'SELECT tm.*,dv.file_id document_file_id FROM training_materials tm LEFT JOIN document_versions dv ON dv.id=tm.document_version_id WHERE tm.training_event_id=?', id),
+          materials: await all(db, "SELECT tm.*,dv.file_id document_file_id FROM training_materials tm LEFT JOIN document_versions dv ON dv.id=tm.document_version_id WHERE tm.training_event_id=? AND tm.usage_kind='MATERIAL'", id),
+          documentation: await all(db, "SELECT f.id,f.original_name,f.mime_type,f.size_bytes,tm.title caption,tm.created_at FROM training_materials tm JOIN files f ON f.id=tm.file_id WHERE tm.training_event_id=? AND tm.usage_kind='DOCUMENTATION' AND f.status='AVAILABLE' ORDER BY tm.created_at,tm.id", id),
           certificates: (await all(db, 'SELECT pc.*,tp.employee_id FROM participant_certificates pc JOIN training_participants tp ON tp.id=pc.training_participant_id WHERE tp.training_event_id=?', id)).filter(pc => manage || pc.employee_id === user.employee_id)
         };
       }
+      if (m === 'DELETE' && !action) return await tx(db, async () => {
+        assert(user.username === 'itadmin', 'Hanya itadmin yang boleh menghapus kegiatan.', 403);
+        assert(await trainingAllowed(db, user, 'read', event), 'Akses ditolak.', 403);
+        await update(db, 'training_events', id, b.row_version, {
+          deleted_at: now(),
+          deleted_by: user.id
+        });
+        await audit(db, user, 'DELETE', 'training_events', id, {
+          title: event.title
+        });
+        return {
+          deleted: true
+        };
+      });
+      if (m === 'POST' && action === 'documentation') return await tx(db, async () => {
+        assert(await trainingAllowed(db, user, 'manage', event), 'Akses unggah dokumentasi ditolak.', 403);
+        const file = await claimFile(db, user, b.file_id);
+        assert(['image/jpeg', 'image/png'].includes(file.mime_type), 'Dokumentasi hanya menerima foto JPG atau PNG.');
+        const row = await insert(db, 'training_materials', {
+          training_event_id: id,
+          title: text(b.caption || file.original_name, 'Keterangan foto'),
+          file_id: file.id,
+          usage_kind: 'DOCUMENTATION',
+          created_by: user.id
+        });
+        await audit(db, user, 'ADD_DOCUMENTATION', 'training_events', id, {
+          file_id: file.id
+        });
+        return row;
+      });
       if (m === 'PATCH' && !action) return await tx(db, async () => {
         assert(await trainingAllowed(db, user, 'manage', event), 'Akses ditolak.', 403);
         const row = await update(db, 'training_events', id, b.row_version, {

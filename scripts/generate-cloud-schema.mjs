@@ -1,4 +1,4 @@
-import {readFileSync,writeFileSync} from 'node:fs';
+import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 const schema=readFileSync(new URL('../schema.sql',import.meta.url),'utf8');
 const stamp=`to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 const shared={users:'app_users',roles:'app_roles',permissions:'app_permissions',user_roles:'app_user_roles',role_permissions:'app_role_permissions'};
@@ -51,5 +51,6 @@ output+=`INSERT INTO portal.import_candidates(id,full_name,position_name,org_pat
  to_char(i.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),${stamp},1
  FROM import_staging.employee_candidates i WHERE i.status='PENDING' ON CONFLICT DO NOTHING;\n`;
 output+=`NOTIFY pgrst,'reload schema';\nCOMMIT;\nSELECT count(*) AS operational_tables FROM pg_catalog.pg_tables WHERE schemaname='portal';\n`;
-writeFileSync(new URL('../supabase/migrations/20261016000900_operational_modules.sql',import.meta.url),output);
-console.log(`Generated ${tables.length} private operational tables, five identity views and ${foreignKeys.length} foreign keys.`);
+const baseline=new URL('../supabase/migrations/20261016000900_operational_modules.sql',import.meta.url);
+if(existsSync(baseline))console.log('Preserved operational baseline migration; schema changes use additive migrations.');
+else {writeFileSync(baseline,output);console.log(`Generated ${tables.length} private operational tables, five identity views and ${foreignKeys.length} foreign keys.`);}

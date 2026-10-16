@@ -138,6 +138,8 @@ Publikasi dokumen dilakukan pengguna berizin tanpa rangkaian approval. Tanggal b
 | TRN-02 | Kelola peserta dan kehadiran manual | Pegawai tidak terdaftar ganda pada pelatihan yang sama; hadir/tidak hadir/belum dicatat dibedakan |
 | TRN-03 | Lampirkan materi dan sertifikat; lihat riwayat | Materi terkait kegiatan atau pelatihan, sertifikat terkait peserta; berkas dibatasi hak akses |
 | TRN-04 | Materi dari dokumen pusat | Materi kegiatan dan pelatihan dapat merujuk versi dokumen pusat; pengelolaan standar layanan tetap di Regulasi & SOP |
+| TRN-05 | Dokumentasi foto kegiatan | Pengelola sesuai cakupan kegiatan dapat mengunggah foto JPG/PNG maksimal 10 MB per foto beserta keterangan opsional. Foto ditampilkan terpisah dari materi dan mengikuti izin berkas kegiatan |
+| TRN-06 | Hapus kegiatan khusus itadmin | Hanya akun aktif dengan username `itadmin` dan akses baca kegiatan yang dapat menghapus. Wajib konfirmasi dan versi data terkini; kegiatan hilang dari daftar, dashboard, riwayat pegawai, serta akses detail/berkas. Data terkait dan audit dipertahankan secara privat |
 
 ### 6.5 Evaluasi & Penilaian — Coaching
 

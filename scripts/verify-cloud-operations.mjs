@@ -19,7 +19,7 @@ try{
  CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
  GRANT USAGE ON SCHEMA auth TO authenticated;`);
  const directory=new URL('../supabase/migrations/',import.meta.url);
- for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&!n.startsWith('20261016000900')).sort())await pg.exec(readFileSync(new URL(name,directory),'utf8'));
+ for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n<'20261016000900').sort())await pg.exec(readFileSync(new URL(name,directory),'utf8'));
  const existingId=randomUUID();
  await pg.query('INSERT INTO auth.users(id,email,email_confirmed_at) VALUES($1,$2,now())',[existingId,'existing-fixture@example.invalid']);
  await pg.query('INSERT INTO public.app_users(id,username,must_change_password) VALUES($1,$2,false)',[existingId,'existing_admin']);
@@ -29,6 +29,7 @@ try{
   SELECT 'Fiktif '||g,'[{"name":"Posisi Fiktif","org_path":"Unit Fiktif"}]'::jsonb,'fixture',jsonb_build_array('Bagan Lengkap!A'||g) FROM generate_series(1,157)g;`);
  const beforeIdentity=(await pg.query('SELECT id,username,status,must_change_password,row_version FROM public.app_users ORDER BY id')).rows;
  await pg.exec(readFileSync(new URL('20261016000900_operational_modules.sql',directory),'utf8'));
+ for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n>'20261016000900_operational_modules.sql').sort())await pg.exec(readFileSync(new URL(name,directory),'utf8'));
  await check('migration preserves existing accounts, six admin permissions and all 157 pending candidates',async()=>{
   assert.deepEqual((await pg.query('SELECT id,username,status,must_change_password,row_version FROM public.app_users ORDER BY id')).rows,beforeIdentity);
   assert.equal((await pg.query("SELECT count(*)::int n FROM public.app_role_permissions rp JOIN public.app_roles r ON r.id=rp.role_id WHERE r.code='SUPER_ADMIN'")).rows[0].n,6);
@@ -152,6 +153,26 @@ try{
   await call(sdm,`training/${event.id}/materials`,'POST',{title:'SOP',document_version_id:version.id});
   assert.equal((await call(sdm,`training/${event.id}`)).participants.length,1);
   assert.equal((await call(officer,`files/${documentFile}`)).binary,true);
+ });
+ await check('activity documentation and itadmin-only deletion enforce permissions on PostgreSQL',async()=>{
+  const event=await call(sdm,'training','POST',{title:'Kegiatan dokumentasi',topic:'Koordinasi',organizer_org_unit_id:unit.id,starts_at:'2099-02-01T01:00:00Z',ends_at:'2099-02-01T02:00:00Z'});
+  const file=await photo(sdm);
+  await call(sdm,`training/${event.id}/documentation`,'POST',{file_id:file,caption:'Foto kegiatan'});
+  const detail=await call(sdm,`training/${event.id}`);
+  assert.equal(detail.documentation.length,1);assert.equal(detail.materials.length,0);assert.equal(detail.can_delete,false);assert.equal(detail.can_view_documentation,true);
+  assert.equal((await call(sdm,`files/${file}`)).binary,true);
+  await assert.rejects(call(sdm,`training/${event.id}`,'DELETE',{row_version:event.row_version,username:'itadmin'}),e=>e.status===403);
+  await assert.rejects(call(admin,`training/${event.id}`,'DELETE',{row_version:event.row_version}),e=>e.status===403);
+  await assert.rejects(call(coordinator,`training/${event.id}/documentation`,'POST',{file_id:file}),e=>e.status===403);
+  const itadmin=await account('itadmin','SDM');
+  assert.equal((await call(itadmin,`training/${event.id}`)).can_delete,true);
+  await assert.rejects(call(itadmin,`training/${event.id}`,'DELETE',{row_version:0}),e=>e.status===409);
+  await call(itadmin,`training/${event.id}`,'DELETE',{row_version:event.row_version});
+  assert.equal((await call(sdm,'training')).items.some(t=>t.id===event.id),false);
+  await assert.rejects(call(sdm,`training/${event.id}`),e=>e.status===404);
+  await assert.rejects(call(sdm,`files/${file}`),e=>e.status===403);
+  assert.equal((await one(db,'SELECT deleted_by FROM training_events WHERE id=?',event.id)).deleted_by,itadmin.id);
+  assert.equal((await one(db,"SELECT count(*)::integer n FROM audit_events WHERE action='DELETE' AND object_key=?",event.id)).n,1);
  });
  await check('coaching remains private to its participants and explicit managers',async()=>{
   const session=await call(sdm,'coaching','POST',{employee_id:employee.id,coach_employee_id:otherEmployee.id,org_unit_id:unit.id,held_at:now(),topic:'Fiktif',guidance_notes:'Catatan fiktif'});

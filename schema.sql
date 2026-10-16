@@ -58,13 +58,13 @@ CREATE TABLE IF NOT EXISTS document_versions (
 CREATE UNIQUE INDEX IF NOT EXISTS single_active_document ON document_versions(document_id) WHERE state='ACTIVE';
 CREATE TABLE IF NOT EXISTS document_target_units (created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), document_id TEXT NOT NULL REFERENCES documents(id), org_unit_id TEXT NOT NULL REFERENCES org_units(id), PRIMARY KEY(document_id,org_unit_id));
 CREATE TABLE IF NOT EXISTS training_events (
- id TEXT PRIMARY KEY, title TEXT NOT NULL, topic TEXT NOT NULL, organizer_org_unit_id TEXT NOT NULL REFERENCES org_units(id), starts_at TEXT NOT NULL, ends_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PLANNED' CHECK(status IN('PLANNED','COMPLETED','CANCELLED')), organizer_name TEXT, location TEXT, description TEXT,
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, topic TEXT NOT NULL, organizer_org_unit_id TEXT NOT NULL REFERENCES org_units(id), starts_at TEXT NOT NULL, ends_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PLANNED' CHECK(status IN('PLANNED','COMPLETED','CANCELLED')), organizer_name TEXT, location TEXT, description TEXT, deleted_at TEXT, deleted_by TEXT REFERENCES users(id),
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK(ends_at>starts_at));
 CREATE TABLE IF NOT EXISTS training_participants (
  id TEXT PRIMARY KEY, training_event_id TEXT NOT NULL REFERENCES training_events(id), employee_id TEXT NOT NULL REFERENCES employees(id), attendance_status TEXT NOT NULL DEFAULT 'NOT_RECORDED' CHECK(attendance_status IN('NOT_RECORDED','PRESENT','ABSENT')), attendance_notes TEXT, attendance_recorded_by TEXT REFERENCES users(id), attendance_recorded_at TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(training_event_id,employee_id));
 CREATE TABLE IF NOT EXISTS training_materials (
- id TEXT PRIMARY KEY, training_event_id TEXT NOT NULL REFERENCES training_events(id), title TEXT NOT NULL, file_id TEXT REFERENCES files(id), document_version_id TEXT REFERENCES document_versions(id),
+ id TEXT PRIMARY KEY, training_event_id TEXT NOT NULL REFERENCES training_events(id), title TEXT NOT NULL, file_id TEXT REFERENCES files(id), document_version_id TEXT REFERENCES document_versions(id), usage_kind TEXT NOT NULL DEFAULT 'MATERIAL' CHECK(usage_kind IN('MATERIAL','DOCUMENTATION') AND (usage_kind='MATERIAL' OR file_id IS NOT NULL)),
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK((file_id IS NULL)<>(document_version_id IS NULL)));
 CREATE TABLE IF NOT EXISTS participant_certificates (
  id TEXT PRIMARY KEY, training_participant_id TEXT NOT NULL REFERENCES training_participants(id), file_id TEXT NOT NULL REFERENCES files(id), certificate_no TEXT, issued_on TEXT,

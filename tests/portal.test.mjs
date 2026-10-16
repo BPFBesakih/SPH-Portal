@@ -13,6 +13,8 @@ import {fileAllowed,upload} from '../lib/files.mjs';
 import {createApp} from '../server.mjs';
 import {createBackup} from '../scripts/backup.mjs';
 import {restoreBackup} from '../scripts/restore.mjs';
+import {dashboard} from '../lib/read-models.mjs';
+import {DatabaseSync} from 'node:sqlite';
 function cleanup(directory){const absolute=resolve(directory);assert(absolute.startsWith(resolve(tmpdir())+sep)&&absolute.split(sep).at(-1).startsWith('besakih-'));rmSync(absolute,{recursive:true,force:true});}
 const password='TestPassword!2026';
 const hash=hashPasswordSync(password);
@@ -188,6 +190,64 @@ test('versi data lama ditolak dan data terbaru dipertahankan',async t=>{
 test('peserta tanpa akun dapat didaftarkan; peserta ganda ditolak dan status hadir dibedakan',async t=>{
   const f=fixture(t),event=await call(hrRoutes,f,'training','POST',{title:'Pelatihan',topic:'Layanan',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z'});const p=await call(hrRoutes,f,`training/${event.id}/participants`,'POST',{employee_id:f.employees[0].id});assert.equal(p.attendance_status,'NOT_RECORDED');await assert.rejects(call(hrRoutes,f,`training/${event.id}/participants`,'POST',{employee_id:f.employees[0].id}),/UNIQUE/);const a=await call(hrRoutes,f,`training/${event.id}/participants/${p.id}`,'PATCH',{row_version:p.row_version,attendance_status:'ABSENT'});assert.equal(a.attendance_status,'ABSENT');assert(a.attendance_recorded_at);
 });
+
+test('hanya itadmin dapat menghapus kegiatan; audit dan relasi dipertahankan, seluruh akses kegiatan dicabut',async t=>{
+  const f=fixture(t),event=await call(hrRoutes,f,'training','POST',{title:'Kegiatan uji',topic:'Koordinasi',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z'});
+  const participant=await call(hrRoutes,f,`training/${event.id}/participants`,'POST',{employee_id:f.employees[0].id});
+  const file=insert(f.db,'files',{storage_key:crypto.randomUUID(),original_name:'foto.png',mime_type:'image/png',size_bytes:1,checksum:'fixture',status:'AVAILABLE',uploaded_by:f.user.id});
+  await call(hrRoutes,f,`training/${event.id}/documentation`,'POST',{file_id:file.id,caption:'Dokumentasi uji'});
+  assert.equal((await call(hrRoutes,f,`training/${event.id}`)).can_delete,false);
+  await assert.rejects(call(hrRoutes,f,`training/${event.id}`,'DELETE',{row_version:event.row_version,username:'itadmin'}),e=>e.status===403);
+  const itadmin=f.account('itadmin',null);f.role(itadmin,['hr.training.read']);const asItadmin={...f,user:itadmin};
+  assert.equal((await call(hrRoutes,asItadmin,`training/${event.id}`)).can_delete,true);
+  const changed=await call(hrRoutes,f,`training/${event.id}`,'PATCH',{row_version:event.row_version,status:'PLANNED'});
+  assert.equal(dashboard(f.db,f.user,'hr').training_count,1);
+  await assert.rejects(call(hrRoutes,asItadmin,`training/${event.id}`,'DELETE',{row_version:event.row_version}),e=>e.status===409);
+  assert.equal(get(f.db,'training_events',event.id).deleted_at,null);
+  assert.deepEqual(await call(hrRoutes,asItadmin,`training/${event.id}`,'DELETE',{row_version:changed.row_version}),{deleted:true});
+  const deleted=get(f.db,'training_events',event.id);assert(deleted.deleted_at);assert.equal(deleted.deleted_by,itadmin.id);
+  assert.equal(get(f.db,'training_participants',participant.id).training_event_id,event.id);
+  assert.equal(one(f.db,"SELECT count(*) n FROM audit_events WHERE action='DELETE' AND object_key=?",event.id).n,1);
+  assert.equal((await call(hrRoutes,f,'training')).items.length,0);
+  assert.equal(dashboard(f.db,f.user,'hr').training_count,0);
+  assert.equal((await call(hrRoutes,f,`employees/${f.employees[0].id}`)).training.length,0);
+  assert.equal(fileAllowed(f.db,f.user,file.id),false);
+  await assert.rejects(call(hrRoutes,f,`training/${event.id}`),e=>e.status===404);
+  await assert.rejects(call(hrRoutes,f,`training/${event.id}`,'PATCH',{row_version:deleted.row_version,status:'PLANNED'}),e=>e.status===404);
+  await assert.rejects(call(hrRoutes,f,`training/${event.id}/documentation`,'POST',{file_id:file.id}),e=>e.status===404);
+});
+
+test('migrasi kegiatan mempertahankan agenda dan materi lama saat database dibuka ulang',t=>{
+  const directory=mkdtempSync(resolve(tmpdir(),'besakih-training-'));t.after(()=>cleanup(directory));const path=resolve(directory,'portal.sqlite');
+  const legacySchema=readFileSync(new URL('../schema.sql',import.meta.url),'utf8')
+    .replace(', deleted_at TEXT, deleted_by TEXT REFERENCES users(id)','')
+    .replace(", usage_kind TEXT NOT NULL DEFAULT 'MATERIAL' CHECK(usage_kind IN('MATERIAL','DOCUMENTATION') AND (usage_kind='MATERIAL' OR file_id IS NOT NULL))",'');
+  const legacy=new DatabaseSync(path);legacy.exec(legacySchema);
+  const unit=insert(legacy,'org_units',{code:'A',name:'Unit A',is_active:1});
+  const event=insert(legacy,'training_events',{title:'Kegiatan lama',topic:'Koordinasi',organizer_org_unit_id:unit.id,starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z',status:'PLANNED'});
+  const file=insert(legacy,'files',{storage_key:crypto.randomUUID(),original_name:'materi.pdf',mime_type:'application/pdf',size_bytes:1,checksum:'fixture',status:'AVAILABLE'});
+  const material=insert(legacy,'training_materials',{training_event_id:event.id,title:'Materi lama',file_id:file.id});legacy.close();
+  for(let i=0;i<2;i++){
+    const upgraded=openDb(path);try{assert.equal(get(upgraded,'training_events',event.id).title,'Kegiatan lama');assert.equal(get(upgraded,'training_events',event.id).deleted_at,null);assert.equal(get(upgraded,'training_materials',material.id).usage_kind,'MATERIAL');assert.equal(one(upgraded,'SELECT count(*) n FROM training_materials').n,1);assert.equal(upgraded.prepare('PRAGMA foreign_key_check').all().length,0);}finally{upgraded.close();}
+  }
+});
+
+test('dokumentasi menerima foto milik pengunggah, terpisah dari materi, dan mengikuti scope serta izin kegiatan',async t=>{
+  const f=fixture(t),event=await call(hrRoutes,f,'training','POST',{title:'Kegiatan uji',topic:'Koordinasi',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z'});
+  const makeFile=(mime_type='image/png',uploaded_by=f.user.id)=>insert(f.db,'files',{storage_key:crypto.randomUUID(),original_name:'foto.png',mime_type,size_bytes:1,checksum:'fixture',status:'AVAILABLE',uploaded_by});
+  const pdf=makeFile('application/pdf');await assert.rejects(call(hrRoutes,f,`training/${event.id}/documentation`,'POST',{file_id:pdf.id}),/JPG atau PNG/);
+  const reader=f.account('reader');f.role(reader,['hr.training.read','hr.training.download'],'ASSIGNED_UNITS',f.unit.id);
+  const stolen=makeFile('image/jpeg',reader.id);await assert.rejects(call(hrRoutes,f,`training/${event.id}/documentation`,'POST',{file_id:stolen.id}),e=>e.status===403);
+  const photo=makeFile();await call(hrRoutes,f,`training/${event.id}/documentation`,'POST',{file_id:photo.id,caption:'Foto bersama'});
+  await call(hrRoutes,f,`training/${event.id}/materials`,'POST',{file_id:pdf.id,title:'Materi rapat',usage_kind:'DOCUMENTATION'});
+  const detail=await call(hrRoutes,f,`training/${event.id}`);assert.equal(detail.materials.length,1);assert.equal(detail.materials[0].usage_kind,'MATERIAL');assert.equal(detail.documentation.length,1);assert.equal(detail.documentation[0].caption,'Foto bersama');
+  assert.equal(fileAllowed(f.db,reader,photo.id),true);assert.equal((await call(hrRoutes,{...f,user:reader},`training/${event.id}`)).can_upload_documentation,false);
+  await assert.rejects(call(hrRoutes,{...f,user:reader},`training/${event.id}/documentation`,'POST',{file_id:stolen.id}),e=>e.status===403);
+  await assert.rejects(call(hrRoutes,f,`training/${event.id}/documentation`,'POST',{file_id:photo.id}),/sudah terhubung/);
+  const outsider=f.account('outsider',null);f.role(outsider,['hr.training.read','hr.training.download','hr.training.manage'],'ASSIGNED_UNITS',f.otherUnit.id);
+  assert.equal(fileAllowed(f.db,outsider,photo.id),false);await assert.rejects(call(hrRoutes,{...f,user:outsider},`training/${event.id}`),e=>e.status===403);
+  await assert.rejects(call(hrRoutes,{...f,user:outsider},`training/${event.id}/documentation`,'POST',{file_id:photo.id}),e=>e.status===403);
+});
 test('kebutuhan yang belum lengkap tidak ditafsirkan sebagai nol',async t=>{
   const f=scheduling(t),p=await makePeriod(f);run(f.db,'DELETE FROM staffing_requirements WHERE post_id=?',f.posts[1].id);await assert.rejects(draft(f,p),/Kebutuhan rutin belum lengkap/);
 });
@@ -210,5 +270,5 @@ test('materi dari versi SOP lama tetap mengikuti hak unduh dokumen pusat',t=>{
   const f=fixture(t),u=f.account();f.role(u,['hr.training.download']);const grant=f.role(u,['hr.documents.download']);const file=insert(f.db,'files',{storage_key:crypto.randomUUID(),original_name:'sop.pdf',mime_type:'application/pdf',size_bytes:1,checksum:'h',status:'AVAILABLE',uploaded_by:f.user.id});const doc=insert(f.db,'documents',{document_code:'SOP-PRIVATE',title:'SOP Terbatas',category:'SOP',owner_org_unit_id:f.unit.id,audience_kind:'ALL_UNITS',is_archived:0});const version=insert(f.db,'document_versions',{document_id:doc.id,file_id:file.id,version_label:'1',effective_on:'2020-01-01',state:'ARCHIVED',activated_by:f.user.id,activated_at:now(),archived_at:now()});const training=insert(f.db,'training_events',{title:'Pelatihan SOP',topic:'SOP',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T00:00:00.000Z',ends_at:'2099-01-01T01:00:00.000Z',status:'PLANNED'});insert(f.db,'training_materials',{training_event_id:training.id,title:'Materi SOP',document_version_id:version.id});assert.equal(fileAllowed(f.db,u,file.id),true);run(f.db,'DELETE FROM user_roles WHERE id=?',grant.id);assert.equal(fileAllowed(f.db,u,file.id),false);
 });
 test('migrasi tabel penghubung mempertahankan seluruh pemberian izin lama',t=>{
-  const directory=mkdtempSync(resolve(tmpdir(),'besakih-migration-'));t.after(()=>cleanup(directory));const path=resolve(directory,'portal.sqlite');let db=openDb(path);seedPermissions(db);const before=one(db,'SELECT count(*) n FROM role_permissions').n;db.exec('ALTER TABLE role_permissions DROP COLUMN created_at; DELETE FROM schema_migrations WHERE version=2;');db.close();db=openDb(path);try{assert.equal(one(db,'SELECT count(*) n FROM role_permissions').n,before);assert.equal(one(db,'SELECT count(*) n FROM role_permissions WHERE created_at IS NULL').n,0);assert.equal(one(db,'SELECT max(version) n FROM schema_migrations').n,3);const role=insert(db,'roles',{code:'MIGRATION_TEST',name:'Role migrasi',is_system:0,is_active:1});run(db,'INSERT INTO role_permissions (role_id,permission_id) VALUES(?,?)',role.id,one(db,'SELECT id FROM permissions LIMIT 1').id);assert(one(db,'SELECT created_at FROM role_permissions WHERE role_id=?',role.id).created_at);}finally{db.close();}
+  const directory=mkdtempSync(resolve(tmpdir(),'besakih-migration-'));t.after(()=>cleanup(directory));const path=resolve(directory,'portal.sqlite');let db=openDb(path);seedPermissions(db);const before=one(db,'SELECT count(*) n FROM role_permissions').n;db.exec('ALTER TABLE role_permissions DROP COLUMN created_at; DELETE FROM schema_migrations WHERE version=2;');db.close();db=openDb(path);try{assert.equal(one(db,'SELECT count(*) n FROM role_permissions').n,before);assert.equal(one(db,'SELECT count(*) n FROM role_permissions WHERE created_at IS NULL').n,0);assert.equal(one(db,'SELECT max(version) n FROM schema_migrations').n,4);const role=insert(db,'roles',{code:'MIGRATION_TEST',name:'Role migrasi',is_system:0,is_active:1});run(db,'INSERT INTO role_permissions (role_id,permission_id) VALUES(?,?)',role.id,one(db,'SELECT id FROM permissions LIMIT 1').id);assert(one(db,'SELECT created_at FROM role_permissions WHERE role_id=?',role.id).created_at);}finally{db.close();}
 });
