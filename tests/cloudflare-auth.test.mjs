@@ -52,6 +52,11 @@ function fixture(options = {}) {
       if (options.loginNonJson) return new Response('fixture-sensitive-upstream-error', { status: 502 });
       return answer(options.loginData ?? { ok: true, session: { access_token: originalToken, refresh_token: 'fixture-refresh' } }, options.loginStatus ?? 200);
     }
+    if (path === '/functions/v1/portal-api') {
+      assert.equal(headers.get('apikey'), env.SUPABASE_SECRET_KEY);
+      assert.equal(headers.has('authorization'), false);
+      return answer(options.operationData ?? {ok:true,result:{items:[]}}, options.operationStatus ?? 200);
+    }
     if (path === '/auth/v1/user' && init.method === 'GET') {
       assert.equal(headers.get('apikey'), env.SUPABASE_PUBLISHABLE_KEY);
       return answer({ id: options.verifiedUser ?? userId, is_anonymous: false, email: 'fixture-private@example.invalid' }, options.verifyStatus ?? 200);
@@ -104,7 +109,7 @@ function fixture(options = {}) {
     }
     throw new Error(`Unexpected fixture request: ${path}`);
   };
-  const handler = createAuthHandler({ fetchImpl, cryptoImpl: webcrypto, now: () => clock, sleep: async () => {} });
+  const handler = createAuthHandler({ fetchImpl, cryptoImpl: webcrypto, now: () => clock, sleep: async () => {}, operations: options.operations === true });
   return { options, handler, fetchImpl, calls, env: { ...env }, get stored() { return stored; },
     get acquired() { return acquireCount; }, get revoked() { return revoked; },
     setProfile: (value) => { currentProfile = value; },
@@ -133,6 +138,48 @@ function assertPrivate(responseText) {
     assert.equal(responseText.includes(value), false, value);
   }
 }
+
+function operationRequest(path,{method='GET',cookie,csrf,body={},origin=env.PORTAL_ORIGIN}={}){
+ return new Request(`${env.PORTAL_ORIGIN}/api/${path}`,{method,headers:{origin,'sec-fetch-site':'same-origin','content-type':'application/json','CF-Connecting-IP':'192.0.2.1',...(cookie?{cookie}:{}),...(csrf?{'X-CSRF-Token':csrf}:{})},...(method==='GET'?{}:{body:JSON.stringify(body)})});
+}
+test('operational requests require the current private session and transmit identity only to the configured backend',async()=>{
+ const f=fixture({operations:true});const session=await login(f);const account=profile();account.user.must_change_password=false;f.setProfile(account);
+ let r=await f.handler(operationRequest('employees'),f.env);assert.equal(r.status,401);assert.equal(f.called('portal-api').length,0);
+ r=await f.handler(operationRequest('employees?unit=unit_a',{cookie:session.cookie}),f.env);assert.equal(r.status,200);assertPrivate(await r.text());
+ const call=f.called('portal-api')[0];assert.equal(call.body.path,'employees');assert.equal(call.body.query,'unit=unit_a');assert.equal(call.body.access_token,originalToken);assert.equal(call.body.session_hash,hash(session.cookie.split(';')[0].split('=')[1]));assert.match(call.body.lease_hash,/^[a-f0-9]{64}$/);assert.equal(call.body.session_version,1);
+ assert.ok(f.called('portal_release_web_session').length>0);
+});
+test('operational mutations enforce origin, CSRF and the mandatory password boundary before forwarding',async()=>{
+ const f=fixture({operations:true});const session=await login(f);
+ let r=await f.handler(operationRequest('announcements',{method:'POST',cookie:session.cookie}),f.env);assert.equal(r.status,403);
+ r=await f.handler(operationRequest('announcements',{method:'POST',cookie:session.cookie,csrf:session.csrf}),f.env);assert.equal(r.status,428);
+ r=await f.handler(operationRequest('employees',{cookie:session.cookie}),f.env);assert.equal(r.status,428);assert.equal(f.called('portal-api').length,0);
+ r=await f.handler(operationRequest('portal/me',{cookie:session.cookie}),f.env);assert.equal(r.status,200);assert.equal((await r.json()).csrfToken,session.csrf);
+ const account=profile();account.user.must_change_password=false;f.setProfile(account);
+ r=await f.handler(operationRequest('employees',{method:'POST',cookie:session.cookie,csrf:session.csrf,origin:'https://attacker.invalid'}),f.env);assert.equal(r.status,403);
+ r=await f.handler(operationRequest('employees',{method:'PATCH',cookie:session.cookie,csrf:session.csrf,body:{access_token:'forged',session_hash:'forged'}}),f.env);assert.equal(r.status,200);
+ assert.equal(f.called('portal-api').at(-1).body.access_token,originalToken);
+});
+test('private file proxy sends bytes and cannot forward an arbitrary content type or redirect',async()=>{
+ const f=fixture({operations:true,operationData:{ok:true,result:{binary:true,data:Buffer.from('fixture-file').toString('base64'),mime_type:'image/png',name:'bukti.png',inline:true}}});
+ const session=await login(f);const account=profile();account.user.must_change_password=false;f.setProfile(account);
+ const r=await f.handler(operationRequest('files/fixture',{cookie:session.cookie}),f.env);assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),'image/png');assert.equal(r.headers.get('cache-control'),'private, no-store');assert.equal(await r.text(),'fixture-file');
+ f.options.operationData.result.mime_type='text/html';assert.equal((await f.handler(operationRequest('files/fixture',{cookie:session.cookie}),f.env)).status,503);
+ f.options.redirectPath='/functions/v1/portal-api';assert.equal((await f.handler(operationRequest('files/fixture',{cookie:session.cookie}),f.env)).status,503);
+});
+test('single-use recovery forwards only through the authenticated server bridge with ingress IP and bounded input',async()=>{
+ const f=fixture({operations:true});
+ let r=await f.handler(request('reset',{body:{token:'a'.repeat(48),new_password:'fixture-new-password'}}),f.env);assert.equal(r.status,200);
+ const call=f.called('portal-api')[0];assert.equal(call.body.action,'recover');assert.equal(call.body.client_ip,'192.0.2.1');
+ r=await f.handler(request('reset',{body:{token:'invalid',new_password:'short'}}),f.env);assert.equal(r.status,400);assert.equal(f.called('portal-api').length,1);
+ r=await f.handler(request('reset',{body:{token:'a'.repeat(48),new_password:'fixture-new-password'},headers:{origin:'https://attacker.invalid'}}),f.env);assert.equal(r.status,403);
+});
+test('public health checks can reach only the fixed diagnostic action and expose no credentials',async()=>{
+ const f=fixture({operations:true,operationData:{ok:true,healthy:true,revision:'20261016.1'}});
+ const r=await f.handler(operationRequest('health'),f.env);assert.equal(r.status,200);assertPrivate(await r.text());
+ assert.deepEqual(f.called('portal-api')[0].body,{action:'health'});assert.equal(f.acquired,0);
+ assert.equal((await f.handler(operationRequest('health',{method:'POST',body:{action:'operation'}}),f.env)).status,405);
+});
 
 test('default fetch retains its runtime receiver when making backend requests', async () => {
   const originalFetch = globalThis.fetch;

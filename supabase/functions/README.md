@@ -1,5 +1,7 @@
 # Pemeriksaan koneksi Google Drive
 
+Backend seluruh modul berada di `portal-api/index.ts`, dengan modul bersama di `_shared/portal/` serta paket mandiri `../deploy/portal-api/index.ts`. Fungsi memakai autentikasi secret SDK dan verifikasi tambahan sesi pengguna. Lihat [panduan deploy produksi](../../docs/CLOUDFLARE-SUPABASE.md). Catatan diagnostik dan login di bawah dipertahankan sebagai riwayat penyiapan.
+
 `drive-connection-check/index.ts` adalah fungsi diagnostik terpisah untuk memeriksa empat Edge Function Secrets yang sudah disimpan. Fungsi menukar refresh token menjadi access token, lalu membaca metadata folder yang ID-nya berasal dari secret. Fungsi tidak menerima ID folder dari pemanggil, tidak membuat folder, tidak mengunggah foto, dan tidak mengubah database.
 
 ## Pengaturan dashboard

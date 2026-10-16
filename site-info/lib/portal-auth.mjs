@@ -13,6 +13,7 @@ const messages = {
   INVALID_REQUEST: 'Periksa kembali isian permintaan.',
   FORBIDDEN: 'Permintaan tidak diizinkan. Muat ulang halaman.',
   PASSWORD_REJECTED: 'Password saat ini tidak cocok atau password baru belum memenuhi ketentuan.',
+  PASSWORD_CHANGE_REQUIRED: 'Anda wajib mengganti password sementara terlebih dahulu.',
   PASSWORD_UPDATE_INCOMPLETE: 'Perubahan belum dapat dikonfirmasi. Coba masuk kembali dengan password baru.',
   AUTH_UNAVAILABLE: 'Layanan masuk belum tersedia. Coba lagi nanti.',
 };
@@ -150,7 +151,7 @@ function clientIp(request) {
 // Workers runtime functions can depend on their global receiver. Keep the
 // production fetch bound; injected test transports still remain replaceable.
 export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis), cryptoImpl = globalThis.crypto,
-  now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), operations = false } = {}) {
   const encode = (value) => new TextEncoder().encode(value);
   const random = () => base64url(cryptoImpl.getRandomValues(new Uint8Array(32)));
   const hash = async (value) => Array.from(new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', encode(value))), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -162,8 +163,8 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
     let leaseOwned = false; let createdHash; let receivedLoginToken;
     let loginStage;
     const deadline = now() + 40000;
-    async function api(path, { body, token, admin = false, method = 'POST', cleanup = false } = {}) {
-      const remaining = cleanup ? 4000 : Math.min(10000, deadline - now());
+    async function api(path, { body, token, admin = false, method = 'POST', cleanup = false, budget = 10000, responseLimit = 1048576 } = {}) {
+      const remaining = cleanup ? 4000 : Math.min(budget, deadline - now());
       requireValue(remaining > 0);
       let result;
       try { result = await fetchImpl(`${config.base}${path}`, {
@@ -187,7 +188,7 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       if (path === '/functions/v1/portal-login') loginStage = 'LOGIN_SERVICE_BODY';
       let data = null;
       if (result.status !== 204 && result.body) {
-        try { data = await readJson(result.body, 1048576); }
+        try { data = await readJson(result.body, responseLimit); }
         catch { throw new Failure(); }
       }
       return { status: result.status, ok: result.ok, data };
@@ -241,7 +242,7 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       const values = cookies(request);
       if (!values[SESSION_COOKIE] && action === 'logout') { clear = true; return response({ ok: true }, 200, clearCookies); }
       requireValue(RANDOM.test(values[SESSION_COOKIE] ?? '') && RANDOM.test(values[CSRF_COOKIE] ?? ''), 'SESSION_ENDED', 401);
-      if (action !== 'me') requireValue(equal(values[CSRF_COOKIE], request.headers.get('x-csrf-token')), 'FORBIDDEN', 403);
+      if (action !== 'me' && !(action === 'operation' && request.method === 'GET')) requireValue(equal(values[CSRF_COOKIE], request.headers.get('x-csrf-token')), 'FORBIDDEN', 403);
       tokenHash = await hash(values[SESSION_COOKIE]); leaseHash = await hash(random());
       for (let attempt = 0; attempt < 2; attempt++) {
         held = await rpc('portal_acquire_web_session', { p_token_hash: tokenHash, p_lease_hash: leaseHash });
@@ -295,6 +296,34 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       currentAccount = await profile(pair, held.user_id);
       if (action === 'me') return response({ ok: true, account: publicAccount(currentAccount) });
 
+      if (action === 'operation') {
+        const url = new URL(request.url);
+        const path = url.pathname.slice('/api/'.length);
+        requireValue(!currentAccount.must_change_password || path === 'portal/me', 'PASSWORD_CHANGE_REQUIRED', 428);
+        const result = await api('/functions/v1/portal-api', { admin: true, budget: 30000, responseLimit: 15 * 1024 * 1024,
+          body: { action: 'operation', path, method: request.method, query: url.search.slice(1), body,
+            access_token: pair.access_token, session_hash: tokenHash, lease_hash: leaseHash, session_version: held.version } });
+        if (!result.ok) {
+          requireValue(result.data?.ok === false && typeof result.data?.request_id === 'string');
+          if (result.status === 401) throw new Failure('SESSION_ENDED', 401);
+          requireValue([400,403,404,405,409,413,415,422,428,429,503].includes(result.status));
+          return response({ error: typeof result.data.error === 'string' ? result.data.error : 'Modul portal belum dapat diakses.', request_id: result.data.request_id }, result.status);
+        }
+        requireValue(result.data?.ok === true && result.data.result && typeof result.data.result === 'object');
+        const data = result.data.result;
+        if (path === 'portal/me') data.csrfToken = values[CSRF_COOKIE];
+        if (path.startsWith('files/') && data.binary === true) {
+          requireValue(typeof data.data === 'string' && data.data.length <= 14 * 1024 * 1024 && /^[A-Za-z0-9+/]*={0,2}$/.test(data.data)
+            && typeof data.name === 'string' && data.name.length <= 180
+            && ['application/pdf','image/png','image/jpeg','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(data.mime_type));
+          const bytes = Uint8Array.from(atob(data.data), c => c.charCodeAt(0));
+          return new Response(bytes, { headers: { 'Content-Type': data.mime_type, 'Content-Length': String(bytes.length),
+            'Content-Disposition': `${data.inline === true && ['image/png','image/jpeg'].includes(data.mime_type) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(data.name)}`,
+            'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'" } });
+        }
+        return response(data);
+      }
+
       // Only 'password' reaches here; every future operational route must also
       // enforce must_change_password, action permissions, and assignment scopes.
       const ip = clientIp(request);
@@ -326,25 +355,42 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
     try {
       const url = new URL(request.url);
       const match = /^\/api\/auth\/(login|me|logout|password)$/.exec(url.pathname);
-      if (!match) return response({ ok: false, error: 'NOT_FOUND' }, 404);
-      const action = match[1]; const method = action === 'me' ? 'GET' : 'POST';
+      const health = operations && url.pathname === '/api/health';
+      const operation = operations && !health && /^\/api\/(?!auth\/)[a-z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(url.pathname);
+      const recovery = operations && url.pathname === '/api/auth/reset';
+      if (!match && !operation && !recovery && !health) return response({ ok: false, error: 'NOT_FOUND' }, 404);
+      const action = health ? 'health' : operation ? 'operation' : recovery ? 'recover' : match[1]; const method = operation ? request.method : ['me','health'].includes(action) ? 'GET' : 'POST';
+      if (operation && !['GET','POST','PATCH','DELETE'].includes(method)) return response({ ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
       if (request.method !== method) return response({ ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
-      requireValue(!url.search, 'INVALID_REQUEST', 400);
+      requireValue(operation ? url.search.length <= 2048 : !url.search, 'INVALID_REQUEST', 400);
       config = configuration(env);
       requireValue(url.origin === config.origin, 'FORBIDDEN', 403);
       requireValue(!['cross-site', 'same-site'].includes(request.headers.get('sec-fetch-site')), 'FORBIDDEN', 403);
-      if (method === 'POST') requireValue(request.headers.get('origin') === config.origin, 'FORBIDDEN', 403);
+      if (method !== 'GET') requireValue(request.headers.get('origin') === config.origin, 'FORBIDDEN', 403);
       key = await cryptoImpl.subtle.importKey('raw', config.keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
+      if (health) {
+        const result = await api('/functions/v1/portal-api', { admin: true, body: { action: 'health' } });
+        requireValue(result.ok && result.data?.ok === true && result.data.healthy === true && result.data.revision === '20261016.1');
+        return response({ status: 'ok', modules_revision: result.data.revision });
+      }
       let body = {};
-      if (method === 'POST') {
+      if (method !== 'GET') {
         requireValue(request.headers.get('content-type')?.toLowerCase().startsWith('application/json'), 'INVALID_REQUEST', 415);
-        body = await readJson(request.body, 4096);
+        body = await readJson(request.body, operation ? url.pathname === '/api/uploads' ? 14 * 1024 * 1024 + 65536 : 131072 : 4096);
         requireValue(body && typeof body === 'object' && !Array.isArray(body), 'INVALID_REQUEST', 400);
       }
       if (action === 'password') {
         requireValue(typeof body.current_password === 'string' && body.current_password.length >= 1 && body.current_password.length <= 128
           && typeof body.new_password === 'string' && body.new_password.length >= 12 && body.new_password.length <= 128
           && body.new_password !== body.current_password, 'INVALID_REQUEST', 400);
+      }
+      if (action === 'recover') {
+        requireValue(typeof body.token === 'string' && /^[a-f0-9]{48}$/.test(body.token)
+          && typeof body.new_password === 'string' && body.new_password.length >= 12 && body.new_password.length <= 128, 'INVALID_REQUEST', 400);
+        const result = await api('/functions/v1/portal-api', { admin: true, budget: 30000,
+          body: { action: 'recover', body, client_ip: clientIp(request) } });
+        requireValue(result.ok || result.data?.ok === false && typeof result.data.request_id === 'string');
+        return response(result.ok ? { ok: true } : { error: result.data.error, request_id: result.data.request_id }, result.status);
       }
       if (action !== 'login') return await withSession(action, body);
 
@@ -414,3 +460,4 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
 }
 
 export const handleAuth = createAuthHandler();
+export const handlePortal = createAuthHandler({ operations: true });

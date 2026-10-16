@@ -1,0 +1,10 @@
+{
+  "name": "sph-cloud-migration-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "acorn": "8.19.0",
+    "astring": "1.9.0",
+    "esbuild": "0.28.2"
+  }
+}

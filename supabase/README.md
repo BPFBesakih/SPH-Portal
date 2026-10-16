@@ -1,5 +1,7 @@
 # Persiapan backend Supabase
 
+Migrasi operasional `20261016000900_operational_modules.sql` serta Edge Function `portal-api` melanjutkan fondasi akun di dokumen ini. Sebanyak 48 tabel privat dan lima view identitas mendukung seluruh modul, tanpa memberi role baru otomatis kepada akun yang sudah ada. Lihat [panduan produksi lengkap](../docs/CLOUDFLARE-SUPABASE.md). Bagian berikut mempertahankan riwayat verifikasi tahap penyiapan.
+
 Backend aplikasi utama masih Node.js/SQLite. Berkas di sini menyiapkan komponen Supabase secara bertahap; keberhasilan satu komponen tidak menyelesaikan migrasi aplikasi.
 
 ## Hasil dashboard 16 Oktober 2026

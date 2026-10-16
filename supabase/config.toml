@@ -1,0 +1,8 @@
+[functions.portal-api]
+verify_jwt = false
+
+[functions.portal-login]
+verify_jwt = false
+
+[functions.drive-connection-check]
+verify_jwt = false

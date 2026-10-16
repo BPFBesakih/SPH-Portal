@@ -1,5 +1,7 @@
 # Halaman informasi publik SPH Portal
 
+Produksi kini memakai aplikasi lengkap `/app/`, Pages Functions untuk sesi dan perantara API, serta Edge Function `portal-api` untuk modul operasional PostgreSQL dan Drive. Lihat [panduan deploy lengkap](../docs/CLOUDFLARE-SUPABASE.md). Catatan di bawah adalah riwayat tahap penyiapan akun; keterangan “belum tersedia” pada tahap lama telah digantikan oleh migrasi modul 009.
+
 Folder ini berisi halaman informasi publik, halaman masuk `/portal/`, serta Pages Functions untuk backend akun. Konfigurasi Production sudah disimpan dan deployment ulang berhasil; pemeriksaan tanpa sesi menghasilkan HTTP 401 yang diharapkan. Selain pengujian dengan API fiktif, pengelola sudah mengonfirmasi login nyata, tampilan akun setelah langkah ganti password, sesi setelah muat ulang, logout, serta login ulang memakai password baru. Refresh token dan kedaluwarsa nyata masih perlu diuji. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
 
 ## Pengaturan Cloudflare Pages dari Git
