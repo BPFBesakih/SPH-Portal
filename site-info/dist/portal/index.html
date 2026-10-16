@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#7b1e34">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Masuk — SPH Portal</title>
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="stylesheet" href="/assets/portal.css">
+  <script src="/assets/portal.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Lewati ke konten</a>
+  <div class="auth-layout">
+    <aside class="brand-panel" aria-label="SPH Portal BP Besakih">
+      <a class="brand" href="/">
+        <img src="/assets/logo.png" width="56" height="56" alt="">
+        <span><strong>SPH Portal</strong><small>BP Besakih</small></span>
+      </a>
+      <div class="brand-story">
+        <p class="eyebrow">Portal internal</p>
+        <h2>Terhubung untuk<br>mendukung kerja.</h2>
+        <p>Akses akun kerja Anda melalui SPH Portal.</p>
+        <span class="brand-rule" aria-hidden="true"></span>
+        <p class="brand-note">SDM &amp; Keamanan<br>BP Besakih</p>
+      </div>
+      <a class="back-link" href="/">← Kembali ke informasi portal</a>
+    </aside>
+    <main id="main" class="form-panel">
+      <div class="auth-card">
+        <div id="loading" role="status"><span class="loading-dot" aria-hidden="true"></span> Memeriksa sesi…</div>
+        <p id="notice" class="notice" role="status" aria-live="polite" tabindex="-1" hidden></p>
+
+        <section id="login-view" aria-labelledby="login-title" hidden>
+          <p class="eyebrow">Selamat datang</p>
+          <h1 id="login-title" tabindex="-1">Masuk ke portal</h1>
+          <p class="intro">Gunakan akun yang diberikan administrator.</p>
+          <form id="login-form" method="post" action="/api/auth/login">
+            <label for="username">Username</label>
+            <input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" required>
+            <label for="login-password">Password</label>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+            <label class="checkbox-label"><input id="login-show" type="checkbox"> Tampilkan password</label>
+            <button class="button primary" type="submit" data-pending="Memproses…" disabled>Masuk</button>
+          </form>
+          <p class="help">Belum punya akun atau lupa password?<br>Hubungi administrator BP Besakih.</p>
+        </section>
+
+        <section id="password-view" aria-labelledby="password-title" hidden>
+          <p class="eyebrow" id="password-eyebrow">Keamanan akun</p>
+          <h1 id="password-title" tabindex="-1">Ganti password</h1>
+          <p class="intro" id="password-intro">Buat password baru untuk akun Anda.</p>
+          <p class="account-tag">Akun <strong id="password-username"></strong></p>
+          <form id="password-form" method="post" action="/api/auth/password">
+            <label for="current-password">Password saat ini</label>
+            <input id="current-password" name="current_password" type="password" autocomplete="current-password" maxlength="128" required>
+            <label for="new-password">Password baru</label>
+            <input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="password-hint" required>
+            <p class="field-hint" id="password-hint">Minimal 12 karakter dan berbeda dari password saat ini.</p>
+            <label for="confirm-password">Ulangi password baru</label>
+            <input id="confirm-password" name="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+            <label class="checkbox-label"><input id="password-show" type="checkbox"> Tampilkan password</label>
+            <button class="button primary" type="submit" data-pending="Menyimpan…" disabled>Simpan password baru</button>
+            <button id="password-cancel" class="button secondary" type="button" hidden>Kembali</button>
+          </form>
+          <p class="help">Setelah berhasil, Anda perlu masuk kembali dengan password baru.</p>
+          <button class="text-button logout" type="button" data-pending="Keluar…" disabled>Keluar dari akun</button>
+        </section>
+
+        <section id="account-view" aria-labelledby="account-title" hidden>
+          <p class="eyebrow">Akun terhubung</p>
+          <h1 id="account-title" tabindex="-1">Selamat datang,<br><span id="account-username"></span>.</h1>
+          <p class="intro">Anda sudah masuk ke SPH Portal.</p>
+          <div class="preparation-note">
+            <span class="status-label">Tahap persiapan</span>
+            <h2>Modul kerja sedang disiapkan.</h2>
+            <p>Akses data pegawai dan modul keamanan akan tersedia setelah penyiapan layanan selesai.</p>
+          </div>
+          <div class="account-actions">
+            <button id="change-password" class="button secondary" type="button" disabled>Ganti password</button>
+            <button class="button primary logout" type="button" data-pending="Keluar…" disabled>Keluar dari akun</button>
+          </div>
+        </section>
+        <noscript><p class="notice">Aktifkan JavaScript di browser untuk menggunakan halaman masuk.</p></noscript>
+      </div>
+      <footer><span>SPH Portal · BP Besakih</span><div><a href="/privacy/">Privasi</a><a href="/terms/">Ketentuan</a></div></footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # Halaman informasi publik SPH Portal
 
-Folder ini berisi halaman informasi publik statis dan source Pages Functions untuk backend akun. Route backend sudah terjangkau di Cloudflare, tetapi konfigurasi Auth dan pengujian akun nyata belum selesai; form login frontend belum dibuat. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
+Folder ini berisi halaman informasi publik, halaman masuk `/portal/`, serta Pages Functions untuk backend akun. Konfigurasi Production sudah disimpan dan deployment ulang berhasil; pemeriksaan tanpa sesi menghasilkan HTTP 401 yang diharapkan. Alur akun frontend sudah diuji dengan API fiktif; login dan ganti password akun nyata melalui browser masih perlu dikonfirmasi. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
 
 ## Pengaturan Cloudflare Pages dari Git
 
@@ -14,7 +14,7 @@ Folder ini berisi halaman informasi publik statis dan source Pages Functions unt
 | Build output directory | `dist` |
 | Environment variables | Tidak diperlukan untuk halaman informasi |
 
-Berkas `dist/` sudah siap disajikan; tidak ada proses build atau pemasangan dependensi. Gunakan alamat yang benar-benar diberikan Cloudflare setelah penerapan berhasil. Alamat beranda adalah `/`, kebijakan privasi `/privacy/`, dan ketentuan penggunaan `/terms/`.
+Berkas `dist/` sudah siap disajikan; tidak ada proses build atau pemasangan dependensi. Alamat produksi adalah `https://sph-portal.pages.dev/`: beranda `/`, halaman masuk `/portal/`, kebijakan privasi `/privacy/`, dan ketentuan penggunaan `/terms/`.
 
 Penerapan publik dilakukan sendiri oleh pengelola melalui dashboard Cloudflare setelah meninjau halaman. Commit/push saja belum menyelesaikan konfigurasi Pages atau penerapan backend.
 
@@ -31,9 +31,9 @@ Penerapan publik dilakukan sendiri oleh pengelola melalui dashboard Cloudflare s
 
 Empat route ini belum membuka API administrasi, modul pegawai/keamanan, file, atau Drive. Pengguna dengan `must_change_password = true` hanya mendapat konteks akun dan jalur ganti password/logout; modul operasional belum disediakan. Route operasional berikutnya tetap harus memeriksa flag, status, izin tindakan dan scope objek pada setiap request.
 
-### Konfigurasi runtime yang masih diperlukan
+### Konfigurasi runtime
 
-Migrasi Supabase 001–008 sudah dikonfirmasi diterapkan; konfigurasi runtime dan pengujian akun nyata penghubung Cloudflare masih menunggu. Atur pada Cloudflare Pages **Settings → Variables and Secrets** untuk **Production**, lalu deploy ulang. [Dokumentasi Cloudflare](https://developers.cloudflare.com/pages/functions/bindings/#secrets) menjelaskan secret terenkripsi dan akses runtime melalui `context.env`. Preview tidak diberi rahasia produksi secara otomatis dan origin preview akan ditolak kecuali dikonfigurasi terpisah.
+Migrasi Supabase 001–008 sudah dikonfirmasi diterapkan. Pada 16 Oktober 2026, pengelola mengisi keenam variabel berikut pada **Production** dan mengonfirmasi deployment ulang commit `a525cba` berhasil. Key Supabase dan key sesi disimpan sebagai Secret; nilai rahasia tidak dicatat di repo/chat. [Dokumentasi Cloudflare](https://developers.cloudflare.com/pages/functions/bindings/#secrets) menjelaskan secret terenkripsi dan akses runtime melalui `context.env`. Preview tidak diberi rahasia produksi secara otomatis dan origin preview akan ditolak kecuali dikonfigurasi terpisah.
 
 | Nama | Jenis | Nilai/purpose |
 |---|---|---|
@@ -54,7 +54,21 @@ Lease memakai satu retry setelah 60 ms bila sibuk; konflik berlanjut menghasilka
 
 `node --test tests/cloudflare-auth.test.mjs tests/portal-login.test.mjs` lulus 32 uji: 20 uji backend Cloudflare dan 12 uji Edge Function. Enkripsi/dekripsi AES-GCM Web Crypto diuji nyata, termasuk penolakan ciphertext/key/AAD yang berubah; Auth, SDK, dan RPC memakai fixture. Uji mencakup cookie/CSRF, origin, IP tepercaya, profil/izin terkini tanpa menggabungkan scope antarrole, refresh/lease, logout, dan urutan ganti password. Ini belum membuktikan login atau perubahan password nyata melalui Cloudflare/browser. Status penerapan dan pengujian dashboard dicatat terpisah di [panduan Supabase](../supabase/README.md).
 
-Percobaan build lokal dengan CLI resmi Wrangler `4.151.0` belum berhasil karena resolver dependency cache pnpm di host tidak menemukan `undici`, lalu `unenv` setelah lokasi modul dilengkapi. Tidak ada deploy/login atau pembacaan `.env` pada percobaan ini; dependensi aplikasi tidak diubah. Setelah source dipush, pemeriksaan HTTP publik pada 16 Oktober 2026 ke `GET https://sph-portal.pages.dev/api/auth/me` tanpa cookie/kredensial menghasilkan HTTP 503, `application/json`, dengan `error: AUTH_UNAVAILABLE` dan pesan umum layanan belum tersedia. Hasil ini mengonfirmasi route Functions sudah berjalan di Pages setelah deployment otomatis; konfigurasi runtime belum lengkap. Pemeriksaan entry point ini belum menguji Auth, cookie browser, refresh, logout, atau perubahan password nyata.
+Percobaan build lokal dengan CLI resmi Wrangler `4.151.0` belum berhasil karena resolver dependency cache pnpm di host tidak menemukan `undici`, lalu `unenv` setelah lokasi modul dilengkapi. Tidak ada deploy/login atau pembacaan `.env` pada percobaan ini; dependensi aplikasi tidak diubah. Build/deployment Cloudflare sendiri sudah berhasil. Setelah konfigurasi Production dan deployment ulang pada 16 Oktober 2026, `GET https://sph-portal.pages.dev/api/auth/me` tanpa cookie/kredensial menghasilkan HTTP 401, `application/json`, `error: SESSION_ENDED`. Ini menggantikan respons 503 saat konfigurasi belum lengkap. Hasil 401 mengonfirmasi validasi konfigurasi dan jalur tanpa sesi berjalan; belum membuktikan login Auth, penulisan sesi database, refresh, logout, atau perubahan password nyata.
+
+### Antarmuka akun
+
+`dist/portal/index.html`, `assets/portal.js`, dan `assets/portal.css` menyediakan form username/password, alur wajib ganti password, halaman status akun, perubahan password sukarela, serta logout. Tidak ada pendaftaran publik atau formulir reset yang belum berfungsi; bantuan akun diarahkan kepada administrator. Akun dengan flag wajib ganti password tidak mendapat tombol untuk melewati langkah itu. Setelah perubahan berhasil, frontend meminta login baru. Halaman status menjelaskan bahwa modul operasional masih disiapkan.
+
+Frontend hanya memakai `/api/auth/*` pada origin sendiri dan cookie CSRF untuk perubahan/logout. Password dibersihkan dari isian sesudah request disiapkan; tidak disimpan dalam localStorage/sessionStorage atau parameter URL. Pesan ditentukan dari kode error yang dikenal, sementara username ditulis sebagai teks. Pengiriman ulang otomatis untuk login/perubahan password tidak dilakukan. Form menggunakan POST dan tombol awal nonaktif bila JavaScript belum berjalan. Halaman akun memakai `no-store`/`noindex`; CSP mengizinkan script, stylesheet dan koneksi hanya dari origin sendiri, tanpa inline script atau CDN.
+
+`scripts/verify-cloudflare-auth-ui.mjs` menjalankan tujuh kelompok pengujian pada profil browser headless terisolasi, server statis lokal, origin HTTPS yang diintersep, dan API akun fiktif. Uji mencakup jalur tanpa sesi, pengiriman JSON, wajib ganti password, konfirmasi password, CSRF, error/hasil belum pasti, logout parsial, pembatasan percobaan, penolakan HTML dari data akun, serta ketiadaan password dalam storage/URL. Screenshot desktop dan ponsel diperiksa; lebar 320 px tidak meluap. Uji ini tidak mengakses akun produksi atau membuktikan koneksi Auth/database nyata.
+
+```text
+node scripts/verify-cloudflare-auth-ui.mjs <path-ke-playwright/index.mjs> <path-browser-chromium>
+```
+
+Playwright/browser adalah alat pengujian opsional terpisah, bukan dependensi runtime situs. Screenshot pengujian tersimpan pada `test-results/auth-ui/` yang diabaikan Git.
 
 ## Batas tahap persiapan
 
