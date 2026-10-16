@@ -43,9 +43,24 @@ Semua hak tulis pada kedua tabel dicabut dari `anon`, `authenticated`, dan `serv
 
 Screenshot dashboard pada 16 Oktober 2026 mengonfirmasi enam kode administrasi tersebut terbaca ketika SQL Editor menetapkan identitas `itadmin` dan `SET LOCAL ROLE authenticated`. Query hanya membaca data dalam transaksi yang diakhiri `ROLLBACK`; salinannya tersedia di `checks/check-itadmin-permissions.sql`. Ini mengonfirmasi hasil policy pada database Supabase melalui simulasi identitas SQL, belum login atau validasi JWT aplikasi. Screenshot ini tidak memuat inventaris semua tabel/RLS atau jumlah katalog keseluruhan.
 
-`checks/check-permissions-without-user.sql` memeriksa role `authenticated` tanpa identitas, dengan hasil yang diharapkan `izin_tanpa_identitas = 0`. Pemeriksaan ini sudah disiapkan untuk langkah dashboard berikutnya, belum dikonfirmasi oleh pengelola.
+Pengelola juga menjalankan pemeriksaan role `authenticated` tanpa identitas melalui SQL Editor pada 16 Oktober 2026. Screenshot mengonfirmasi `izin_tanpa_identitas = 0` setelah kedua pengaturan klaim dikosongkan. Salinan query tersedia di `checks/check-permissions-without-user.sql`; transaksi hanya membaca data dan diakhiri `ROLLBACK`. Kedua pemeriksaan dashboard ini belum menguji pengiriman atau validasi JWT melalui API.
 
 `scripts/verify-supabase-permissions.mjs` lulus 15 kelompok uji pada PostgreSQL terisolasi, mencakup kesesuaian 43 kode katalog, enam izin administrasi eksplisit, RLS lintas akun/role, penolakan perubahan langsung, pencabutan akses, constraints, kegagalan atomik, pengulangan, pemeriksaan dashboard baca saja, dan pelestarian staging. Cara pemanggilannya sama seperti pengujian akun di bawah. Script membaca katalog sumber sebagai teks; tidak mengimpor aplikasi SQLite dan tidak mengakses database nyata. Hasil lokal tidak menggantikan pengujian sesi pengguna nyata di Supabase.
+
+## Fungsi pendukung akun (belum dikonfirmasi diterapkan)
+
+`migrations/20261016000500_account_access_functions.sql` menyiapkan dua fungsi baca untuk integrasi akun:
+
+- `portal_resolve_login(p_username text)` hanya dapat dipanggil `service_role`. Fungsi menormalkan username seperti aplikasi saat ini, memeriksa akun aktif dan identitas Auth terkonfirmasi dengan email terisi, lalu mengembalikan ID Auth dan email login kepada backend. Akun yang tidak cocok menghasilkan nol baris. Fungsi tidak membaca hash, memverifikasi password, atau membuat sesi. Pencarian ini memakai `SECURITY DEFINER` dengan search path kosong dan nama tabel berskema; hak panggil `PUBLIC`, `anon`, dan `authenticated` dicabut, termasuk grant langsung yang mungkin sudah ada. Hasil pencarian tidak boleh diteruskan kepada klien sebagai layanan pencarian akun.
+- `portal_current_account()` hanya dapat dipanggil `authenticated`, memakai `SECURITY INVOKER`, RLS, dan ID dari `auth.uid()` tanpa menerima ID target. Hasil memuat profil akun aktif pemanggil, flag wajib ganti password, serta izin yang tetap dikelompokkan pada masing-masing penugasan role dan scope. Role nonaktif dikeluarkan. Akun tidak aktif/tidak tertaut atau tanpa identitas mendapat `null`; akun aktif tanpa role mendapat daftar penugasan kosong. Email, hash password, token, dan user metadata tidak dimasukkan ke hasil.
+
+Pemisahan ini mempertahankan username pada antarmuka pengguna. [Password Auth Supabase](https://supabase.com/docs/guides/auth/passwords) memverifikasi kredensial menggunakan email atau nomor telepon; backend berikutnya dapat memakai hasil pencarian internal untuk menghubungkan username dengan Auth. Pegawai tidak perlu memakai alamat email sebagai username. Prosedur pembuatan identitas bagi pegawai yang tidak memiliki email tetap perlu diimplementasikan bersama pengelolaan akun.
+
+Migrasi tidak mengubah data akun, role, izin, atau 157 calon pegawai, serta tidak membuka jalur tulis. Kolom `security_definer`, `anon_boleh`, `authenticated_boleh`, dan `backend_boleh` pada hasil akhirnya memperlihatkan konfigurasi kedua fungsi. Hasil yang diharapkan untuk `portal_current_account`: `false, false, true, false`; untuk `portal_resolve_login`: `true, false, false, true`. Penerapan melalui dashboard belum dikonfirmasi.
+
+`scripts/verify-supabase-account-access.mjs` lulus 12 kelompok uji PostgreSQL terisolasi: hak panggil, normalisasi username, penolakan akun tidak layak, penolakan pencarian identitas dari klien, profil sendiri tanpa informasi kredensial, metadata palsu, pemisahan scope beberapa role, pencabutan akses, pembacaan flag password, ketahanan terhadap search path pemanggil, pengulangan, dan pelestarian staging. Pengujian tidak membuat sesi Auth atau mengakses data nyata. Cara pemanggilan sama seperti script SQL lainnya di bawah.
+
+Fungsi ini adalah pendukung integrasi akun. Endpoint login masih perlu memverifikasi password lewat Auth, membatasi percobaan, memakai pesan gagal umum, dan mengelola sesi. Perubahan password pertama harus diverifikasi sebelum flag dibersihkan, dan setiap endpoint operasional harus memeriksa status akun, kewajiban ganti password, izin, dan scope pada permintaan terkait. Jangan menggunakan hasil profil sebagai bukti bahwa JWT sudah diverifikasi atau sebagai pengganti pemeriksaan objek/unit/pos.
 
 ## Uji SQL terisolasi
 
@@ -59,4 +74,4 @@ node scripts/verify-supabase-auth-links.mjs <path-ke-pglite/dist/index.js>
 
 Uji ini memvalidasi perilaku SQL/RLS pada PostgreSQL tertanam. Konfigurasi API, autentikasi runtime Supabase, dan login frontend tetap perlu diuji setelah integrasi terkait tersedia.
 
-Rujukan: [data pengguna Supabase Auth](https://supabase.com/docs/guides/auth/managing-user-data), [grants dan RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), serta [pengaturan password](https://supabase.com/docs/guides/auth/password-security).
+Rujukan: [data pengguna Supabase Auth](https://supabase.com/docs/guides/auth/managing-user-data), [grants dan RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [keamanan fungsi database](https://supabase.com/docs/guides/database/functions#secure-a-database-function), serta [pengaturan password](https://supabase.com/docs/guides/auth/password-security).
