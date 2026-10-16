@@ -8,7 +8,7 @@ Backend aplikasi utama masih Node.js/SQLite. Berkas di sini menyiapkan komponen 
 - [Fungsi pemeriksaan koneksi Drive](functions/README.md) sudah diterapkan dan pengelola mengonfirmasi ketiga pemeriksaan berhasil. Fungsi belum mengunggah foto.
 - Authentication: pendaftaran mandiri dimatikan; anonymous sign-ins dan manual linking sudah terlihat mati. Email provider dan secure email change terlihat aktif. Minimum password diubah ke 12 karakter dan **Require current password when updating** diaktifkan, masing-masing telah dikonfirmasi tersimpan oleh pengelola. **Secure password change** tetap pada nilai awal mati agar belum menambahkan alur nonce/email yang belum diintegrasikan.
 - Akun Auth pengelola `bpfbesakih@gmail.com` sudah dibuat melalui dashboard dengan **Auto confirm user**. Password ditetapkan oleh pengelola dan tidak dimasukkan ke source atau chat. Akun Auth ini belum otomatis mendapat hak administrator aplikasi.
-- Reset password `itadmin` melalui fungsi pemulihan sementara sudah berhasil, lalu probe `portal-login` mengonfirmasi login password, konteks akun, dan signout sesi uji berhasil. Ringkasan akun memuat `must_change_password = true`, satu role, dan enam izin. Penghapusan deployment fungsi pemulihan masih menunggu konfirmasi; frontend dan sesi portal belum terhubung.
+- Reset password `itadmin` melalui fungsi pemulihan sementara sudah berhasil, lalu probe `portal-login` mengonfirmasi login password, konteks akun, dan signout sesi uji berhasil. Ringkasan akun memuat `must_change_password = true`, satu role, dan enam izin. Pengelola sudah mengonfirmasi deployment `portal-recover-itadmin` dihapus; source tetap disimpan. Frontend dan sesi portal belum terhubung.
 
 ## Tabel penghubung akun
 
@@ -110,13 +110,37 @@ Mode eksplisit `login` memerlukan IP dari backend tepercaya dan mengembalikan pa
 
 `node --test tests/portal-login.test.mjs` lulus 12 pengujian dengan HTTP/env tiruan: jalur probe/login, pembatasan request, rate-limit, kegagalan kredensial umum, pengikatan identitas ke profil, scope, penutupan sesi uji, error layanan, dan perlindungan nilai privat dalam respons. Pengujian menjalankan sumber TypeScript yang sama dengan deployment; batas SDK distub. Konfirmasi key SDK dan Auth nyata berasal dari probe dashboard di atas, terpisah dari hasil lokal.
 
+## Fondasi sesi web (belum diterapkan)
+
+`migrations/20261016000700_web_sessions.sql` menyiapkan penyimpanan sesi untuk backend Cloudflare berikutnya. Migrasi ini belum dijalankan di dashboard dan belum menghubungkan browser ke Supabase. Jalankan setelah migrasi akun dan pembatasan login, memakai SQL Editor sebagai pengelola. Ringkasan akhir menampilkan enam baris: tabel `web_sessions` dengan RLS aktif dan ketiga kolom akses `false`, serta lima fungsi dengan akses `anon = false`, `authenticated = false`, dan `backend = true`.
+
+Tabel `portal_auth_private.web_sessions` tidak mendapat policy atau grant API, termasuk bagi `service_role` yang dapat melewati RLS. Backend hanya dapat mengelola sesi melalui lima RPC `SECURITY DEFINER` dengan search path kosong:
+
+| Fungsi | Kegunaan |
+|---|---|
+| `portal_create_web_session` | Mendaftarkan hash cookie acak dan hash CSRF, terikat pada akun aktif serta baris `auth.sessions` milik pengguna yang sama. Umur mutlak bawaan 8 jam, dapat ditentukan backend antara 15 menit dan 24 jam. Konflik tidak menimpa sesi. |
+| `portal_acquire_web_session` | Mengambil lease 60 detik dan data sesi untuk satu request backend; pesaing hanya mendapat status `busy`. Sesi dicabut, kedaluwarsa, akun tidak aktif/versi berubah, atau baris Auth hilang menghasilkan `null`. |
+| `portal_save_web_session` | Mengganti envelope token setelah refresh memakai lease dan versi yang cocok. Penulis lama tidak dapat menimpa hasil request berikutnya; umur mutlak sesi portal tidak diperpanjang. |
+| `portal_release_web_session` | Melepas lease milik request itu sendiri ketika tidak perlu mengganti token. |
+| `portal_revoke_web_session` | Mencabut sesi portal dan menghapus ciphertext, termasuk saat sesi kedaluwarsa atau masih dipegang request lain. Signout Auth tetap harus dilakukan backend secara terpisah. |
+
+Trigger pada perubahan `status`, `must_change_password`, atau `row_version` akun mencabut semua sesi portal akun tersebut secara atomik dan menghapus ciphertext. Mengaktifkan kembali akun tidak menghidupkan sesi lama. Nilai yang tidak berubah tidak mencabut sesi. Migrasi tidak mengubah flag password, role/izin, staging, counter login, atau baris Auth yang sudah ada. Tidak ada endpoint administrasi atau pembacaan audit yang dibuka.
+
+Backend belum dibuat. Sebelum digunakan, backend harus memverifikasi identitas/sesi Auth, membuat cookie acak dengan `Secure`, `HttpOnly`, `SameSite` dan batas kedaluwarsa, menerapkan CSRF/origin, mengenkripsi pasangan access/refresh token dengan AES-GCM serta key khusus pada secret runtime, dan mengikat ciphertext pada sesi melalui additional authenticated data. SQL hanya memeriksa format envelope `v1.<nonce base64url>.<ciphertext dan tag base64url>` dan panjangnya; SQL tidak membuktikan enkripsi atau memverifikasi JWT. Cookie mentah, token CSRF mentah, key enkripsi, password, dan token Auth mentah tidak disimpan dalam tabel.
+
+Setiap request backend harus memakai hash cookie sesi dan hash lease dari nilai acak baru khusus request itu, menangani `busy` dengan retry terbatas, memverifikasi Auth, serta membaca profil/izin terkini yang tetap dikelompokkan per penugasan dan scope. Lease harus meliputi seluruh operasi refresh hingga penyimpanan token; hasil terlambat ditolak. Sesi dengan access token kedaluwarsa boleh diambil untuk refresh, tetapi sesi portal kedaluwarsa ditolak. [Supabase mendokumentasikan](https://supabase.com/docs/guides/auth/sessions#how-to-ensure-an-access-token-jwt-cannot-be-used-after-a-user-signs-out) pemeriksaan keberadaan `session_id` pada `auth.sessions` untuk mendeteksi signout; keberadaan baris saja tidak menggantikan pemeriksaan JWT, batas sesi Auth, atau otorisasi objek. Mekanisme cookie, refresh HTTP, audit autentikasi, logout Auth, dan perubahan password pertama belum diintegrasikan. Belum ada pekerjaan pembersihan sesi terjadwal.
+
+`scripts/verify-supabase-web-sessions.mjs` lulus 15 kelompok uji PostgreSQL terisolasi: RLS/grants meskipun default permisif, penolakan RPC oleh role klien, pengikatan identitas, input/envelope/waktu, masa sesi, lease dan versi, timeout, pencabutan Auth, logout portal, perubahan keamanan akun, rollback, penerapan ulang, serta pelestarian data migrasi sebelumnya dan 157 staging fiktif. Envelope pada uji adalah fixture berbentuk ciphertext, bukan bukti enkripsi AES-GCM; lease diuji dengan panggilan SQL berurutan, bukan uji beban beberapa koneksi. Cara menjalankannya sama seperti uji SQL lain di bawah; tidak mengakses Supabase atau SQLite nyata.
+
+Rujukan integrasi berikutnya: [Pages Functions routing](https://developers.cloudflare.com/pages/functions/routing/) dan [binding/secret runtime](https://developers.cloudflare.com/pages/functions/bindings/).
+
 ## Pemulihan akun pengelola saat penyiapan
 
 `functions/portal-recover-itadmin/index.ts` adalah alat pemulihan sementara untuk operator proyek, memakai SDK `auth: "secret"`. Fungsi mencari akun `itadmin` melalui resolver backend, mencocokkan identitas Auth terkonfirmasi dengan email pengelola, dan memeriksa penugasan sistem `SUPER_ADMIN` aktif dengan scope `ALL`. ID target tidak diambil dari request. Setelah pemeriksaan itu lolos, satu-satunya perubahan yang dikirim adalah password melalui [Auth Admin API](https://supabase.com/docs/reference/javascript/auth-admin-updateuserbyid); tidak memerlukan password lama atau pengiriman email dan tidak menulis hash Auth dengan SQL. UID, penautan aplikasi, role, status, dan flag wajib ganti password tidak diubah oleh kode pemulihan.
 
 Pada 16 Oktober 2026, fungsi `portal-recover-itadmin` sudah diterapkan dan **Verify JWT with legacy secret = OFF** dikonfirmasi tersimpan. Pengelola menjalankan POST dengan **Add secret key**, serta `new_password` 12–128 karakter yang dipilih dan diisi langsung pada dashboard. Respons HTTP 200 `{"ok":true,"username":"itadmin","password_reset":true}` mengonfirmasi reset nyata berhasil. Nilai password/key tidak dimasukkan ke source atau chat. Probe login dengan password baru juga berhasil seperti dicatat di atas; reset tidak perlu diulang.
 
-Penghapusan deployment `portal-recover-itadmin` masih menunggu konfirmasi pengelola. Hapus hanya deployment fungsi sementara tersebut setelah probe berhasil; source tetap disimpan untuk pelacakan.
+Pengelola mengonfirmasi deployment `portal-recover-itadmin` sudah dihapus pada 16 Oktober 2026 setelah probe berhasil. Source tetap disimpan untuk pelacakan; tidak perlu menerapkan atau menjalankan ulang fungsi pemulihan. Deployment `portal-login` dan `drive-connection-check` tetap diperlukan.
 
 Tujuh pengujian `tests/portal-recover-itadmin.test.mjs` lulus dengan HTTP/env tiruan, mencakup pengikatan target, role/scope, penolakan input, error layanan, dan tidak keluarnya nilai privat dalam respons. SDK autentikasi distub; konfirmasi deployment dan reset nyata berasal dari dashboard, terpisah dari hasil lokal. Ini pemulihan bootstrap oleh operator pemegang secret proyek, belum implementasi alur reset pegawai dengan kredensial sekali pakai pada aplikasi.
 
