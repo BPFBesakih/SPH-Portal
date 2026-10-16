@@ -45,6 +45,8 @@ function fixture(options = {}) {
     const answer = (data, status = 200) => status === 204 ? new Response(null, { status }) : Response.json(data, { status });
     if (path === '/functions/v1/portal-login') {
       assert.equal(headers.get('apikey'), env.SUPABASE_SECRET_KEY);
+      if (options.loginThrows) throw new TypeError('fixture-sensitive-upstream-error');
+      if (options.loginNonJson) return new Response('fixture-sensitive-upstream-error', { status: 502 });
       return answer(options.loginData ?? { ok: true, session: { access_token: originalToken, refresh_token: 'fixture-refresh' } }, options.loginStatus ?? 200);
     }
     if (path === '/auth/v1/user' && init.method === 'GET') {
@@ -100,7 +102,7 @@ function fixture(options = {}) {
     throw new Error(`Unexpected fixture request: ${path}`);
   };
   const handler = createAuthHandler({ fetchImpl, cryptoImpl: webcrypto, now: () => clock, sleep: async () => {} });
-  return { options, handler, calls, env: { ...env }, get stored() { return stored; },
+  return { options, handler, fetchImpl, calls, env: { ...env }, get stored() { return stored; },
     get acquired() { return acquireCount; }, get revoked() { return revoked; },
     setProfile: (value) => { currentProfile = value; },
     called: (name) => calls.filter((c) => c.path.includes(name)),
@@ -128,6 +130,22 @@ function assertPrivate(responseText) {
     assert.equal(responseText.includes(value), false, value);
   }
 }
+
+test('default fetch retains its runtime receiver when making backend requests', async () => {
+  const originalFetch = globalThis.fetch;
+  const f = fixture(); let calls = 0;
+  globalThis.fetch = function (...args) {
+    assert.equal(this, globalThis, 'The runtime fetch must retain its global receiver');
+    calls++;
+    return f.fetchImpl(...args);
+  };
+  try {
+    const handler = createAuthHandler({ cryptoImpl: webcrypto, now: () => clock });
+    const response = await handler(request('login', { body: credentials }), f.env);
+    assert.equal(response.status, 200);
+    assert.equal(calls, 4);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test('login verifies Auth and current profile, stores real AES-GCM ciphertext, and exposes only safe account data and opaque cookies', async () => {
   const f = fixture(); const result = await login(f);
@@ -159,7 +177,9 @@ test('login normalizes username and takes IP only from Cloudflare ingress', asyn
   assert.deepEqual(f.called('portal-login')[0].body, { action: 'login', username: 'itadmin', password: credentials.password, client_ip: '192.0.2.1' });
   const noIp = fixture();
   const missing = request('login', { body: credentials }); missing.headers.delete('CF-Connecting-IP');
-  assert.equal((await noIp.handler(missing, noIp.env)).status, 503); assert.equal(noIp.calls.length, 0);
+  const rejected = await noIp.handler(missing, noIp.env);
+  assert.equal(rejected.status, 503); assert.equal(noIp.calls.length, 0);
+  assert.equal((await rejected.json()).support_code, 'LOGIN_CLIENT_ADDRESS');
 });
 
 test('credential failures and rate limits use safe messages without forwarding upstream payloads', async () => {
@@ -179,6 +199,8 @@ test('credential failures and rate limits use safe messages without forwarding u
 
 test('login diagnostics identify only fixed service, verification, context, and session stages', async () => {
   const variants = [
+    [{ loginThrows: true }, 'LOGIN_SERVICE_NETWORK'],
+    [{ loginNonJson: true }, 'LOGIN_SERVICE_BODY'],
     [{ loginStatus: 404 }, 'LOGIN_SERVICE_MISSING'],
     [{ loginStatus: 503, loginData: { error: 'fixture-sensitive-upstream-error' } }, 'LOGIN_SERVICE_RESPONSE'],
     [{ loginData: { ok: true } }, 'LOGIN_SESSION_RESPONSE'],

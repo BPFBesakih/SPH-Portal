@@ -134,7 +134,9 @@ function clientIp(request) {
   return ip;
 }
 
-export function createAuthHandler({ fetchImpl = globalThis.fetch, cryptoImpl = globalThis.crypto,
+// Workers runtime functions can depend on their global receiver. Keep the
+// production fetch bound; injected test transports still remain replaceable.
+export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis), cryptoImpl = globalThis.crypto,
   now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   const encode = (value) => new TextEncoder().encode(value);
   const random = () => base64url(cryptoImpl.getRandomValues(new Uint8Array(32)));
