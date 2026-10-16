@@ -48,8 +48,12 @@ Kode ini adalah langkah persiapan backend. Migrasi aplikasi utama, Supabase Auth
 
 Rujukan: [autentikasi Edge Functions](https://supabase.com/docs/guides/functions/auth), [secrets](https://supabase.com/docs/guides/functions/secrets), [pembaruan access token Google](https://developers.google.com/identity/protocols/oauth2/web-server#offline), [Drive files.get](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/get), dan [capabilities folder](https://developers.google.com/workspace/drive/api/reference/rest/v3/files).
 
-## Backend login terpisah (belum diterapkan)
+## Backend login terpisah
 
-`portal-login/index.ts` menyiapkan login username khusus antarserver dengan SDK `auth: "secret"`; fungsi ini tidak dipanggil langsung dari frontend. Jalankan migrasi `20261016000600_login_rate_limit.sql` sebelum menerapkan fungsi login. Status dan batas integrasinya tercatat pada [panduan backend login](../README.md#backend-login-disiapkan-belum-diterapkan).
+`portal-login/index.ts` menyiapkan login username khusus antarserver dengan SDK `auth: "secret"`; fungsi ini tidak dipanggil langsung dari frontend. Migrasi `20261016000600_login_rate_limit.sql` telah dikonfirmasi melalui dashboard. Deployment `portal-login` juga sudah terlihat; pengaturan tersimpan dan hasil probe Auth nyata belum dikonfirmasi. Status dan batas integrasinya tercatat pada [panduan backend login](../README.md#backend-login).
 
-Mode bawaan `probe` mengembalikan ringkasan tanpa token dan meminta signout lokal sesi uji. Mode eksplisit `login` mengembalikan pasangan token kepada backend pemegang secret key untuk integrasi sesi web berikutnya; mode ini bukan pengujian dashboard. Fungsi membaca [API key bawaan runtime](https://supabase.com/docs/guides/functions/secrets#default-secrets), tidak memerlukan salinan password atau key pada source. Dua belas pengujian HTTP tiruan lulus; deployment, pemeriksaan key SDK, dan password Auth nyata belum diuji.
+Mode bawaan `probe` mengembalikan ringkasan tanpa token dan meminta signout lokal sesi uji. Mode eksplisit `login` mengembalikan pasangan token kepada backend pemegang secret key untuk integrasi sesi web berikutnya; mode ini bukan pengujian dashboard. Fungsi membaca [API key bawaan runtime](https://supabase.com/docs/guides/functions/secrets#default-secrets), tidak memerlukan salinan password atau key pada source. Dua belas pengujian HTTP tiruan lulus; pemeriksaan key SDK dan password Auth nyata belum diuji.
+
+## Pemulihan pengelola sementara (belum diterapkan)
+
+`portal-recover-itadmin/index.ts` memulihkan password hanya untuk identitas pengelola yang sudah tertaut ke `itadmin` dan ditugaskan `SUPER_ADMIN / ALL` aktif. Fungsi dilindungi SDK `auth: "secret"` dan memakai Auth Admin API. Tujuh uji HTTP tiruan lulus; reset nyata belum dilakukan. Ikuti [langkah pemulihan operator](../README.md#pemulihan-akun-pengelola-saat-penyiapan-belum-diterapkan), isi password langsung di dashboard, lalu hapus deployment fungsi sementara setelah pemulihan dan probe berhasil.

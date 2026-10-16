@@ -62,7 +62,7 @@ Screenshot berikutnya mengonfirmasi pembacaan profil melalui `portal_current_acc
 
 `scripts/verify-supabase-account-access.mjs` lulus 12 kelompok uji PostgreSQL terisolasi: hak panggil, normalisasi username, penolakan akun tidak layak, penolakan pencarian identitas dari klien, profil sendiri tanpa informasi kredensial, metadata palsu, pemisahan scope beberapa role, pencabutan akses, pembacaan flag password, ketahanan terhadap search path pemanggil, pengulangan, dan pelestarian staging. Pengujian tidak membuat sesi Auth atau mengakses data nyata. Cara pemanggilan sama seperti script SQL lainnya di bawah.
 
-Fungsi ini adalah pendukung integrasi akun. Backend login di bawah sudah disiapkan tetapi belum diterapkan atau diuji dengan Auth nyata. Pengelolaan sesi web dan perubahan password pertama masih perlu dibuat. Perubahan password harus diverifikasi sebelum flag dibersihkan, dan setiap endpoint operasional harus memeriksa status akun, kewajiban ganti password, izin, dan scope pada permintaan terkait. Jangan menggunakan hasil profil sebagai bukti bahwa JWT sudah diverifikasi atau sebagai pengganti pemeriksaan objek/unit/pos.
+Fungsi ini adalah pendukung integrasi akun. Deployment backend login di bawah sudah terlihat di dashboard, tetapi pengujian Auth nyata belum dikonfirmasi. Pengelolaan sesi web dan perubahan password pertama masih perlu dibuat. Perubahan password harus diverifikasi sebelum flag dibersihkan, dan setiap endpoint operasional harus memeriksa status akun, kewajiban ganti password, izin, dan scope pada permintaan terkait. Jangan menggunakan hasil profil sebagai bukti bahwa JWT sudah diverifikasi atau sebagai pengganti pemeriksaan objek/unit/pos.
 
 ## Pembatasan login
 
@@ -76,9 +76,11 @@ Counter menyimpan jenis bucket, hash, jumlah percobaan, dan waktu mulai jendela;
 
 `scripts/verify-supabase-login-rate-limit.mjs` lulus 9 kelompok uji PostgreSQL dalam memori, termasuk grants, batas username/IP, banyak akun pada IP yang sama, pergantian IP, jendela kedaluwarsa, rollback, constraints, dan pengulangan. Uji ini memakai panggilan berurutan, bukan uji beban beberapa koneksi PostgreSQL. SQL memakai [perilaku atomik UPSERT PostgreSQL](https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT); pengujian beban runtime masih perlu dilakukan setelah backend diterapkan.
 
-## Backend login (disiapkan, belum diterapkan)
+## Backend login
 
 [`functions/portal-login/index.ts`](functions/portal-login/index.ts) adalah fungsi POST khusus antarserver dengan SDK `auth: "secret"`. Setelah migrasi pembatasan diterapkan, fungsi dapat disiapkan melalui editor Edge Functions sebagai `portal-login`, dengan pemeriksaan JWT legacy dimatikan dan key secret pada header `apikey`, sama seperti pola diagnostik Drive. Jangan menghubungkan key secret ini ke JavaScript browser.
+
+Screenshot dashboard pada 16 Oktober 2026 memperlihatkan fungsi `portal-login` telah dibuat. Toggle **Verify JWT with legacy secret** terlihat OFF dengan tombol **Save changes** aktif; penyimpanan pengaturan dan hasil probe Auth nyata belum dikonfirmasi. Belum ada password atau token Auth nyata dimasukkan ke source/pengujian lokal.
 
 Fungsi membaca URL serta dictionary API key bawaan Supabase, dengan fallback key legacy. Urutannya: validasi body maksimum 4 KiB, ambil slot login, cari identitas internal, verifikasi password melalui Auth, lalu baca profil menggunakan JWT pengguna dan RPC yang mengikuti RLS. Username tidak dikenal tetap melewati password Auth dengan identitas cadangan yang tidak diberikan kepada klien. Username tidak dikenal dan password salah menghasilkan pesan umum yang sama; kegagalan layanan ditolak. Hasil profil dibatasi ke field yang diperlukan dan izin tetap dikelompokkan per penugasan/scope. Kode fungsi tidak mencatat password, token, exception, atau respons mentah layanan.
 
@@ -87,6 +89,14 @@ Mode bawaan `probe` memeriksa kredensial dan profil, lalu meminta signout `scope
 Mode eksplisit `login` memerlukan IP dari backend tepercaya dan mengembalikan pasangan token hanya kepada backend yang memegang key secret. Mode ini belum terhubung ke frontend dan tidak digunakan untuk uji dashboard. Backend web berikutnya harus menjaga token dari browser, memverifikasi status sesi pada permintaan, menerapkan kedaluwarsa sesi portal, logout, refresh, CSRF, serta alur wajib ganti password. Fungsi ini tidak membuka API administrasi atau modul HR/keamanan, dan tidak menghapus flag wajib ganti password.
 
 `node --test tests/portal-login.test.mjs` lulus 12 pengujian dengan HTTP/env tiruan: jalur probe/login, pembatasan request, rate-limit, kegagalan kredensial umum, pengikatan identitas ke profil, scope, penutupan sesi uji, error layanan, dan perlindungan nilai privat dalam respons. Pengujian menjalankan sumber TypeScript yang sama dengan deployment; batas SDK distub, sehingga pemeriksaan key SDK dan Auth nyata belum dikonfirmasi.
+
+## Pemulihan akun pengelola saat penyiapan (belum diterapkan)
+
+`functions/portal-recover-itadmin/index.ts` adalah alat pemulihan sementara untuk operator proyek, memakai SDK `auth: "secret"`. Fungsi mencari akun `itadmin` melalui resolver backend, mencocokkan identitas Auth terkonfirmasi dengan email pengelola, dan memeriksa penugasan sistem `SUPER_ADMIN` aktif dengan scope `ALL`. ID target tidak diambil dari request. Setelah pemeriksaan itu lolos, satu-satunya perubahan yang dikirim adalah password melalui [Auth Admin API](https://supabase.com/docs/reference/javascript/auth-admin-updateuserbyid); tidak memerlukan password lama atau pengiriman email dan tidak menulis hash Auth dengan SQL. UID, penautan aplikasi, role, status, dan flag wajib ganti password tidak diubah oleh kode pemulihan.
+
+Buat fungsi baru bernama `portal-recover-itadmin`, salin sumbernya melalui editor, lalu simpan **Verify JWT with legacy secret = OFF** agar pemeriksaan secret key ditangani SDK. Pengujian operator memakai POST, **Add secret key**, serta body `new_password` yang diisi langsung pada dashboard. Password 12–128 karakter; nilai password/key tidak dimasukkan ke source atau dikirim ke chat. Respons sukses hanya `ok`, username, dan `password_reset`. Setelah pemulihan serta probe login berhasil dikonfirmasi, hapus deployment fungsi sementara ini. Source tetap disimpan untuk pelacakan.
+
+Tujuh pengujian `tests/portal-recover-itadmin.test.mjs` lulus dengan HTTP/env tiruan, mencakup pengikatan target, role/scope, penolakan input, error layanan, dan tidak keluarnya nilai privat dalam respons. SDK autentikasi distub; deployment dan reset nyata belum dikonfirmasi. Ini pemulihan bootstrap oleh operator pemegang secret proyek, belum implementasi alur reset pegawai dengan kredensial sekali pakai pada aplikasi.
 
 ## Uji SQL terisolasi
 
