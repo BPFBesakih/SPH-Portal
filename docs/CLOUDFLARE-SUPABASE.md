@@ -1,5 +1,9 @@
 # Deploy seluruh modul ke Cloudflare + Supabase
 
+Pada 16 Oktober 2026, migrasi produksi berhasil diterapkan, `portal-api` versi 2 aktif, dan commit `492e74f` berhasil diterbitkan Cloudflare. Pemeriksaan publik `/app/` menghasilkan HTTP 200, `/api/health` menghasilkan HTTP 200 dengan `modules_revision=20261016.1`, serta `/api/portal/me` tanpa sesi ditolak HTTP 401. Fingerprint akun sebelum/sesudah migrasi identik; 157 calon impor tetap PENDING, enam izin SUPER_ADMIN tetap sama, dan belum ada profil pegawai aktif yang dibuat dari calon impor.
+
+Validasi lokal: 109 tes Node, 17 kelompok integrasi PostgreSQL/paket Edge, empat kelompok browser aplikasi lengkap, serta tujuh kelompok browser akun lulus. Koneksi database produksi dibuktikan health check; login produksi seluruh modul, unggahan nyata, kamera/GPS perangkat, serta beban operasional masih memerlukan pengujian pengguna sesuai role.
+
 ## Arsitektur
 
 Cloudflare Pages menyajikan halaman informasi, halaman akun `/portal/`, dan aplikasi lengkap `/app/`. Pages Functions menjaga cookie sesi, CSRF, verifikasi Auth, refresh, dan pencabutan sesi. Browser hanya mengakses API pada origin sendiri. Token Auth, secret Supabase, dan konfigurasi Drive tidak dikirim ke browser.
