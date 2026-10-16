@@ -4,6 +4,8 @@ Pada 16 Oktober 2026, migrasi produksi berhasil diterapkan, `portal-api` versi 2
 
 Validasi lokal: 109 tes Node, 17 kelompok integrasi PostgreSQL/paket Edge, empat kelompok browser aplikasi lengkap, serta tujuh kelompok browser akun lulus. Koneksi database produksi dibuktikan health check; login produksi seluruh modul, unggahan nyata, kamera/GPS perangkat, serta beban operasional masih memerlukan pengujian pengguna sesuai role.
 
+Izin role sistem `SUPER_ADMIN` kini dapat diedit oleh akun berizin `admin.roles.manage`, termasuk saat role tersebut dipakai akun pengelola sendiri. Kode identitas role sistem tetap, sementara pilihan izinnya dapat disesuaikan. Penyimpanan ditolak dan di-rollback jika organisasi kehilangan administrator terakhir yang dapat mengelola akun serta role. Setelah penyimpanan, frontend membaca ulang konteks akun agar perubahan menu langsung terlihat. Perubahan fitur ini tidak memberi atau mencabut izin produksi secara otomatis.
+
 ## Arsitektur
 
 Cloudflare Pages menyajikan halaman informasi, halaman akun `/portal/`, dan aplikasi lengkap `/app/`. Pages Functions menjaga cookie sesi, CSRF, verifikasi Auth, refresh, dan pencabutan sesi. Browser hanya mengakses API pada origin sendiri. Token Auth, secret Supabase, dan konfigurasi Drive tidak dikirim ke browser.

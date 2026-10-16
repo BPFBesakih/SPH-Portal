@@ -19,8 +19,11 @@ const check=async(name,fn)=>{await fn();console.log(`PASS ${name}`);checks++;};
 const permissions=['admin.users.read','admin.users.manage','admin.users.reset','admin.roles.read','admin.roles.manage','admin.audit.read'];
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
-async function fixture({signedIn=true,required=false,viewport={width:1440,height:960}}={}){
+async function fixture({signedIn=true,required=false,roleEditor=false,mayManage=true,viewport={width:1440,height:960}}={}){
  const context=await browser.newContext({viewport,baseURL:origin});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
+ let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
+ const systemRole={id:'fixture-system-role',code:'SUPER_ADMIN',name:'Super Admin',is_system:1,is_active:1,row_version:1,permissions:[...permissions]};
+ const catalog=[...permissions,'hr.employees.read'].map(code=>({code,resource:code.split('.').slice(0,2).join('.'),action:code.split('.').at(-1)}));
  page.on('pageerror',e=>errors.push(e.message));page.on('console',msg=>{if(msg.type()==='error'&&!msg.text().includes('Failed to load resource'))errors.push(msg.text());});
  await page.route(`${origin}/**`,async route=>{
   const req=route.request(),url=new URL(req.url());if(!url.pathname.startsWith('/api/')){const r=await fetch(base+url.pathname);await route.fulfill({status:r.status,headers:Object.fromEntries(r.headers),body:Buffer.from(await r.arrayBuffer())});return;}
@@ -30,10 +33,11 @@ async function fixture({signedIn=true,required=false,viewport={width:1440,height
    if(url.pathname==='/api/auth/login'){const sent=req.postDataJSON();assert.equal(sent.username,'itadmin');authenticated=true;body={ok:true};}
    else if(url.pathname==='/api/auth/logout'){assert.equal(req.headers()['x-csrf-token'],'fixture-csrf');authenticated=false;body={ok:true};}
    else if(!authenticated){status=401;body={error:'SESSION_ENDED',message:'Sesi berakhir. Silakan masuk kembali.'};}
-   else if(url.pathname==='/api/portal/me')body={...me,user:{...me.user,must_change_password:required}};
+   else if(url.pathname==='/api/portal/me')body={...me,permissions:currentPermissions,user:{...me.user,must_change_password:required}};
    else if(url.pathname==='/api/users')body={items:[{...me.user,grants:[]}]};
    else if(url.pathname==='/api/announcements')body={items:[],can_manage:true};
-   else if(url.pathname==='/api/roles')body={items:[],permissions:[]};
+   else if(url.pathname==='/api/roles')body={items:roleEditor?[systemRole]:[],permissions:roleEditor?catalog:[]};
+   else if(roleEditor&&url.pathname===`/api/roles/${systemRole.id}`&&req.method()==='PATCH'){const change=req.postDataJSON();assert(mayManage);systemRole.permissions=change.permissions;systemRole.row_version++;currentPermissions=[...change.permissions];body={...systemRole};}
    else if(url.pathname==='/api/settings')body={allow_gap_publication:'false'};
    else if(url.pathname==='/api/audit')body={items:[]};
    else throw new Error(`Unexpected fixture request ${url.pathname}`);
@@ -45,7 +49,7 @@ async function fixture({signedIn=true,required=false,viewport={width:1440,height
 try{
  await check('full app boots with the six existing admin permissions and serializes session-bound API calls',async()=>{
   const f=await fixture();await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();assert.equal(f.maximum,1);
-  assert.equal(await f.page.getByRole('link',{name:'Data Pegawai',exact:true}).count(),0);
+  assert.equal(await f.page.getByRole('link',{name:'Data Pegawai & Organisasi',exact:true}).count(),0);
   assert.equal(await f.page.getByRole('link',{name:'Informasi Internal',exact:true}).count(),1);
   await f.page.screenshot({path:resolve(output,'admin-desktop.png'),fullPage:true});
   await f.page.getByRole('link',{name:'Role & Izin',exact:true}).click();await f.page.getByRole('heading',{name:'Role & Izin',exact:true}).waitFor();
@@ -69,6 +73,21 @@ try{
  await check('mandatory password change opens before any operational module request',async()=>{
   const f=await fixture({required:true});await f.page.getByRole('heading',{name:'Ganti password',exact:true}).waitFor();
   assert.equal(f.calls.filter(c=>c.path!=='/api/portal/me').length,0);
+ });
+ await check('Super Admin permission checkboxes are editable and saving refreshes the current account menus',async()=>{
+  const f=await fixture({roleEditor:true});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();
+  await f.page.getByRole('link',{name:'Role & Izin',exact:true}).click();await f.page.getByRole('heading',{name:'Role & Izin',exact:true}).waitFor();
+  await f.page.getByRole('button',{name:/Super Admin/}).click();await f.page.getByRole('heading',{name:'Ubah role',exact:true}).waitFor();
+  const code=f.page.getByLabel('Kode',{exact:true});assert.equal(await code.getAttribute('readonly'),'');
+  const permission=f.page.locator('input[name="permissions[]"][value="hr.employees.read"]');assert.equal(await permission.isEnabled(),true);await permission.check();
+  await f.page.getByRole('button',{name:'Simpan',exact:true}).click();await f.page.getByRole('link',{name:'Data Pegawai & Organisasi',exact:true}).waitFor();
+  const index=f.calls.findIndex(c=>c.path==='/api/roles/fixture-system-role'&&c.method==='PATCH');assert(index>=0);assert(f.calls[index].body.permissions.includes('hr.employees.read'));assert.equal(f.calls[index].body.code,'SUPER_ADMIN');assert(f.calls.slice(index+1).some(c=>c.path==='/api/portal/me'));
+ });
+ await check('a role reader still sees permission controls without mutation access',async()=>{
+  const f=await fixture({roleEditor:true,mayManage:false});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();
+  await f.page.getByRole('link',{name:'Role & Izin',exact:true}).click();await f.page.getByRole('button',{name:/Super Admin/}).click();
+  await f.page.getByRole('dialog',{name:'Super Admin',exact:true}).waitFor();
+  assert.equal(await f.page.locator('dialog input[name="permissions[]"]:enabled').count(),0);assert.equal(await f.page.getByRole('button',{name:'Simpan',exact:true}).count(),0);
  });
  assert.deepEqual(errors,[]);console.log(`${checks} isolated portal browser checks passed.`);
 }finally{for(const context of contexts)await context.close();await browser.close();await new Promise(done=>server.close(done));}

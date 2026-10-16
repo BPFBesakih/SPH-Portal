@@ -77,6 +77,20 @@ try{
   const u=await insert(db,'users',{id,username:name,status:'ACTIVE',must_change_password:0,employee_id});
   if(role)await insert(db,'user_roles',{user_id:id,role_id:(await one(db,'SELECT id FROM roles WHERE code=?',role)).id,scope_kind});return u;
  };
+ await check('an administrator can edit their system role permissions while last-admin and identity checks remain atomic',async()=>{
+  const role=await one(db,"SELECT * FROM roles WHERE code='SUPER_ADMIN'");
+  const original=(await all(db,'SELECT p.code FROM permissions p JOIN role_permissions rp ON rp.permission_id=p.id WHERE rp.role_id=?',role.id)).map(p=>p.code);
+  const permissions=[...original,'hr.coaching.read','hr.employee_files.read'];
+  const saved=await call(admin,`roles/${role.id}`,'PATCH',{row_version:role.row_version,permissions});
+  assert.equal(saved.code,'SUPER_ADMIN');assert.equal(saved.is_system,1);assert.equal(await can(db,admin,'hr.coaching.read'),true);
+  await assert.rejects(call(admin,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,code:'RENAMED',permissions}),e=>e.status===422);
+  await assert.rejects(call(admin,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,permissions:permissions.filter(p=>p!=='admin.roles.manage')}),e=>e.status===409);
+  assert.equal((await one(db,'SELECT row_version FROM roles WHERE id=?',role.id)).row_version,saved.row_version);
+  const ordinary=await account('role_reader',null);
+  await assert.rejects(call(ordinary,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,permissions}),e=>e.status===403);
+  await call(admin,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,permissions:original});
+  assert.equal(await can(db,admin,'hr.coaching.read'),false);
+ });
  const sdm=await account('sdm','SDM'),coordinator=await account('coordinator','COORDINATOR');
  let unit,otherUnit,position,employee,otherEmployee,officer;
  await check('organization and employee placement routes run on PostgreSQL',async()=>{

@@ -78,6 +78,24 @@ test('riwayat penempatan tidak terhapus dan rantai atasan melingkar ditolak',asy
 test('administrator terakhir dilindungi',async t=>{
   const f=fixture(t);await assert.rejects(call(adminRoutes,f,`users/${f.user.id}`,'PATCH',{row_version:1,status:'INACTIVE'}),/Administrator terakhir/);assert.equal(get(f.db,'users',f.user.id).status,'ACTIVE');
 });
+
+test('administrator dapat mengubah izin role sistem sendiri tanpa mengganti identitas sistemnya',async t=>{
+  const f=fixture(t),role=one(f.db,"SELECT * FROM roles WHERE code='SUPER_ADMIN'");
+  const original=all(f.db,'SELECT p.code FROM permissions p JOIN role_permissions rp ON rp.permission_id=p.id WHERE rp.role_id=?',role.id).map(p=>p.code);
+  const permissions=[...original,'hr.coaching.read','hr.employee_files.read'];
+  const saved=await call(adminRoutes,f,`roles/${role.id}`,'PATCH',{row_version:role.row_version,permissions});
+  assert.equal(saved.is_system,1);assert.equal(saved.code,'SUPER_ADMIN');
+  assert.equal(can(f.db,f.user,'hr.coaching.read'),true);assert.equal(can(f.db,f.user,'hr.employee_files.read'),true);
+  await assert.rejects(call(adminRoutes,f,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,code:'RENAMED',permissions}),/Kode role sistem/);
+  await assert.rejects(call(adminRoutes,f,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,permissions:permissions.filter(p=>p!=='admin.roles.manage')}),/Administrator terakhir/);
+  assert.equal(get(f.db,'roles',role.id).row_version,saved.row_version);assert.equal(can(f.db,f.user,'admin.roles.manage'),true);
+});
+
+test('akun tanpa izin kelola role tidak dapat mengubah role sistem',async t=>{
+  const f=fixture(t),role=one(f.db,"SELECT * FROM roles WHERE code='SUPER_ADMIN'"),user=f.account();
+  await assert.rejects(call(adminRoutes,{...f,user},`roles/${role.id}`,'PATCH',{row_version:role.row_version,permissions:['admin.roles.manage']}),e=>e.status===403);
+  assert.equal(get(f.db,'roles',role.id).row_version,role.row_version);
+});
 test('shift lintas tengah malam memakai tanggal tugas pada awal shift',()=>{
   const interval=shiftInterval('2099-01-10',{start_time:'22:00',end_time:'06:00',end_day_offset:1});assert.equal(interval.starts_at,'2099-01-10T14:00:00.000Z');assert.equal(interval.ends_at,'2099-01-10T22:00:00.000Z');assert.equal((Date.parse(interval.ends_at)-Date.parse(interval.starts_at))/60000,480);
 });

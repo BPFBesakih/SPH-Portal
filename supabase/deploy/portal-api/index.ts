@@ -2029,13 +2029,14 @@ async function adminRoutes(c) {
     if (["POST", "PATCH"].includes(m)) return await tx(db, async () => {
       await requireAccess(db, user, "admin.roles.manage");
       const old = id ? await get(db, "roles", id) : null;
-      assert(!old?.is_system, "Role sistem dilindungi. Buat role khusus untuk perubahan.");
       assert(Array.isArray(b.permissions), "Daftar izin wajib diisi.");
+      const code = text(b.code === void 0 ? old?.code : b.code, "Kode role", 64).toUpperCase();
+      assert(!old?.is_system || code === old.code, "Kode role sistem tidak dapat diubah. Izin role tetap dapat disesuaikan.");
       const values = {
-        code: text(b.code, "Kode role", 64).toUpperCase(),
-        name: text(b.name, "Nama role", 150),
-        description: typeof b.description === "string" ? b.description.slice(0, 2e3) : null,
-        is_active: b.is_active === false ? 0 : 1
+        code,
+        name: text(b.name === void 0 ? old?.name : b.name, "Nama role", 120),
+        description: b.description === void 0 ? old?.description || null : typeof b.description === "string" ? b.description.slice(0, 2e3) : null,
+        is_active: b.is_active === void 0 ? old?.is_active ?? 1 : Number(Boolean(b.is_active))
       };
       const saved = old ? await update(db, "roles", id, b.row_version, values) : await insert(db, "roles", {
         ...values,
@@ -2043,8 +2044,8 @@ async function adminRoutes(c) {
         created_by: user.id
       });
       await run(db, "DELETE FROM role_permissions WHERE role_id=?", saved.id);
-      for (const code of new Set(b.permissions)) {
-        const perm = await one(db, "SELECT id FROM permissions WHERE code=?", code);
+      for (const code2 of new Set(b.permissions)) {
+        const perm = await one(db, "SELECT id FROM permissions WHERE code=?", code2);
         assert(perm, "Izin tidak dikenal.");
         await run(db, "INSERT INTO role_permissions (role_id,permission_id) VALUES(?,?)", saved.id, perm.id);
       }

@@ -124,13 +124,14 @@ export async function adminRoutes(c) {
     if (['POST', 'PATCH'].includes(m)) return await tx(db, async () => {
       await requireAccess(db, user, 'admin.roles.manage');
       const old = id ? await get(db, 'roles', id) : null;
-      assert(!old?.is_system, 'Role sistem dilindungi. Buat role khusus untuk perubahan.');
       assert(Array.isArray(b.permissions), 'Daftar izin wajib diisi.');
+      const code = text(b.code === undefined ? old?.code : b.code, 'Kode role', 64).toUpperCase();
+      assert(!old?.is_system || code === old.code, 'Kode role sistem tidak dapat diubah. Izin role tetap dapat disesuaikan.');
       const values = {
-        code: text(b.code, 'Kode role', 64).toUpperCase(),
-        name: text(b.name, 'Nama role', 150),
-        description: typeof b.description === 'string' ? b.description.slice(0, 2000) : null,
-        is_active: b.is_active === false ? 0 : 1
+        code,
+        name: text(b.name === undefined ? old?.name : b.name, 'Nama role', 120),
+        description: b.description === undefined ? old?.description || null : typeof b.description === 'string' ? b.description.slice(0, 2000) : null,
+        is_active: b.is_active === undefined ? old?.is_active ?? 1 : Number(Boolean(b.is_active))
       };
       const saved = old ? await update(db, 'roles', id, b.row_version, values) : await insert(db, 'roles', {
         ...values,
