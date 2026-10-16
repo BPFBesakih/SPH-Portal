@@ -153,10 +153,12 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch, cryptoImpl = g
       const result = await fetchImpl(`${config.base}${path}`, {
         method, redirect: 'error', signal: AbortSignal.timeout(Math.ceil(remaining)),
         headers: { apikey: admin ? config.secret : config.publishable,
+          'User-Agent': 'SPH-Portal-Backend/1.0',
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
           ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
+      if (path === '/functions/v1/portal-login') loginStage = 'LOGIN_SERVICE_BODY';
       let data = null;
       if (result.status !== 204 && result.body) {
         try { data = await readJson(result.body, 1048576); }
@@ -324,9 +326,11 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch, cryptoImpl = g
       requireValue(username.length > 0 && username.length <= 64 && typeof body.password === 'string'
         && body.password.length > 0 && body.password.length <= 128, 'INVALID_REQUEST', 400);
       // This IP comes from Cloudflare ingress, never from JSON or X-Forwarded-For.
+      loginStage = 'LOGIN_CLIENT_ADDRESS';
+      const ingressIp = clientIp(request);
       loginStage = 'LOGIN_SERVICE_NETWORK';
       const result = await api('/functions/v1/portal-login', { admin: true,
-        body: { action: 'login', username, password: body.password, client_ip: clientIp(request) } });
+        body: { action: 'login', username, password: body.password, client_ip: ingressIp } });
       if (result.status === 401 && result.data?.error === 'INVALID_CREDENTIALS') throw new Failure('INVALID_CREDENTIALS', 401);
       if (result.status === 429) throw new Failure('LOGIN_LIMITED', 429);
       if ([401, 403].includes(result.status)) throw new Failure('AUTH_UNAVAILABLE', 503, 'LOGIN_SERVICE_AUTH');

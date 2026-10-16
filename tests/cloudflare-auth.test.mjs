@@ -38,6 +38,9 @@ function fixture(options = {}) {
     const headers = new Headers(init.headers);
     calls.push({ path, body, headers, method: init.method, redirect: init.redirect, signal: init.signal });
     assert.equal(parsed.origin, env.SUPABASE_URL); assert.equal(init.redirect, 'error');
+    assert.equal(headers.get('user-agent'), 'SPH-Portal-Backend/1.0');
+    assert.equal(headers.has('origin'), false);
+    assert.equal(headers.has('cookie'), false);
     assert.ok(init.signal instanceof AbortSignal);
     const answer = (data, status = 200) => status === 204 ? new Response(null, { status }) : Response.json(data, { status });
     if (path === '/functions/v1/portal-login') {
