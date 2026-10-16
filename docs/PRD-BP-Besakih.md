@@ -28,7 +28,7 @@ Dasar cakupan adalah kesepakatan percakapan mengenai tiga bagian produk dan baga
 | Bagian | Masuk MVP | Tahap berikutnya / di luar MVP |
 |---|---|---|
 | Login & Hak Akses | Login, logout, pengelolaan akun, role buatan Super Admin, izin menu/tindakan, pembatasan data, bantuan reset password | Pendaftaran publik, SSO, integrasi identitas eksternal |
-| SDM | Dashboard; Data Pegawai & Organisasi; Regulasi & SOP; Pelatihan & Standar Layanan; Evaluasi & Penilaian berupa coaching | Cuti/izin berikut approval dan saldo; KPI; rincian pekerjaan; penilaian kinerja; benefit; payroll; integrasi absensi |
+| SDM | Dashboard; Data Pegawai & Organisasi; Regulasi & SOP; Kegiatan & Pelatihan; Evaluasi & Penilaian berupa coaching | Cuti/izin berikut approval dan saldo; KPI; rincian pekerjaan; penilaian kinerja; benefit; payroll; integrasi absensi |
 | Keamanan | Dashboard; Jadwal & Penugasan otomatis; Logbook & Patroli; Laporan Kejadian; SOP Keamanan | Kalender upacara/kegiatan; GPS langsung; checkpoint QR; penjadwalan berbasis optimasi kompleks; approval bertingkat |
 
 Pada MVP tidak ada menu Administrasi Pegawai untuk cuti/izin. Pencatatan petugas tidak tersedia untuk penjadwalan adalah pengaturan operasional oleh koordinator, bukan transaksi cuti atau izin.
@@ -69,7 +69,7 @@ Login
     │   ├── Dashboard SDM
     │   ├── Data Pegawai & Organisasi
     │   ├── Regulasi & SOP
-    │   ├── Pelatihan & Standar Layanan
+    │   ├── Kegiatan & Pelatihan
     │   └── Evaluasi & Penilaian
     │       └── Coaching
     ├── Keamanan
@@ -130,14 +130,14 @@ Bidang identitas sensitif hanya dikumpulkan bila diperlukan dan telah ditentukan
 
 Publikasi dokumen dilakukan pengguna berizin tanpa rangkaian approval. Tanggal berlaku ditentukan pengelola. Aktivasi versi baru dilakukan secara eksplisit pada atau setelah tanggal tersebut; penjadwalan aktivasi otomatis belum diperlukan.
 
-### 6.4 Pelatihan & Standar Layanan
+### 6.4 Kegiatan & Pelatihan
 
 | ID | Kebutuhan | Kriteria penerimaan |
 |---|---|---|
-| TRN-01 | Buat pelatihan berisi judul, topik, penyelenggara, waktu, lokasi dan status | Waktu akhir tidak mendahului awal; status minimal direncanakan, selesai atau dibatalkan |
+| TRN-01 | Buat kegiatan atau pelatihan berisi judul, topik, penyelenggara, waktu, lokasi dan status | Waktu akhir tidak mendahului awal; status minimal direncanakan, selesai atau dibatalkan |
 | TRN-02 | Kelola peserta dan kehadiran manual | Pegawai tidak terdaftar ganda pada pelatihan yang sama; hadir/tidak hadir/belum dicatat dibedakan |
-| TRN-03 | Lampirkan materi dan sertifikat; lihat riwayat | Materi terkait pelatihan, sertifikat terkait peserta; berkas dibatasi hak akses |
-| TRN-04 | Akses standar layanan | Menggunakan dokumen pusat; tidak membuat versi dokumen tandingan pada menu pelatihan |
+| TRN-03 | Lampirkan materi dan sertifikat; lihat riwayat | Materi terkait kegiatan atau pelatihan, sertifikat terkait peserta; berkas dibatasi hak akses |
+| TRN-04 | Materi dari dokumen pusat | Materi kegiatan dan pelatihan dapat merujuk versi dokumen pusat; pengelolaan standar layanan tetap di Regulasi & SOP |
 
 ### 6.5 Evaluasi & Penilaian — Coaching
 

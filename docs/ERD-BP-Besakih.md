@@ -8,7 +8,7 @@ Dokumen ini menjelaskan model data logis, relasi, dan aturan integritas. Ini buk
 
 Tiga bagian produk menggunakan sumber data bersama: Login & Hak Akses; SDM; Keamanan. Dashboard adalah hasil pembacaan data yang telah diotorisasi, sehingga tidak memerlukan tabel dashboard tersendiri.
 
-MVP SDM memuat data pegawai/organisasi, regulasi/SOP, pelatihan/standar layanan, dan coaching. Evaluasi & Penilaian hanya mencatat coaching serta tindak lanjut. MVP Keamanan memuat jadwal, logbook/patroli, laporan kejadian, dan tampilan SOP. Penjadwalan mendukung pola rutin otomatis, penyesuaian sementara bertanggal, lalu kembali ke fase rotasi rutin asli.
+MVP SDM memuat data pegawai/organisasi, regulasi/SOP, kegiatan/pelatihan, dan coaching. Evaluasi & Penilaian hanya mencatat coaching serta tindak lanjut. MVP Keamanan memuat jadwal, logbook/patroli, laporan kejadian, dan tampilan SOP. Penjadwalan mendukung pola rutin otomatis, penyesuaian sementara bertanggal, lalu kembali ke fase rotasi rutin asli.
 
 Tidak ada tabel untuk pengajuan/approval cuti dan izin, saldo cuti, payroll/benefit, KPI, rincian pekerjaan, skor evaluasi, kalender upacara, GPS, QR patroli, atau absensi otomatis. `employee_unavailability` adalah catatan ketersediaan operasional oleh koordinator, bukan pengajuan atau persetujuan cuti/izin.
 
@@ -75,7 +75,7 @@ Perubahan jabatan/atasan dicatat dengan menutup interval penempatan lama dan mem
 | `coaching_sessions` | `employee_id:ID → employees`, `coach_employee_id:ID → employees`, `org_unit_id:ID → org_units`, `held_at:TS`, `topic:T`, `guidance_notes:T` | `constraints_notes:T`, `agreement_notes:T` | Coach berbeda dari pegawai yang dibina. org_unit_id adalah konteks unit saat coaching; tidak berubah otomatis ketika pegawai pindah. Tidak ada nilai/skor/KPI. |
 | `coaching_actions` | `coaching_session_id:ID → coaching_sessions`, `responsible_employee_id:ID → employees`, `action_text:T`, `status:T` | `due_on:D`, `progress_notes:T`, `completion_notes:T`, `completed_at:TS` | Status `OPEN/IN_PROGRESS/DONE`. completed_at dan completion_notes wajib jika DONE; completed_at kosong untuk status lain. Penanggung jawab tidak otomatis berhak melihat seluruh sesi coaching; akses mengikuti kebijakan sumber daya tersebut. |
 
-Daftar SOP Keamanan memfilter dokumen kategori relevan yang dapat diakses. Tampilan standar layanan juga mengambil dokumen yang sama. Hubungan materi ke document_versions mempertahankan bukti versi yang digunakan saat pelatihan, meskipun versi aktif dokumen kemudian berganti.
+Daftar SOP Keamanan memfilter dokumen kategori relevan yang dapat diakses. Standar layanan dikelola di Regulasi & SOP dan dapat dirujuk sebagai materi kegiatan atau pelatihan. Hubungan materi ke document_versions mempertahankan bukti versi yang digunakan saat pelatihan, meskipun versi aktif dokumen kemudian berganti.
 
 ## 6. Kamus data — Master Keamanan dan ketersediaan
 
