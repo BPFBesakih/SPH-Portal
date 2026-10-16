@@ -1,6 +1,6 @@
 # Halaman informasi publik SPH Portal
 
-Folder ini berisi halaman informasi publik, halaman masuk `/portal/`, serta Pages Functions untuk backend akun. Konfigurasi Production sudah disimpan dan deployment ulang berhasil; pemeriksaan tanpa sesi menghasilkan HTTP 401 yang diharapkan. Alur akun frontend sudah diuji dengan API fiktif; login dan ganti password akun nyata melalui browser masih perlu dikonfirmasi. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
+Folder ini berisi halaman informasi publik, halaman masuk `/portal/`, serta Pages Functions untuk backend akun. Konfigurasi Production sudah disimpan dan deployment ulang berhasil; pemeriksaan tanpa sesi menghasilkan HTTP 401 yang diharapkan. Selain pengujian dengan API fiktif, pengelola sudah mengonfirmasi login nyata, tampilan akun setelah langkah ganti password, serta sesi yang tetap terbaca setelah muat ulang. Logout dan refresh token nyata masih perlu diuji. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
 
 ## Pengaturan Cloudflare Pages dari Git
 
@@ -70,7 +70,7 @@ node scripts/verify-cloudflare-auth-ui.mjs <path-ke-playwright/index.mjs> <path-
 
 Playwright/browser adalah alat pengujian opsional terpisah, bukan dependensi runtime situs. Screenshot pengujian tersimpan pada `test-results/auth-ui/` yang diabaikan Git.
 
-Sesudah push commit `f5ca37f` pada 16 Oktober 2026, pemeriksaan produksi mengonfirmasi `/portal/` HTTP 200 dengan `Cache-Control: no-store` serta `X-Robots-Tag: noindex, nofollow`. Browser terisolasi tanpa sesi menampilkan form masuk aktif, menerima HTTP 401 dari satu panggilan `/api/auth/me`, dan tidak menghasilkan exception JavaScript. Tampilan desktop/ponsel juga diperiksa pada deployment tersebut. Tidak ada kredensial dimasukkan atau percobaan login produksi dalam pemeriksaan ini; alur akun nyata tetap menunggu pengelola.
+Sesudah push commit `f5ca37f` pada 16 Oktober 2026, pemeriksaan produksi mengonfirmasi `/portal/` HTTP 200 dengan `Cache-Control: no-store` serta `X-Robots-Tag: noindex, nofollow`. Browser terisolasi tanpa sesi menampilkan form masuk aktif, menerima HTTP 401 dari satu panggilan `/api/auth/me`, dan tidak menghasilkan exception JavaScript. Tampilan desktop/ponsel juga diperiksa pada deployment tersebut. Tidak ada kredensial dimasukkan atau percobaan login produksi dalam pemeriksaan otomatis ini. Konfirmasi pengelola sesudahnya dicatat di bawah.
 
 ### Perbaikan koneksi masuk 16 Oktober 2026
 
@@ -78,7 +78,13 @@ Percobaan masuk pengelola kemudian menampilkan kegagalan layanan. Uji akun fikti
 
 Kegagalan login layanan dapat menyertakan `support_code` dari daftar label tahap tetap. Tidak ada pesan exception atau isi respons upstream yang diteruskan. Header `X-SPH-Auth-Revision` memungkinkan pemeriksaan revisi sebelum menguji deployment. Uji regresi mencakup transport dengan receiver, error jaringan/body, label aman, serta redirect 3xx pada login, verifikasi Auth, profil, dan penyimpanan sesi; total 35 uji backend/Edge Function lulus.
 
-Setelah deployment commit `36e6d0b`, revisi `20261016.5` dikonfirmasi aktif. `GET /api/auth/me` tanpa sesi tetap HTTP 401 `SESSION_ENDED`; satu percobaan akun fiktif yang tidak ada menghasilkan HTTP 401 `INVALID_CREDENTIALS`, menggantikan error layanan 503. Browser terisolasi dengan akun fiktif juga menampilkan pesan kredensial yang benar dan membersihkan isian password. Ini mengonfirmasi jalur Cloudflare ke backend login serta penolakan akun fiktif; login akun nyata, pembuatan sesi, refresh, logout, dan pergantian password nyata masih menunggu pengujian pengelola. Counter percobaan tidak direset atau dilewati.
+Setelah deployment commit `36e6d0b`, revisi `20261016.5` dikonfirmasi aktif. `GET /api/auth/me` tanpa sesi tetap HTTP 401 `SESSION_ENDED`; satu percobaan akun fiktif yang tidak ada menghasilkan HTTP 401 `INVALID_CREDENTIALS`, menggantikan error layanan 503. Browser terisolasi dengan akun fiktif juga menampilkan pesan kredensial yang benar dan membersihkan isian password. Pemeriksaan akun fiktif ini hanya mengonfirmasi jalur Cloudflare ke backend login serta penolakannya; konfirmasi akun nyata oleh pengelola dicatat di bawah. Counter percobaan tidak direset atau dilewati.
+
+### Konfirmasi akun pengelola melalui browser
+
+Pada 16 Oktober 2026, sesudah perbaikan koneksi, pengelola mengonfirmasi layar wajib ganti password. Dalam kelanjutan alur tersebut, screenshot menampilkan **Akun terhubung**, username `itadmin`, dan halaman persiapan modul dengan tombol ganti password sukarela/logout. Frontend hanya menampilkan halaman akun ini ketika ringkasan backend menyatakan `must_change_password = false`. Pengelola kemudian memuat ulang halaman dan mengonfirmasi akun tetap terhubung.
+
+Bukti ini mengonfirmasi login nyata, keadaan akun sesudah langkah ganti password, serta penyimpanan/pembacaan sesi browser melalui backend. Nilai password, key, cookie, dan token tetap diisi/dikelola secara privat; tidak diminta atau dicatat dalam repo/chat. Tidak ada pemeriksaan terpisah terhadap isi event audit, pencabutan semua sesi Auth, sesi perangkat lain, kedaluwarsa, atau rotasi refresh token. Muat ulang dalam sesi aktif tidak dengan sendirinya membuktikan refresh token. Logout melalui browser menjadi pemeriksaan berikutnya; modul operasional dan administrasi akun masih belum tersedia.
 
 ## Batas tahap persiapan
 
