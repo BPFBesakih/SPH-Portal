@@ -61,6 +61,8 @@ Jam shift, batas istirahat/kerja, pola, dan kebutuhan pos tidak diisi otomatis p
 
 ## Deploy
 
+Untuk tahap penyiapan Google OAuth, beranda dan halaman privasi publik tersedia terpisah dalam [situs informasi Cloudflare Pages](site-info/README.md). Bagian ini hanya menerbitkan informasi aplikasi; migrasi backend Node.js/SQLite ke Supabase masih perlu dikerjakan.
+
 [Panduan deploy lengkap](docs/DEPLOYMENT.md) mencakup VPS Linux, Docker Compose, domain, HTTPS Caddy, inisialisasi akun, impor, update, backup, dan pemulihan. Berkas `Dockerfile`, `compose.yaml`, dan `Caddyfile` sudah tersedia. Deployment ditujukan untuk satu instance aplikasi dengan penyimpanan persisten pada server organisasi.
 
 ## Pengujian
