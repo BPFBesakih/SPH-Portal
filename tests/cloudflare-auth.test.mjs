@@ -199,7 +199,7 @@ test('credential failures and rate limits use safe messages without forwarding u
 
 test('login diagnostics identify only fixed service, verification, context, and session stages', async () => {
   const variants = [
-    [{ loginThrows: true }, 'LOGIN_SERVICE_NETWORK'],
+    [{ loginThrows: true }, 'LOGIN_TRANSPORT_TYPE'],
     [{ loginNonJson: true }, 'LOGIN_SERVICE_BODY'],
     [{ loginStatus: 404 }, 'LOGIN_SERVICE_MISSING'],
     [{ loginStatus: 503, loginData: { error: 'fixture-sensitive-upstream-error' } }, 'LOGIN_SERVICE_RESPONSE'],

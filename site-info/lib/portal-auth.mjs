@@ -22,6 +22,18 @@ class Failure extends Error {
 function requireValue(condition, code = 'AUTH_UNAVAILABLE', status = 503) {
   if (!condition) throw new Failure(code, status);
 }
+function transportSupport(error) {
+  const message = typeof error?.message === 'string' ? error.message : '';
+  // Classify known runtime failures; arbitrary exception text stays private.
+  if (/illegal invocation|incorrect this/i.test(message)) return 'LOGIN_TRANSPORT_CONTEXT';
+  if (/AbortSignal/i.test(message)) return 'LOGIN_TRANSPORT_ABORT_SIGNAL';
+  if (/redirect/i.test(message)) return 'LOGIN_TRANSPORT_REDIRECT';
+  if (/DNS|resolve host|hostname/i.test(message)) return 'LOGIN_TRANSPORT_DNS';
+  if (/certificate|TLS|SSL/i.test(message)) return 'LOGIN_TRANSPORT_TLS';
+  if (/timed? ?out|timeout|aborted/i.test(message)) return 'LOGIN_TRANSPORT_TIMEOUT';
+  if (/I\/O|request context|global scope/i.test(message)) return 'LOGIN_TRANSPORT_REQUEST_CONTEXT';
+  return error?.name === 'TypeError' ? 'LOGIN_TRANSPORT_TYPE' : 'LOGIN_TRANSPORT_FAILURE';
+}
 function base64url(bytes) {
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }
@@ -73,6 +85,7 @@ function response(data, status = 200, setCookies = []) {
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
     'Strict-Transport-Security': 'max-age=31536000',
+    'X-SPH-Auth-Revision': '20261016.4',
   });
   if ([409, 429].includes(status)) headers.set('Retry-After', status === 409 ? '1' : '900');
   if (status === 405) headers.set('Allow', 'GET, POST');
@@ -152,14 +165,18 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
     async function api(path, { body, token, admin = false, method = 'POST', cleanup = false } = {}) {
       const remaining = cleanup ? 4000 : Math.min(10000, deadline - now());
       requireValue(remaining > 0);
-      const result = await fetchImpl(`${config.base}${path}`, {
+      let result;
+      try { result = await fetchImpl(`${config.base}${path}`, {
         method, redirect: 'error', signal: AbortSignal.timeout(Math.ceil(remaining)),
         headers: { apikey: admin ? config.secret : config.publishable,
           'User-Agent': 'SPH-Portal-Backend/1.0',
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
           ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      });
+      }); } catch (error) {
+        if (path === '/functions/v1/portal-login') throw new Failure('AUTH_UNAVAILABLE', 503, transportSupport(error));
+        throw error;
+      }
       if (path === '/functions/v1/portal-login') loginStage = 'LOGIN_SERVICE_BODY';
       let data = null;
       if (result.status !== 204 && result.body) {
