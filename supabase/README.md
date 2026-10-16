@@ -146,7 +146,7 @@ SQL tidak memverifikasi password dan tidak dapat membuktikan keberhasilan HTTP A
 
 Endpoint ganti password juga mengambil slot pembatasan yang sama dengan login, sehingga percobaan ganti password ikut dihitung dalam batas username/IP 15 menit. Audit tabel ini hanya mencatat ganti password sendiri; pengelolaan akun/reset pegawai, audit administrasi lengkap, dan perlindungan administrator terakhir tetap belum tersedia.
 
-`scripts/verify-supabase-password-completion.mjs` lulus 10 kelompok uji PostgreSQL terisolasi: grants/RLS, input dan versi, lease/sesi kedaluwarsa, penolakan sesi Auth yang hilang, pengikatan akun, pencabutan seluruh sesi akun, pengulangan/perubahan berikutnya, perubahan status/versi, rollback, kegagalan audit, penerapan ulang, dan pelestarian 157 staging fiktif. Auth menggunakan tabel fixture; tidak ada password Auth nyata yang diubah. Dua puluh uji `tests/cloudflare-auth.test.mjs` menguji batas HTTP dan enkripsi Web Crypto nyata dengan respons Auth/RPC tiruan. Tidak ada klaim pengujian browser atau runtime produksi dari hasil lokal ini.
+`scripts/verify-supabase-password-completion.mjs` lulus 10 kelompok uji PostgreSQL terisolasi: grants/RLS, input dan versi, lease/sesi kedaluwarsa, penolakan sesi Auth yang hilang, pengikatan akun, pencabutan seluruh sesi akun, pengulangan/perubahan berikutnya, perubahan status/versi, rollback, kegagalan audit, penerapan ulang, dan pelestarian 157 staging fiktif. Auth menggunakan tabel fixture; tidak ada password Auth nyata yang diubah. Sebanyak 23 uji `tests/cloudflare-auth.test.mjs` menguji batas HTTP dan enkripsi Web Crypto nyata dengan respons Auth/RPC tiruan. Tidak ada klaim pengujian browser atau runtime produksi dari hasil lokal ini.
 
 ## Pemulihan akun pengelola saat penyiapan
 

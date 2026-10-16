@@ -52,7 +52,7 @@ Lease memakai satu retry setelah 60 ms bila sibuk; konflik berlanjut menghasilka
 
 ### Validasi source
 
-`node --test tests/cloudflare-auth.test.mjs tests/portal-login.test.mjs` lulus 32 uji: 20 uji backend Cloudflare dan 12 uji Edge Function. Enkripsi/dekripsi AES-GCM Web Crypto diuji nyata, termasuk penolakan ciphertext/key/AAD yang berubah; Auth, SDK, dan RPC memakai fixture. Uji mencakup cookie/CSRF, origin, IP tepercaya, profil/izin terkini tanpa menggabungkan scope antarrole, refresh/lease, logout, dan urutan ganti password. Ini belum membuktikan login atau perubahan password nyata melalui Cloudflare/browser. Status penerapan dan pengujian dashboard dicatat terpisah di [panduan Supabase](../supabase/README.md).
+`node --test tests/cloudflare-auth.test.mjs tests/portal-login.test.mjs` lulus 35 uji: 23 uji backend Cloudflare dan 12 uji Edge Function. Enkripsi/dekripsi AES-GCM Web Crypto diuji nyata, termasuk penolakan ciphertext/key/AAD yang berubah; Auth, SDK, dan RPC memakai fixture. Uji mencakup cookie/CSRF, origin, IP tepercaya, profil/izin terkini tanpa menggabungkan scope antarrole, refresh/lease, logout, dan urutan ganti password. Ini belum membuktikan login atau perubahan password nyata melalui Cloudflare/browser. Status penerapan dan pengujian dashboard dicatat terpisah di [panduan Supabase](../supabase/README.md).
 
 Percobaan build lokal dengan CLI resmi Wrangler `4.151.0` belum berhasil karena resolver dependency cache pnpm di host tidak menemukan `undici`, lalu `unenv` setelah lokasi modul dilengkapi. Tidak ada deploy/login atau pembacaan `.env` pada percobaan ini; dependensi aplikasi tidak diubah. Build/deployment Cloudflare sendiri sudah berhasil. Setelah konfigurasi Production dan deployment ulang pada 16 Oktober 2026, `GET https://sph-portal.pages.dev/api/auth/me` tanpa cookie/kredensial menghasilkan HTTP 401, `application/json`, `error: SESSION_ENDED`. Ini menggantikan respons 503 saat konfigurasi belum lengkap. Hasil 401 mengonfirmasi validasi konfigurasi dan jalur tanpa sesi berjalan; belum membuktikan login Auth, penulisan sesi database, refresh, logout, atau perubahan password nyata.
 
@@ -71,6 +71,14 @@ node scripts/verify-cloudflare-auth-ui.mjs <path-ke-playwright/index.mjs> <path-
 Playwright/browser adalah alat pengujian opsional terpisah, bukan dependensi runtime situs. Screenshot pengujian tersimpan pada `test-results/auth-ui/` yang diabaikan Git.
 
 Sesudah push commit `f5ca37f` pada 16 Oktober 2026, pemeriksaan produksi mengonfirmasi `/portal/` HTTP 200 dengan `Cache-Control: no-store` serta `X-Robots-Tag: noindex, nofollow`. Browser terisolasi tanpa sesi menampilkan form masuk aktif, menerima HTTP 401 dari satu panggilan `/api/auth/me`, dan tidak menghasilkan exception JavaScript. Tampilan desktop/ponsel juga diperiksa pada deployment tersebut. Tidak ada kredensial dimasukkan atau percobaan login produksi dalam pemeriksaan ini; alur akun nyata tetap menunggu pengelola.
+
+### Perbaikan koneksi masuk 16 Oktober 2026
+
+Percobaan masuk pengelola kemudian menampilkan kegagalan layanan. Uji akun fiktif yang tidak ada mengonfirmasi HTTP 503, dan label transport aman mengisolasi kegagalan opsi redirect. [Implementasi resmi workerd](https://github.com/cloudflare/workerd/blob/main/src/workerd/api/http.c%2B%2B) menolak `redirect: 'error'` sebelum request jaringan. Backend kini memakai `redirect: 'manual'` dan secara eksplisit menolak seluruh respons 3xx sebelum membaca body, tanpa mengikuti Location atau meneruskan kredensial ke tujuan redirect. Transport backend juga memakai User-Agent tetap dan fetch yang terikat pada konteks global.
+
+Kegagalan login layanan dapat menyertakan `support_code` dari daftar label tahap tetap. Tidak ada pesan exception atau isi respons upstream yang diteruskan. Header `X-SPH-Auth-Revision` memungkinkan pemeriksaan revisi sebelum menguji deployment. Uji regresi mencakup transport dengan receiver, error jaringan/body, label aman, serta redirect 3xx pada login, verifikasi Auth, profil, dan penyimpanan sesi; total 35 uji backend/Edge Function lulus.
+
+Setelah deployment commit `36e6d0b`, revisi `20261016.5` dikonfirmasi aktif. `GET /api/auth/me` tanpa sesi tetap HTTP 401 `SESSION_ENDED`; satu percobaan akun fiktif yang tidak ada menghasilkan HTTP 401 `INVALID_CREDENTIALS`, menggantikan error layanan 503. Browser terisolasi dengan akun fiktif juga menampilkan pesan kredensial yang benar dan membersihkan isian password. Ini mengonfirmasi jalur Cloudflare ke backend login serta penolakan akun fiktif; login akun nyata, pembuatan sesi, refresh, logout, dan pergantian password nyata masih menunggu pengujian pengelola. Counter percobaan tidak direset atau dilewati.
 
 ## Batas tahap persiapan
 
