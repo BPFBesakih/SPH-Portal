@@ -20,6 +20,7 @@ Penerapan publik dilakukan sendiri oleh pengelola melalui dashboard Cloudflare s
 
 ## Batas tahap persiapan
 
+- Berkas `dist/google14e0857c104512e8.html` adalah bukti kepemilikan situs untuk Google Search Console. Pertahankan berkas asli ini di alamat publik yang sama, termasuk setelah verifikasi berhasil.
 - Isi halaman menjelaskan status persiapan dan membedakan koneksi Drive yang diuji dari integrasi operasional yang belum selesai.
 - Tidak ada klaim bahwa migrasi aplikasi, Auth/RLS produksi, kompresi foto, atau pengiriman foto melalui backend sudah diterapkan.
 - Kebijakan retensi dan prosedur penghapusan data operasional belum ditetapkan. Pengelola perlu menentukannya dan memperbarui penjelasan privasi sebelum layanan operasional diluncurkan.
