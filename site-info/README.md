@@ -70,6 +70,8 @@ node scripts/verify-cloudflare-auth-ui.mjs <path-ke-playwright/index.mjs> <path-
 
 Playwright/browser adalah alat pengujian opsional terpisah, bukan dependensi runtime situs. Screenshot pengujian tersimpan pada `test-results/auth-ui/` yang diabaikan Git.
 
+Sesudah push commit `f5ca37f` pada 16 Oktober 2026, pemeriksaan produksi mengonfirmasi `/portal/` HTTP 200 dengan `Cache-Control: no-store` serta `X-Robots-Tag: noindex, nofollow`. Browser terisolasi tanpa sesi menampilkan form masuk aktif, menerima HTTP 401 dari satu panggilan `/api/auth/me`, dan tidak menghasilkan exception JavaScript. Tampilan desktop/ponsel juga diperiksa pada deployment tersebut. Tidak ada kredensial dimasukkan atau percobaan login produksi dalam pemeriksaan ini; alur akun nyata tetap menunggu pengelola.
+
 ## Batas tahap persiapan
 
 - Berkas `dist/google14e0857c104512e8.html` adalah bukti kepemilikan situs untuk Google Search Console. Pertahankan berkas asli ini di alamat publik yang sama, termasuk setelah verifikasi berhasil.
