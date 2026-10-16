@@ -47,7 +47,7 @@ Pengelola juga menjalankan pemeriksaan role `authenticated` tanpa identitas mela
 
 `scripts/verify-supabase-permissions.mjs` lulus 15 kelompok uji pada PostgreSQL terisolasi, mencakup kesesuaian 43 kode katalog, enam izin administrasi eksplisit, RLS lintas akun/role, penolakan perubahan langsung, pencabutan akses, constraints, kegagalan atomik, pengulangan, pemeriksaan dashboard baca saja, dan pelestarian staging. Cara pemanggilannya sama seperti pengujian akun di bawah. Script membaca katalog sumber sebagai teks; tidak mengimpor aplikasi SQLite dan tidak mengakses database nyata. Hasil lokal tidak menggantikan pengujian sesi pengguna nyata di Supabase.
 
-## Fungsi pendukung akun (belum dikonfirmasi diterapkan)
+## Fungsi pendukung akun
 
 `migrations/20261016000500_account_access_functions.sql` menyiapkan dua fungsi baca untuk integrasi akun:
 
@@ -56,11 +56,35 @@ Pengelola juga menjalankan pemeriksaan role `authenticated` tanpa identitas mela
 
 Pemisahan ini mempertahankan username pada antarmuka pengguna. [Password Auth Supabase](https://supabase.com/docs/guides/auth/passwords) memverifikasi kredensial menggunakan email atau nomor telepon; backend berikutnya dapat memakai hasil pencarian internal untuk menghubungkan username dengan Auth. Pegawai tidak perlu memakai alamat email sebagai username. Prosedur pembuatan identitas bagi pegawai yang tidak memiliki email tetap perlu diimplementasikan bersama pengelolaan akun.
 
-Migrasi tidak mengubah data akun, role, izin, atau 157 calon pegawai, serta tidak membuka jalur tulis. Kolom `security_definer`, `anon_boleh`, `authenticated_boleh`, dan `backend_boleh` pada hasil akhirnya memperlihatkan konfigurasi kedua fungsi. Hasil yang diharapkan untuk `portal_current_account`: `false, false, true, false`; untuk `portal_resolve_login`: `true, false, false, true`. Penerapan melalui dashboard belum dikonfirmasi.
+Migrasi tidak mengubah data akun, role, izin, atau 157 calon pegawai, serta tidak membuka jalur tulis. Pengelola mengonfirmasi penerapan melalui screenshot dashboard pada 16 Oktober 2026: kolom `security_definer`, `anon_boleh`, `authenticated_boleh`, dan `backend_boleh` untuk `portal_current_account` bernilai `false, false, true, false`; untuk `portal_resolve_login` bernilai `true, false, false, true`.
+
+Screenshot berikutnya mengonfirmasi pembacaan profil melalui `portal_current_account()` dalam simulasi identitas SQL menghasilkan `itadmin | true | 6` untuk username, kewajiban ganti password, dan jumlah izin penugasan pertama. Salinan query tersedia di `checks/check-current-account.sql`. Ini memeriksa hasil RPC di database, belum login dengan password atau validasi JWT melalui API. Flag password tetap `true`.
 
 `scripts/verify-supabase-account-access.mjs` lulus 12 kelompok uji PostgreSQL terisolasi: hak panggil, normalisasi username, penolakan akun tidak layak, penolakan pencarian identitas dari klien, profil sendiri tanpa informasi kredensial, metadata palsu, pemisahan scope beberapa role, pencabutan akses, pembacaan flag password, ketahanan terhadap search path pemanggil, pengulangan, dan pelestarian staging. Pengujian tidak membuat sesi Auth atau mengakses data nyata. Cara pemanggilan sama seperti script SQL lainnya di bawah.
 
-Fungsi ini adalah pendukung integrasi akun. Endpoint login masih perlu memverifikasi password lewat Auth, membatasi percobaan, memakai pesan gagal umum, dan mengelola sesi. Perubahan password pertama harus diverifikasi sebelum flag dibersihkan, dan setiap endpoint operasional harus memeriksa status akun, kewajiban ganti password, izin, dan scope pada permintaan terkait. Jangan menggunakan hasil profil sebagai bukti bahwa JWT sudah diverifikasi atau sebagai pengganti pemeriksaan objek/unit/pos.
+Fungsi ini adalah pendukung integrasi akun. Backend login di bawah sudah disiapkan tetapi belum diterapkan atau diuji dengan Auth nyata. Pengelolaan sesi web dan perubahan password pertama masih perlu dibuat. Perubahan password harus diverifikasi sebelum flag dibersihkan, dan setiap endpoint operasional harus memeriksa status akun, kewajiban ganti password, izin, dan scope pada permintaan terkait. Jangan menggunakan hasil profil sebagai bukti bahwa JWT sudah diverifikasi atau sebagai pengganti pemeriksaan objek/unit/pos.
+
+## Pembatasan login (belum dikonfirmasi diterapkan)
+
+`migrations/20261016000600_login_rate_limit.sql` membuat counter privat dan fungsi `portal_take_login_slot(text, text)`. Hanya `service_role` dapat memanggilnya. Klien dan `service_role` tidak memperoleh akses langsung ke skema/tabel counter; RLS aktif tanpa policy klien. Backend menghitung hash SHA-256 dari username yang sudah dinormalisasi dan IP dari proxy tepercaya, lalu mengambil slot sebelum mencari identitas atau memanggil Auth. Browser tidak boleh menentukan hash atau alamat IP yang dipercaya backend.
+
+Batas awal berupa jendela 15 menit: **5 percobaan per username** dan **300 percobaan per IP**, termasuk percobaan yang berhasil. Batas IP mengakomodasi banyak pegawai pada jaringan kantor yang sama. Mengganti IP tidak melewati batas username; permintaan yang sudah dibatasi pada IP tidak membuat counter username baru. Update counter memakai UPSERT bersyarat, dengan urutan kunci IP lalu username. Pengulangan migrasi tidak mereset counter. Ini pembatasan frekuensi, tidak mengubah status akun menjadi `LOCKED` atau membersihkan flag wajib ganti password.
+
+Counter menyimpan jenis bucket, hash, jumlah percobaan, dan waktu mulai jendela; tidak menyimpan username/IP mentah, password, atau token. Jendela kedaluwarsa dipakai ulang saat bucket itu menerima permintaan berikutnya; migrasi ini tidak mengatur pekerjaan pembersihan berkala.
+
+`scripts/verify-supabase-login-rate-limit.mjs` lulus 9 kelompok uji PostgreSQL dalam memori, termasuk grants, batas username/IP, banyak akun pada IP yang sama, pergantian IP, jendela kedaluwarsa, rollback, constraints, dan pengulangan. Uji ini memakai panggilan berurutan, bukan uji beban beberapa koneksi PostgreSQL. SQL memakai [perilaku atomik UPSERT PostgreSQL](https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT); pengujian beban runtime masih perlu dilakukan setelah backend diterapkan.
+
+## Backend login (disiapkan, belum diterapkan)
+
+[`functions/portal-login/index.ts`](functions/portal-login/index.ts) adalah fungsi POST khusus antarserver dengan SDK `auth: "secret"`. Setelah migrasi pembatasan diterapkan, fungsi dapat disiapkan melalui editor Edge Functions sebagai `portal-login`, dengan pemeriksaan JWT legacy dimatikan dan key secret pada header `apikey`, sama seperti pola diagnostik Drive. Jangan menghubungkan key secret ini ke JavaScript browser.
+
+Fungsi membaca URL serta dictionary API key bawaan Supabase, dengan fallback key legacy. Urutannya: validasi body maksimum 4 KiB, ambil slot login, cari identitas internal, verifikasi password melalui Auth, lalu baca profil menggunakan JWT pengguna dan RPC yang mengikuti RLS. Username tidak dikenal tetap melewati password Auth dengan identitas cadangan yang tidak diberikan kepada klien. Username tidak dikenal dan password salah menghasilkan pesan umum yang sama; kegagalan layanan ditolak. Hasil profil dibatasi ke field yang diperlukan dan izin tetap dikelompokkan per penugasan/scope. Kode fungsi tidak mencatat password, token, exception, atau respons mentah layanan.
+
+Mode bawaan `probe` memeriksa kredensial dan profil, lalu meminta signout `scope=local` untuk sesi uji yang baru dibuat. Respons sukses hanya memuat hasil pemeriksaan dan ringkasan akun, tanpa token, ID Auth, atau email. Kegagalan signout menghasilkan kegagalan pemeriksaan. Signout lokal tidak mengakhiri sesi pengguna pada perangkat lain; ini juga bukan bukti bahwa JWT lama langsung tidak berlaku pada semua API. Lihat [perilaku sesi Supabase](https://supabase.com/docs/guides/auth/sessions#how-to-ensure-an-access-token-jwt-cannot-be-used-after-a-user-signs-out).
+
+Mode eksplisit `login` memerlukan IP dari backend tepercaya dan mengembalikan pasangan token hanya kepada backend yang memegang key secret. Mode ini belum terhubung ke frontend dan tidak digunakan untuk uji dashboard. Backend web berikutnya harus menjaga token dari browser, memverifikasi status sesi pada permintaan, menerapkan kedaluwarsa sesi portal, logout, refresh, CSRF, serta alur wajib ganti password. Fungsi ini tidak membuka API administrasi atau modul HR/keamanan, dan tidak menghapus flag wajib ganti password.
+
+`node --test tests/portal-login.test.mjs` lulus 12 pengujian dengan HTTP/env tiruan: jalur probe/login, pembatasan request, rate-limit, kegagalan kredensial umum, pengikatan identitas ke profil, scope, penutupan sesi uji, error layanan, dan perlindungan nilai privat dalam respons. Pengujian menjalankan sumber TypeScript yang sama dengan deployment; batas SDK distub, sehingga pemeriksaan key SDK dan Auth nyata belum dikonfirmasi.
 
 ## Uji SQL terisolasi
 

@@ -47,3 +47,9 @@ Pengelola mengonfirmasi hasil berikut pada 16 Oktober 2026:
 Kode ini adalah langkah persiapan backend. Migrasi aplikasi utama, Supabase Auth/Postgres, RLS produksi, integrasi unggahan, dan PWA belum diselesaikan oleh fungsi ini.
 
 Rujukan: [autentikasi Edge Functions](https://supabase.com/docs/guides/functions/auth), [secrets](https://supabase.com/docs/guides/functions/secrets), [pembaruan access token Google](https://developers.google.com/identity/protocols/oauth2/web-server#offline), [Drive files.get](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/get), dan [capabilities folder](https://developers.google.com/workspace/drive/api/reference/rest/v3/files).
+
+## Backend login terpisah (belum diterapkan)
+
+`portal-login/index.ts` menyiapkan login username khusus antarserver dengan SDK `auth: "secret"`; fungsi ini tidak dipanggil langsung dari frontend. Jalankan migrasi `20261016000600_login_rate_limit.sql` sebelum menerapkan fungsi login. Status dan batas integrasinya tercatat pada [panduan backend login](../README.md#backend-login-disiapkan-belum-diterapkan).
+
+Mode bawaan `probe` mengembalikan ringkasan tanpa token dan meminta signout lokal sesi uji. Mode eksplisit `login` mengembalikan pasangan token kepada backend pemegang secret key untuk integrasi sesi web berikutnya; mode ini bukan pengujian dashboard. Fungsi membaca [API key bawaan runtime](https://supabase.com/docs/guides/functions/secrets#default-secrets), tidak memerlukan salinan password atau key pada source. Dua belas pengujian HTTP tiruan lulus; deployment, pemeriksaan key SDK, dan password Auth nyata belum diuji.
