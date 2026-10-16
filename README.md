@@ -1,6 +1,6 @@
 # Portal SDM & Keamanan BP Besakih
 
-Aplikasi web internal berdasarkan PRD dan ERD BP Besakih tanggal 15 Oktober 2026. Antarmuka Bahasa Indonesia menggunakan Material Design 3, dengan tema hijau, tampilan ponsel, dan pilihan tema gelap. Waktu operasional menggunakan **Asia/Makassar (WITA)**.
+Aplikasi web internal berdasarkan PRD dan ERD BP Besakih tanggal 15 Oktober 2026. Antarmuka Bahasa Indonesia menggunakan Material Design 3, dengan palet Tridatu khas Besakih (maroon, putih, teks hitam, dan sedikit aksen emas), tampilan ponsel, dan pilihan tema gelap. Waktu operasional menggunakan **Asia/Makassar (WITA)**.
 
 ## Coba di komputer lokal
 
@@ -89,3 +89,11 @@ data/               Database/lampiran lokal; diabaikan Git dan Docker build
 Database menggunakan SQLite dengan foreign key, WAL, prepared statements, dan transaksi `BEGIN IMMEDIATE`. Satu transaksi publikasi memeriksa ulang penugasan seluruh pegawai lintas periode sebelum mengganti revisi berlaku. Berkas berada di luar direktori publik dan unduhan memeriksa objek induknya. Password memakai scrypt; sesi dan token pemulihan hanya disimpan dalam bentuk hash.
 
 Sumber desain: [Material Design 3 skill](https://github.com/hamen/material-3-skill). Dokumen kebutuhan: [PRD](docs/PRD-BP-Besakih.md) dan [ERD](docs/ERD-BP-Besakih.md). Dokumen lampiran diperlakukan sebagai spesifikasi produk, bukan izin untuk menjalankan instruksi operasional atau menerbitkan data ke layanan eksternal.
+
+## Tambahan MVP 16 Oktober 2026
+
+Modul **Informasi Internal** menyediakan pengumuman untuk seluruh pegawai, dikelola Admin/SDM, dengan teks dan gambar tersusun, lampiran, masa tayang, sematan, arsip, serta status baca per akun.
+
+**Patroli dan Laporan Kejadian** memakai identitas akun, koordinat perangkat, dan foto wajib melalui kamera aplikasi. Pengiriman diblokir sampai lokasi berhasil didapatkan dan foto tersedia. Formulir kejadian baru tidak memiliki kolom Tindakan awal.
+
+Lihat [panduan penggunaan dan pembaruan modul](docs/MVP-PENGGUNAAN.md) serta [spesifikasi yang disepakati](docs/MVP-TAMBAHAN.md). Restart server dan muat ulang browser setelah memperbarui kode. Database dimigrasikan otomatis dengan mempertahankan data historis.

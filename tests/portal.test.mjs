@@ -121,10 +121,34 @@ test('dokumen masa depan tidak diaktifkan; publikasi baru mengarsipkan versi lam
   const a=await call(hrRoutes,f,`documents/${doc.id}/versions`,'POST',{file_id:file().id,version_label:'2',effective_on:today()});await call(hrRoutes,f,`documents/${doc.id}/activate`,'POST',{version_id:a.id,row_version:a.row_version});const b=await call(hrRoutes,f,`documents/${doc.id}/versions`,'POST',{file_id:file().id,version_label:'3',effective_on:today()});await call(hrRoutes,f,`documents/${doc.id}/activate`,'POST',{version_id:b.id,row_version:b.row_version});assert.equal(get(f.db,'document_versions',a.id).state,'ARCHIVED');
 });
 test('kejadian idempoten, riwayat penyelesaian dan pembukaan kembali tersimpan',async t=>{
-  const f=scheduling(t),payload={post_id:f.posts[0].id,reporter_employee_id:f.employees[0].id,occurred_at:now(),incident_type:'Temuan',chronology:'Kronologi',initial_action:'Tindakan awal',idempotency_key:'same-request'};
+  const f=scheduling(t);f.user.employee_id=f.employees[0].id;run(f.db,'UPDATE users SET employee_id=? WHERE id=?',f.user.employee_id,f.user.id);const photo=insert(f.db,'files',{storage_key:'camera-test',original_name:'bukti.jpg',mime_type:'image/jpeg',size_bytes:10,checksum:'test',status:'AVAILABLE',uploaded_by:f.user.id});const payload={occurred_at:now(),incident_type:'Temuan',chronology:'Kronologi',idempotency_key:'same-request',location:{latitude:-8.37,longitude:115.45,accuracy:10,captured_at:now()},photos:[{file_id:photo.id,captured_at:now(),source:'CAMERA'}]};
   const a=await call(securityRoutes,f,'incidents','POST',payload),b=await call(securityRoutes,f,'incidents','POST',payload);assert.equal(a.id,b.id);assert.equal(one(f.db,'SELECT count(*) n FROM incidents').n,1);await assert.rejects(call(securityRoutes,f,'incidents','POST',{...payload,chronology:'Berbeda'}),/laporan berbeda/);
   let i=await call(securityRoutes,f,`incidents/${a.id}/updates`,'POST',{row_version:a.row_version,status:'IN_PROGRESS',responsible_employee_id:f.employees[1].id,notes:'Ditangani'});i=await call(securityRoutes,f,`incidents/${a.id}/updates`,'POST',{row_version:i.row_version,status:'RESOLVED',notes:'Barang diserahkan'});await call(securityRoutes,f,`incidents/${a.id}/updates`,'POST',{row_version:i.row_version,status:'IN_PROGRESS',notes:'Perlu pengecekan ulang'});const history=all(f.db,'SELECT * FROM incident_updates WHERE incident_id=?',a.id);assert.equal(history.length,4);assert(history.some(h=>h.notes==='Barang diserahkan'));assert(history.some(h=>h.event_type==='REOPENED'));
 });
+test('HTTP: logo dan favicon PNG tersedia tanpa membuka berkas privat',async t=>{
+  const f=fixture(t),directory=mkdtempSync(resolve(tmpdir(),'besakih-brand-')),{server}=createApp({db:f.db,dataDir:directory});
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  t.after(async()=>{await new Promise(r=>server.close(r));cleanup(directory);});
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  for(const [name,png] of [['mark.svg','bp-besakih.png'],['favicon.svg','favicon.png']]){
+    const response=await fetch(`${origin}/assets/${name}`);
+    assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/svg+xml');
+    const svg=await response.text(),encoded=svg.match(/href="data:image\/png;base64,([^"]+)"/);
+    assert(encoded,'Logo SVG harus menyertakan piksel PNG asli.');
+    assert.deepEqual(Buffer.from(encoded[1],'base64'),readFileSync(new URL(`../public/assets/${png}`,import.meta.url)));
+  }
+  for(const name of ['bp-besakih.png','favicon.png']){
+    const response=await fetch(`${origin}/assets/${name}`);
+    assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/png');
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()),readFileSync(new URL(`../public/assets/${name}`,import.meta.url)));
+    const head=await fetch(`${origin}/assets/${name}`,{method:'HEAD'});
+    assert.equal(head.status,200);assert.equal(head.headers.get('content-type'),'image/png');assert.equal((await head.arrayBuffer()).byteLength,0);
+  }
+  assert.equal((await fetch(`${origin}/schema.sql`)).status,404);
+  assert.equal((await fetch(`${origin}/assets/%2e%2e%2fschema.sql`)).status,404);
+  assert.equal((await fetch(`${origin}/assets/favicon.png`,{method:'POST'})).status,405);
+});
+
 test('HTTP: login, CSRF, akses lintas modul, pencabutan role dan penonaktifan pegawai',async t=>{
   const f=fixture(t),scoped=f.account();f.role(scoped,['hr.employees.read'],'ASSIGNED_UNITS',f.unit.id);const directory=mkdtempSync(resolve(tmpdir(),'besakih-http-'));const {server}=createApp({db:f.db,dataDir:directory});await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(async()=>{await new Promise(r=>server.close(r));cleanup(directory);});
   const origin=`http://127.0.0.1:${server.address().port}`;
@@ -168,5 +192,5 @@ test('materi dari versi SOP lama tetap mengikuti hak unduh dokumen pusat',t=>{
   const f=fixture(t),u=f.account();f.role(u,['hr.training.download']);const grant=f.role(u,['hr.documents.download']);const file=insert(f.db,'files',{storage_key:crypto.randomUUID(),original_name:'sop.pdf',mime_type:'application/pdf',size_bytes:1,checksum:'h',status:'AVAILABLE',uploaded_by:f.user.id});const doc=insert(f.db,'documents',{document_code:'SOP-PRIVATE',title:'SOP Terbatas',category:'SOP',owner_org_unit_id:f.unit.id,audience_kind:'ALL_UNITS',is_archived:0});const version=insert(f.db,'document_versions',{document_id:doc.id,file_id:file.id,version_label:'1',effective_on:'2020-01-01',state:'ARCHIVED',activated_by:f.user.id,activated_at:now(),archived_at:now()});const training=insert(f.db,'training_events',{title:'Pelatihan SOP',topic:'SOP',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T00:00:00.000Z',ends_at:'2099-01-01T01:00:00.000Z',status:'PLANNED'});insert(f.db,'training_materials',{training_event_id:training.id,title:'Materi SOP',document_version_id:version.id});assert.equal(fileAllowed(f.db,u,file.id),true);run(f.db,'DELETE FROM user_roles WHERE id=?',grant.id);assert.equal(fileAllowed(f.db,u,file.id),false);
 });
 test('migrasi tabel penghubung mempertahankan seluruh pemberian izin lama',t=>{
-  const directory=mkdtempSync(resolve(tmpdir(),'besakih-migration-'));t.after(()=>cleanup(directory));const path=resolve(directory,'portal.sqlite');let db=openDb(path);seedPermissions(db);const before=one(db,'SELECT count(*) n FROM role_permissions').n;db.exec('ALTER TABLE role_permissions DROP COLUMN created_at; DELETE FROM schema_migrations WHERE version=2;');db.close();db=openDb(path);try{assert.equal(one(db,'SELECT count(*) n FROM role_permissions').n,before);assert.equal(one(db,'SELECT count(*) n FROM role_permissions WHERE created_at IS NULL').n,0);assert.equal(one(db,'SELECT max(version) n FROM schema_migrations').n,2);const role=insert(db,'roles',{code:'MIGRATION_TEST',name:'Role migrasi',is_system:0,is_active:1});run(db,'INSERT INTO role_permissions (role_id,permission_id) VALUES(?,?)',role.id,one(db,'SELECT id FROM permissions LIMIT 1').id);assert(one(db,'SELECT created_at FROM role_permissions WHERE role_id=?',role.id).created_at);}finally{db.close();}
+  const directory=mkdtempSync(resolve(tmpdir(),'besakih-migration-'));t.after(()=>cleanup(directory));const path=resolve(directory,'portal.sqlite');let db=openDb(path);seedPermissions(db);const before=one(db,'SELECT count(*) n FROM role_permissions').n;db.exec('ALTER TABLE role_permissions DROP COLUMN created_at; DELETE FROM schema_migrations WHERE version=2;');db.close();db=openDb(path);try{assert.equal(one(db,'SELECT count(*) n FROM role_permissions').n,before);assert.equal(one(db,'SELECT count(*) n FROM role_permissions WHERE created_at IS NULL').n,0);assert.equal(one(db,'SELECT max(version) n FROM schema_migrations').n,3);const role=insert(db,'roles',{code:'MIGRATION_TEST',name:'Role migrasi',is_system:0,is_active:1});run(db,'INSERT INTO role_permissions (role_id,permission_id) VALUES(?,?)',role.id,one(db,'SELECT id FROM permissions LIMIT 1').id);assert(one(db,'SELECT created_at FROM role_permissions WHERE role_id=?',role.id).created_at);}finally{db.close();}
 });

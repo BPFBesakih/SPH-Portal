@@ -3,11 +3,12 @@ import {readFileSync,existsSync,statSync} from 'node:fs';
 import {resolve,extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {openDb,all,one,run,tx,audit,assert,AppError,now,uid} from './lib/db.mjs';
-import {seedPermissions,authenticate,login,changePassword,safeUser,grants,cookies,digest,hashPassword,can,has,postContext} from './lib/auth.mjs';
+import {seedPermissions,authenticate,login,changePassword,safeUser,grants,cookies,digest,hashPassword,can,has,postContext,announcementsManager} from './lib/auth.mjs';
 import {hrRoutes,employees} from './lib/hr.mjs';
 import {securityRoutes} from './lib/security.mjs';
 import {rosterRoutes} from './lib/roster.mjs';
 import {adminRoutes} from './lib/admin.mjs';
+import {announcementRoutes} from './lib/announcements.mjs';
 import {dashboard,lookups} from './lib/read-models.mjs';
 import {upload,download,attach} from './lib/files.mjs';
 
@@ -27,8 +28,8 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
   const server=createServer(async(req,res)=> {
     const requestId=uid();res.setHeader('X-Request-Id',requestId);
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
-    res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    res.setHeader('Permissions-Policy','camera=(self), microphone=(), geolocation=(self)');
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     if(process.env.COOKIE_SECURE==='true')res.setHeader('Strict-Transport-Security','max-age=31536000');
     const send=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
     try {
@@ -36,9 +37,9 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(p[0]!=='api'){
         assert(['GET','HEAD'].includes(method),'Metode tidak diizinkan.',405);
         const pathname=url.pathname==='/'?'/index.html':url.pathname;
-        assert(/^\/[a-zA-Z0-9/_-]+\.(html|js|css|svg|ico|woff2)$/.test(pathname),'Halaman tidak ditemukan.',404);
+        assert(/^\/[a-zA-Z0-9/_-]+\.(html|js|css|svg|png|ico|woff2)$/.test(pathname),'Halaman tidak ditemukan.',404);
         const path=resolve(root,'public',`.${pathname}`);assert(path.startsWith(resolve(root,'public')+String.fromCharCode(process.platform==='win32'?92:47))&&existsSync(path)&&statSync(path).isFile(),'Halaman tidak ditemukan.',404);
-        const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.woff2':'font/woff2'};res.writeHead(200,{'Content-Type':types[extname(path)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(method==='HEAD'?undefined:readFileSync(path));return;
+        const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.woff2':'font/woff2'};res.writeHead(200,{'Content-Type':types[extname(path)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(method==='HEAD'?undefined:readFileSync(path));return;
       }
       p.shift();
       if(p[0]==='health'&&method==='GET'){one(db,'SELECT 1');send({status:'ok'});return;}
@@ -56,7 +57,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       const user=authenticate(db,req);user.request_id=requestId;
       if(mutating)assert(typeof req.headers['x-csrf-token']==='string'&&digest(req.headers['x-csrf-token'])===user.session.csrf_hash,'Token keamanan tidak valid. Muat ulang halaman.',403);
       if(p[0]==='auth'&&p[1]==='me'&&method==='GET'){
-        const token=cookies(req.headers.cookie).besakih_csrf;send({user:safeUser(user),name:user.employee_id?one(db,'SELECT full_name FROM employees WHERE id=?',user.employee_id)?.full_name:user.username,csrfToken:token&&digest(token)===user.session.csrf_hash?token:null,permissions:[...new Set(grants(db,user).map(g=>g.code))],demo:one(db,"SELECT value FROM app_settings WHERE key='demo_mode'").value==='true'});return;
+        const token=cookies(req.headers.cookie).besakih_csrf;send({user:safeUser(user),name:user.employee_id?one(db,'SELECT full_name FROM employees WHERE id=?',user.employee_id)?.full_name:user.username,csrfToken:token&&digest(token)===user.session.csrf_hash?token:null,permissions:[...new Set(grants(db,user).map(g=>g.code))],announcements_manage:announcementsManager(db,user),demo:one(db,"SELECT value FROM app_settings WHERE key='demo_mode'").value==='true'});return;
       }
       if(p[0]==='auth'&&p[1]==='logout'&&method==='POST'){run(db,'UPDATE auth_sessions SET revoked_at=? WHERE id=?',now(),user.session.id);res.setHeader('Set-Cookie',[cookie('besakih_session','',true,0),cookie('besakih_csrf','',false,0)]);send({ok:true});return;}
       if(p[0]==='auth'&&p[1]==='password'&&method==='POST'){await changePassword(db,user,body);send({ok:true});return;}
@@ -72,9 +73,9 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       }
       if(p[0]==='uploads'&&method==='POST'){send(upload(db,user,body,dataDir),201);return;}
       if(p[0]==='attachments'&&method==='POST'){send(attach(db,user,body.type,body.owner_id,body),201);return;}
-      if(p[0]==='files'&&p[1]&&method==='GET') {const {file,data}=download(db,user,p[1],dataDir);res.writeHead(200,{'Content-Type':file.mime_type,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(file.original_name)}`,'Content-Length':data.length,'Cache-Control':'private, no-store'});res.end(data);return;}
+      if(p[0]==='files'&&p[1]&&method==='GET') {const {file,data}=download(db,user,p[1],dataDir);res.writeHead(200,{'Content-Type':file.mime_type,'Content-Disposition':`${url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.original_name)}`,'Content-Length':data.length,'Cache-Control':'private, no-store'});res.end(data);return;}
       const ctx={db,user,p,method,body,url};
-      for(const handler of [hrRoutes,securityRoutes,rosterRoutes,adminRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
+      for(const handler of [announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
       throw new AppError(404,'Alamat API tidak ditemukan.');
     } catch(error) {
       const conflict=/UNIQUE constraint/.test(error.message),invalid=/FOREIGN KEY constraint|CHECK constraint|NOT NULL constraint/.test(error.message);

@@ -1,5 +1,6 @@
 export const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const paths={
+ camera:'M3 7h4l2-3h6l2 3h4v14H3zM16 13a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
  dashboard:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
  people:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3a4 4 0 0 1 0 8M22 21v-2a4 4 0 0 0-3-3.87M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
  document:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h6',
@@ -37,7 +38,7 @@ export const localToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Maka
 export const localNow=()=>new Date(Date.now()+8*3600000).toISOString().slice(0,16);
 export const toUTC=v=>new Date(`${v}:00+08:00`).toISOString();
 export const empty=(title='Belum ada data',description='Tambahkan catatan pertama untuk mulai mengelola data.',ico='folder')=>`<div class="empty">${icon(ico)}<strong>${esc(title)}</strong><p>${esc(description)}</p></div>`;
-export const button=(label,action,ico='plus',kind='primary',extra='')=>`<button class="button ${kind}" data-action="${action}" ${extra}>${icon(ico)}<span>${esc(label)}</span></button>`;
+export const button=(label,action,ico='plus',kind='primary',extra='')=>`<button class="button ${kind}" data-action="${action}" aria-label="${esc(label)}" ${extra}>${icon(ico)}<span>${esc(label)}</span></button>`;
 export const number=v=>new Intl.NumberFormat('id-ID').format(v||0);
 export const options=(items,valueKey='id',labelKey='name',selected='',placeholder='Pilih…')=>`<option value="">${esc(placeholder)}</option>`+items.map(i=>`<option value="${esc(i[valueKey])}" ${String(i[valueKey])===String(selected)?'selected':''}>${esc(i[labelKey])}</option>`).join('');
 export function field(label,name,type='text',value='',extra='') {
@@ -50,18 +51,19 @@ export function field(label,name,type='text',value='',extra='') {
 export const choices=(items,selected='')=>options(items.map(v=>({id:v,name:labels[v]||v})),'id','name',selected);
 export function toast(message,error=false){const region=document.querySelector('#toast-region');const el=document.createElement('div');el.className='toast'+(error?' toast-error':'');el.textContent=message;region.append(el);setTimeout(()=>el.remove(),6500);}
 export function dialog(title,content,{wide=false,subtitle='',drawer=false}={}) {
-  const el=document.createElement('dialog');el.className=`dialog ${wide?'wide':''} ${drawer?'drawer':''}`;
+  const el=document.createElement('dialog');el.setAttribute('aria-label',title);el.className=`dialog ${wide?'wide':''} ${drawer?'drawer':''}`;
   el.innerHTML=`<header class="dialog-header"><div><h2>${esc(title)}</h2>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div><button type="button" class="icon-button" data-close aria-label="Tutup">${icon('close')}</button></header><div class="dialog-body">${content}</div>`;
   document.body.append(el);el.addEventListener('click',e=>{if(e.target.closest('[data-close]'))el.close();});el.addEventListener('close',()=>el.remove(),{once:true});el.showModal();return el;
 }
 export function formDialog(title,fields,onSubmit,{wide=false,note='',submit='Simpan',initial={}}={}) {
   const el=dialog(title,`<form class="form"><div class="form-grid">${fields}</div>${note?`<p class="form-note">${esc(note)}</p>`:''}<p class="form-error" role="alert"></p><div class="form-actions"><button class="button outlined" type="button" data-close>Batal</button><button class="button primary" type="submit">${esc(submit)}</button></div></form>`,{wide});
   el.querySelector('form').addEventListener('submit',async e=>{
-    e.preventDefault();const form=e.target,submitButton=form.querySelector('[type=submit]'),error=form.querySelector('.form-error');error.textContent='';submitButton.disabled=true;submitButton.textContent='Menyimpan…';
+    e.preventDefault();const form=e.target;if(form.dataset.busy)return;form.dataset.busy='true';const submitButton=form.querySelector('[type=submit]'),error=form.querySelector('.form-error');error.textContent='';form.querySelectorAll('[type=submit]').forEach(button=>button.disabled=true);submitButton.disabled=true;submitButton.textContent='Menyimpan…';
     const fd=new FormData(form),data={...initial,...Object.fromEntries(fd)};
     for(const input of form.querySelectorAll('input[type=checkbox]'))if(!input.name.endsWith('[]'))data[input.name]=input.checked;
     for(const select of form.querySelectorAll('select[multiple]'))data[select.name]=[...select.selectedOptions].map(o=>o.value);
     for(const input of form.querySelectorAll('[name$="[]"]'))data[input.name.slice(0,-2)]=fd.getAll(input.name);
-    try{await onSubmit(data,form);el.close();}catch(err){error.textContent=err.message;submitButton.disabled=false;submitButton.textContent=submit;}
+    const controls=[...form.querySelectorAll('input,select,textarea,button')].map(control=>({control,disabled:control.disabled}));controls.forEach(({control})=>control.disabled=true);
+    try{await onSubmit(data,form);el.close();}catch(err){error.textContent=err.message;form.dataset.busy='';controls.forEach(({control,disabled})=>control.disabled=disabled);form.querySelectorAll('[type=submit]').forEach(button=>button.disabled=false);submitButton.textContent=submit;}
   });return el;
 }

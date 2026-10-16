@@ -130,13 +130,15 @@ CREATE TABLE IF NOT EXISTS roster_gaps (
  id TEXT PRIMARY KEY, roster_revision_id TEXT NOT NULL REFERENCES roster_revisions(id), post_id TEXT NOT NULL REFERENCES security_posts(id), shift_id TEXT NOT NULL REFERENCES shift_definitions(id), service_date TEXT NOT NULL, required_count INTEGER NOT NULL, assigned_count INTEGER NOT NULL, acknowledged_by TEXT REFERENCES users(id), acknowledged_at TEXT, acknowledgment_reason TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(roster_revision_id,post_id,shift_id,service_date), CHECK(required_count>assigned_count AND assigned_count>=0));
 CREATE TABLE IF NOT EXISTS logbook_entries (
- id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id), post_id TEXT NOT NULL REFERENCES security_posts(id), occurred_at TEXT NOT NULL, activity_type TEXT NOT NULL CHECK(activity_type IN('JAGA','PATROLI','LAINNYA')), activity_notes TEXT NOT NULL, findings TEXT, roster_assignment_id TEXT REFERENCES roster_assignments(id),
+ id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id), post_id TEXT REFERENCES security_posts(id), occurred_at TEXT NOT NULL, activity_type TEXT NOT NULL CHECK(activity_type IN('JAGA','PATROLI','LAINNYA')), activity_notes TEXT NOT NULL, findings TEXT, roster_assignment_id TEXT REFERENCES roster_assignments(id),
+ reporting_org_unit_id TEXT REFERENCES org_units(id), latitude REAL, longitude REAL, location_accuracy REAL, location_captured_at TEXT, idempotency_key TEXT UNIQUE, request_fingerprint TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS logbook_files (
- id TEXT PRIMARY KEY, logbook_entry_id TEXT NOT NULL REFERENCES logbook_entries(id), file_id TEXT NOT NULL REFERENCES files(id), caption TEXT,
+ id TEXT PRIMARY KEY, logbook_entry_id TEXT NOT NULL REFERENCES logbook_entries(id), file_id TEXT NOT NULL REFERENCES files(id), caption TEXT, captured_at TEXT, capture_source TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(logbook_entry_id,file_id));
 CREATE TABLE IF NOT EXISTS incidents (
- id TEXT PRIMARY KEY, incident_no TEXT NOT NULL UNIQUE, idempotency_key TEXT NOT NULL UNIQUE, post_id TEXT NOT NULL REFERENCES security_posts(id), reporter_employee_id TEXT NOT NULL REFERENCES employees(id), occurred_at TEXT NOT NULL, incident_type TEXT NOT NULL, chronology TEXT NOT NULL, initial_action TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'RECORDED' CHECK(status IN('RECORDED','IN_PROGRESS','RESOLVED')), source_logbook_entry_id TEXT REFERENCES logbook_entries(id), responsible_employee_id TEXT REFERENCES employees(id), resolved_at TEXT, resolution_notes TEXT,
+ id TEXT PRIMARY KEY, incident_no TEXT NOT NULL UNIQUE, idempotency_key TEXT NOT NULL UNIQUE, post_id TEXT REFERENCES security_posts(id), reporter_employee_id TEXT NOT NULL REFERENCES employees(id), occurred_at TEXT NOT NULL, incident_type TEXT NOT NULL, chronology TEXT NOT NULL, initial_action TEXT, status TEXT NOT NULL DEFAULT 'RECORDED' CHECK(status IN('RECORDED','IN_PROGRESS','RESOLVED')), source_logbook_entry_id TEXT REFERENCES logbook_entries(id), responsible_employee_id TEXT REFERENCES employees(id), resolved_at TEXT, resolution_notes TEXT,
+ reporting_org_unit_id TEXT REFERENCES org_units(id), latitude REAL, longitude REAL, location_accuracy REAL, location_captured_at TEXT, request_fingerprint TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS incident_updates (
  id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), actor_user_id TEXT NOT NULL REFERENCES users(id), event_type TEXT NOT NULL, notes TEXT NOT NULL, from_status TEXT, to_status TEXT, new_responsible_employee_id TEXT REFERENCES employees(id),
@@ -144,7 +146,7 @@ CREATE TABLE IF NOT EXISTS incident_updates (
 CREATE TRIGGER IF NOT EXISTS incident_history_no_update BEFORE UPDATE ON incident_updates BEGIN SELECT RAISE(ABORT,'History append-only'); END;
 CREATE TRIGGER IF NOT EXISTS incident_history_no_delete BEFORE DELETE ON incident_updates BEGIN SELECT RAISE(ABORT,'History append-only'); END;
 CREATE TABLE IF NOT EXISTS incident_files (
- id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), file_id TEXT NOT NULL REFERENCES files(id), caption TEXT,
+ id TEXT PRIMARY KEY, incident_id TEXT NOT NULL REFERENCES incidents(id), file_id TEXT NOT NULL REFERENCES files(id), caption TEXT, captured_at TEXT, capture_source TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(incident_id,file_id));
 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT OR IGNORE INTO app_settings VALUES ('allow_gap_publication','false');
@@ -152,3 +154,15 @@ INSERT OR IGNORE INTO app_settings VALUES ('demo_mode','false');
 CREATE TABLE IF NOT EXISTS import_candidates (
  id TEXT PRIMARY KEY, full_name TEXT NOT NULL, position_name TEXT NOT NULL, org_path TEXT NOT NULL, source_cell TEXT NOT NULL, source_name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', employee_id TEXT REFERENCES employees(id), notes TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, UNIQUE(source_name,source_cell,full_name));
+
+CREATE TABLE IF NOT EXISTS announcements (
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL CHECK(category IN('UMUM','SDM','OPERASIONAL','KEAMANAN')), priority TEXT NOT NULL DEFAULT 'NORMAL' CHECK(priority IN('NORMAL','IMPORTANT')),
+ status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN('DRAFT','PUBLISHED','ARCHIVED')), is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN(0,1)), content_json TEXT NOT NULL, content_version INTEGER NOT NULL DEFAULT 1,
+ starts_at TEXT, ends_at TEXT, published_at TEXT, published_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id), CHECK(ends_at IS NULL OR starts_at IS NULL OR ends_at>starts_at));
+CREATE TABLE IF NOT EXISTS announcement_files (
+ id TEXT PRIMARY KEY, announcement_id TEXT NOT NULL REFERENCES announcements(id), file_id TEXT NOT NULL REFERENCES files(id), usage_kind TEXT NOT NULL CHECK(usage_kind IN('IMAGE','ATTACHMENT')), caption TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(announcement_id,file_id));
+CREATE TABLE IF NOT EXISTS announcement_reads (
+ announcement_id TEXT NOT NULL REFERENCES announcements(id), user_id TEXT NOT NULL REFERENCES users(id), content_version INTEGER NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY(announcement_id,user_id));
+CREATE INDEX IF NOT EXISTS announcement_publication ON announcements(status,starts_at,ends_at);

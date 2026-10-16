@@ -136,3 +136,13 @@ Jalankan `docker compose up -d`, lalu verifikasi login, jumlah data, satu unduha
 Server lokal, pengujian otomatis, dan tampilan browser diperiksa pada Windows dengan Node.js 24.19.0. Docker Engine tidak tersedia pada komputer tersebut. `docker compose config`, build image Linux, ACME/sertifikat domain, pengujian beban target PRD, kebijakan retensi, serta UAT pemilik fungsi harus diverifikasi pada server tujuan sebelum rilis operasional. Pemindaian malware eksternal belum diintegrasikan; berkas tetap divalidasi tipe, signature, ukuran, dan akses unduh.
 
 Implementasi ini tidak memasukkan payroll, cuti/izin, KPI, GPS, QR patroli, atau kalender kegiatan, sesuai batas MVP pada PRD.
+
+## Pembaruan modul MVP 16 Oktober 2026
+
+Lakukan backup dengan versi aplikasi yang sedang berjalan sebelum mengganti kode/image. Hentikan instance lama, perbarui kode/image, lalu jalankan kembali dengan volume data yang sama. Migrasi skema versi 3 berlangsung otomatis saat startup, mempertahankan laporan dan riwayat lama, serta menambahkan tabel pengumuman.
+
+Kamera dan geolokasi harus diakses melalui URL HTTPS saat digunakan dari HP. Server mengirim `Permissions-Policy: camera=(self), microphone=(), geolocation=(self)`; pastikan reverse proxy tidak menimpanya dengan larangan kamera/geolokasi. Foto dan gambar pengumuman tetap dilayani melalui endpoint berkas privat yang memerlukan sesi login.
+
+Sesudah update, muat ulang browser agar formulir versi baru digunakan. Uji login Admin/SDM untuk menerbitkan pengumuman dan akun security berprofil pegawai aktif untuk pelaporan. Pengiriman wajib menunggu lokasi dan foto kamera. Akun yang diberi scope hanya pos tetap terbatas pada laporan dengan pos terkait; gunakan scope unit yang sesuai bila koordinator perlu meninjau laporan baru dengan koordinat perangkat.
+
+Panduan langkah pengguna dan cakupan pengujian perangkat tersedia pada [MVP-PENGGUNAAN.md](MVP-PENGGUNAAN.md).

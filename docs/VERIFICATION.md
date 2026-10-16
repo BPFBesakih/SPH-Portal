@@ -46,3 +46,13 @@ Ekstraksi menghasilkan 157 calon nama, 83 label posisi, dan 7 isian nama belum d
 Pemilik fungsi perlu memverifikasi pemetaan pegawai/organisasi dan memilih keputusan DEC-01–DEC-12 yang relevan, termasuk jam shift, aturan kerja, kelayakan, kebijakan gap, penerbit jadwal, dan retensi. Cakupan cuti/izin, KPI, payroll, GPS, QR, serta kalender kegiatan tetap di luar MVP.
 
 Docker Engine tidak tersedia di komputer pengerjaan. Pemeriksaan konfigurasi/build image, DNS, sertifikat HTTPS, backup ke media organisasi, pengujian pemulihan dalam volume server, target 10.000 pegawai/100 pengguna bersamaan, dan UAT operasional perlu dijalankan pada staging/server tujuan. Pengujian otomatis ini tidak dianggap sebagai pengesahan kebijakan kerja atau pengganti penerimaan oleh pengguna operasional.
+
+## Tambahan MVP — 16 Oktober 2026
+
+Perintah untuk seluruh pengujian: `node --test tests/*.test.mjs` (atau `npm.cmd test`). Total 51 pengujian: 32 pengujian aplikasi utama dan 19 pengujian tambahan pada `tests/mvp.test.mjs`.
+
+Cakupan tambahan: Admin/SDM sebagai penerbit, pembaca lintas unit, draf dan gambar terjadwal privat, teks/gambar berurutan, lampiran, status baca per akun/versi isi, arsip/masa tayang/sematan, pencabutan role, lokasi dan foto wajib, identitas sesi, batas umur bukti, transaksi laporan+foto, retry idempoten, relasi kejadian/logbook, cakupan unit dan pos, header izin perangkat, sesi/CSRF pada endpoint baru, serta migrasi data lama.
+
+Pemeriksaan browser memakai database demo terpisah `data/mvp-qa-20261016` pada port 3001. Berhasil membuat teks → gambar → teks melalui editor, melihat pratinjau, menerbitkan, membuka detail, dan menandai sudah dibaca. Akun petugas dapat membaca pengumuman dengan status baca sendiri, tanpa tombol pengelolaan. Formulir Patroli dan Kejadian diperiksa pada viewport 390 × 844, dengan lebar konten mengikuti viewport, pelapor otomatis, placeholder, tombol kamera, tanpa pilihan berkas galeri, dan Kirim laporan dinonaktifkan sebelum bukti tersedia. Tampilan desktop diperiksa pada 1280 × 900. Label aksesibilitas tombol layar kecil dan pemilihan modul sesudah berganti akun diperbaiki.
+
+Batas verifikasi: pengambilan gambar melalui kamera fisik dan pembacaan posisi fisik HP belum diuji. Validasi bukti dan alur penyimpanan telah diuji melalui server/API dengan data uji. Lakukan uji perangkat Android/iOS di URL HTTPS tujuan sebelum dipakai petugas.
