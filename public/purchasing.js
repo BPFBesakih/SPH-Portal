@@ -96,7 +96,7 @@ function itemBlock(item={},index=0){
   <label class="field"><span>Perkiraan harga satuan (Rp)</span><input data-f="unit_price" type="number" min="0" step="1" inputmode="numeric" required value="${esc(item.unit_price??'')}"></label>
   <label class="field full"><span>Alasan kebutuhan</span><textarea data-f="reason" maxlength="1000" required>${esc(item.reason||'')}</textarea></label>
   ${keep?`<div class="field full"><span>Lampiran sebelumnya (hapus centang untuk melepas)</span>${keep}</div>`:''}
-  <label class="field"><span>Link pembelian (opsional)</span><input data-f="link" type="url" placeholder="https://"></label>
+  <label class="field"><span>Link pembelian (opsional)</span><input data-f="link" type="text" inputmode="url" autocomplete="off" maxlength="1000" placeholder="mis. www.shopee.co.id/nama-produk"></label>
   <label class="field"><span>Detail toko (opsional)</span><input data-f="store_text" maxlength="500" placeholder="Nama toko, alamat, kontak"></label>
   <label class="field full"><span>Foto atau berkas (PDF, PNG, JPEG; opsional)</span><input data-f="file" type="file" accept=".pdf,.png,.jpg,.jpeg"></label>
   </div><div class="pg-item-foot"><span class="muted text-small">Subtotal <strong data-subtotal>Rp0</strong></span><button type="button" class="button text" data-remove-item>${icon('trash')}<span>Hapus item</span></button></div></fieldset>`;
@@ -190,7 +190,7 @@ function orderCard(d,o){
 }
 
 // ---------- Tindakan ----------
-const attachmentFields=(prefix='evidence',label='Bukti harga')=>`<label class="field"><span>${esc(label)}: link</span><input name="${prefix}_link" type="url" placeholder="https://"></label><label class="field"><span>${esc(label)}: foto/berkas</span><input name="${prefix}_file" type="file" accept=".pdf,.png,.jpg,.jpeg"></label>`;
+const attachmentFields=(prefix='evidence',label='Bukti harga')=>`<label class="field"><span>${esc(label)}: link</span><input name="${prefix}_link" type="text" inputmode="url" autocomplete="off" maxlength="1000" placeholder="mis. www.tokopedia.com/nama-produk"></label><label class="field"><span>${esc(label)}: foto/berkas</span><input name="${prefix}_file" type="file" accept=".pdf,.png,.jpg,.jpeg"></label>`;
 async function readAttachments(form,prefix='evidence'){
   const list=[],link=form.querySelector(`[name=${prefix}_link]`)?.value.trim(),file=form.querySelector(`[name=${prefix}_file]`)?.files[0];
   if(link)list.push({form:'LINK',url:link});if(file)list.push({form:'FILE',file_id:(await uploadFile(file)).id});return list;

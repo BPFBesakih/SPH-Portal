@@ -261,6 +261,12 @@ export async function purchaseFileAllowed(db, user, link) {
   const view = await viewOf(db, await purchasingAccess(db, user), user, request, today());
   return link.owner_type === 'ITEM' ? view.any : view.full;
 }
+function linkUrl(value, label) {
+  let url = text(value, `${label}: link`, 1000);
+  if (!(/^[a-z][a-z0-9+.-]*:/i).test(url)) url = `https://${url.replace(/^\/+/, '')}`;
+  assert((/^https?:\/\/[^\s/?#]+\.[^\s/?#]+(?:[/?#][^\s]*)?$/i).test(url), `${label}: link tidak valid. Contoh: www.shopee.co.id/nama-produk atau https://tokopedia.com/...`);
+  return url;
+}
 function attachmentList(list, label, required) {
   const rows = list === undefined || list === null ? [] : list;
   assert(Array.isArray(rows) && rows.length <= 10, `${label}: lampiran paling banyak 10.`);
@@ -269,8 +275,7 @@ function attachmentList(list, label, required) {
     const form = a?.form;
     assert(['LINK', 'TEXT', 'FILE'].includes(form), `${label}: jenis lampiran tidak valid.`);
     if (form === 'LINK') {
-      const url = text(a.url, 'Link lampiran', 1000);
-      assert((/^https?:\/\/[^\s]+$/i).test(url), `${label}: link harus diawali http:// atau https://.`);
+      const url = linkUrl(a.url, label);
       return {
         form,
         url,

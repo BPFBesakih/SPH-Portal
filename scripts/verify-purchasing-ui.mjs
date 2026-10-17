@@ -65,7 +65,7 @@ try{
     await page.getByRole('button',{name:'Buat PR'}).first().click();
     const form=page.locator('dialog').last();
     await form.getByLabel('Tanggal barang dibutuhkan').fill(new Date(Date.now()+7*86400000).toISOString().slice(0,10));
-    await form.getByLabel(/^Deskripsi/).fill('Kertas A4 80 gsm');await form.getByLabel(/^Jumlah/).fill('2,5');await form.getByLabel('Satuan',{exact:true}).fill('rim');await form.getByLabel(/^Perkiraan harga/).fill('400000');await form.getByLabel('Alasan kebutuhan').fill('Stok kantor habis');await form.getByLabel(/^Link pembelian/).fill('https://toko.example/kertas');
+    await form.getByLabel(/^Deskripsi/).fill('Kertas A4 80 gsm');await form.getByLabel(/^Jumlah/).fill('2,5');await form.getByLabel('Satuan',{exact:true}).fill('rim');await form.getByLabel(/^Perkiraan harga/).fill('400000');await form.getByLabel('Alasan kebutuhan').fill('Stok kantor habis');await form.getByLabel(/^Link pembelian/).fill('www.toko.example/kertas');
     await form.getByRole('button',{name:'Tambah item'}).click();
     await form.getByLabel(/^Deskripsi/).nth(1).fill('Tinta printer hitam');await form.getByLabel(/^Jumlah/).nth(1).fill('1');await form.getByLabel('Satuan',{exact:true}).nth(1).fill('botol');await form.getByLabel(/^Perkiraan harga/).nth(1).fill('150000');await form.getByLabel('Alasan kebutuhan').nth(1).fill('Tinta habis');
     assert.equal(await form.locator('[data-total]').textContent(),'Rp1.150.000');

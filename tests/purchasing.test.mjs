@@ -268,3 +268,10 @@ test('pengaturan, kelengkapan PR, dan batas jumlah query detail', async t=>{
   await call(f,f.users.purchasing,`requests/${pr.id}`);f.db.prepare=prepare;
   assert(queries<=25,`detail PR memakai ${queries} query`);
 });
+
+test('link lampiran boleh tanpa https:// dan skema berbahaya ditolak', async t=>{
+  const f=fixture(t);await setup(f);
+  const pr=await submit(f,f.users.staff,[item({attachments:[{form:'LINK',url:'www.shopee.co.id/kertas-a4'},{form:'LINK',url:'https://toko.example/kertas'},{form:'LINK',url:'tokopedia.com/toko/produk?varian=1'}]})]);
+  assert.deepEqual(pr.items[0].attachments.map(a=>a.url).sort(),['https://www.shopee.co.id/kertas-a4','https://toko.example/kertas','https://tokopedia.com/toko/produk?varian=1'].sort());
+  for(const url of ['javascript:alert(1)','ftp://toko.example/x','bukan link','shopee','https://'])await assert.rejects(submit(f,f.users.staff,[item({attachments:[{form:'LINK',url}]})]),/link tidak valid/);
+});
