@@ -52,3 +52,9 @@
 @media(max-width:700px){.announcement-grid{grid-template-columns:1fr;gap:16px}.announcement-card-body{padding:20px}.announcement-toolbar>*{width:100%}.announcement-summary .card-header{flex-wrap:wrap;gap:8px}.announcement-actions>.button{flex:1 1 45%}.editor-block{padding:12px}.editor-block .icon-button,.evidence-grid .icon-button{min-width:48px;min-height:48px}.camera-section .button,.capture-location .button{min-height:48px}.evidence-grid{gap:12px}.evidence-grid img{height:130px}}
 
 .announcement-excerpt{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.employee-picker>label{font-size:11px;font-weight:500}
+.employee-picker-results{max-height:220px;overflow-y:auto;border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-small);background:var(--md-sys-color-surface-container-lowest)}
+.employee-picker-option{display:flex;flex-direction:column;gap:3px;min-height:44px;padding:10px 12px;font-size:12px;cursor:pointer;overflow-wrap:anywhere}
+.employee-picker-option:hover,.employee-picker-option[aria-selected=true]{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+.employee-picker-option small,.employee-picker-hint{font-size:11px;line-height:1.6;color:var(--md-sys-color-on-surface-variant)}
+@media(max-width:599px){.employee-picker-results{max-height:176px}}

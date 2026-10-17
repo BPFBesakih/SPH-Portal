@@ -19,10 +19,11 @@ const check=async(name,fn)=>{await fn();console.log(`PASS ${name}`);checks++;};
 const permissions=['admin.users.read','admin.users.manage','admin.users.reset','admin.roles.read','admin.roles.manage','admin.audit.read'];
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
-async function fixture({signedIn=true,required=false,roleEditor=false,mayManage=true,viewport={width:1440,height:960}}={}){
+async function fixture({signedIn=true,required=false,roleEditor=false,mayManage=true,employees=[],viewport={width:1440,height:960}}={}){
  const context=await browser.newContext({viewport,baseURL:origin});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
  let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
  const systemRole={id:'fixture-system-role',code:'SUPER_ADMIN',name:'Super Admin',is_system:1,is_active:1,row_version:1,permissions:[...permissions]};
+ const users=[{...me.user,grants:[]}];
  const catalog=[...permissions,'hr.employees.read'].map(code=>({code,resource:code.split('.').slice(0,2).join('.'),action:code.split('.').at(-1)}));
  page.on('pageerror',e=>errors.push(e.message));page.on('console',msg=>{if(msg.type()==='error'&&!msg.text().includes('Failed to load resource'))errors.push(msg.text());});
  await page.route(`${origin}/**`,async route=>{
@@ -34,7 +35,9 @@ async function fixture({signedIn=true,required=false,roleEditor=false,mayManage=
    else if(url.pathname==='/api/auth/logout'){assert.equal(req.headers()['x-csrf-token'],'fixture-csrf');authenticated=false;body={ok:true};}
    else if(!authenticated){status=401;body={error:'SESSION_ENDED',message:'Sesi berakhir. Silakan masuk kembali.'};}
    else if(url.pathname==='/api/portal/me')body={...me,permissions:currentPermissions,user:{...me.user,must_change_password:required}};
-   else if(url.pathname==='/api/users')body={items:[{...me.user,grants:[]}]};
+   else if(url.pathname==='/api/users'&&req.method()==='POST'){const sent=req.postDataJSON();const user={...me.user,id:`fixture-created-${users.length}`,username:sent.username,employee_id:sent.employee_id||null,must_change_password:true,grants:[]};users.push(user);body=user;}
+   else if(url.pathname==='/api/users')body={items:users};
+   else if(url.pathname==='/api/lookups')body={employees};
    else if(url.pathname==='/api/announcements')body={items:[],can_manage:true};
    else if(url.pathname==='/api/roles')body={items:roleEditor?[systemRole]:[],permissions:roleEditor?catalog:[]};
    else if(roleEditor&&url.pathname===`/api/roles/${systemRole.id}`&&req.method()==='PATCH'){const change=req.postDataJSON();assert(mayManage);systemRole.permissions=change.permissions;systemRole.row_version++;currentPermissions=[...change.permissions];body={...systemRole};}
@@ -73,6 +76,54 @@ try{
  await check('mandatory password change opens before any operational module request',async()=>{
   const f=await fixture({required:true});await f.page.getByRole('heading',{name:'Ganti password',exact:true}).waitFor();
   assert.equal(f.calls.filter(c=>c.path!=='/api/portal/me').length,0);
+ });
+ const employees=[...Array.from({length:12},(_,i)=>({id:`fixture-employee-${i}`,full_name:`Pegawai Contoh ${i}`,employee_no:`PG-${String(i).padStart(3,'0')}`})),{id:'fixture-adi-a',full_name:'Adi Pramana',employee_no:'PG-101'},{id:'fixture-adi-b',full_name:'Adi Pramana',employee_no:'PG-102'}];
+ async function accountForm(config={}){
+  const f=await fixture({employees,...config});await f.page.getByRole('button',{name:'Buat akun',exact:true}).click();
+  f.dialog=f.page.getByRole('dialog',{name:'Buat akun pengguna',exact:true});await f.dialog.waitFor();
+  f.search=f.dialog.getByRole('combobox',{name:'Tautkan pegawai (opsional)'});return f;
+ }
+ async function accountCredentials(f,username='pegawai.fixture'){
+  await f.dialog.getByLabel('Username',{exact:true}).fill(username);await f.dialog.getByLabel('Password sementara (minimal 12 karakter)',{exact:true}).fill('FixturePassword!2026');
+ }
+ await check('account employee search starts empty, matches partial names and limits long result lists',async()=>{
+  const f=await accountForm(),list=f.dialog.getByRole('listbox');assert.equal(await list.isVisible(),false);
+  await f.search.fill('p');assert.equal(await list.isVisible(),false);
+  await f.search.fill('  PEGAWAI   contoh  ');assert.equal(await f.dialog.getByRole('option').count(),8);assert.match(await f.dialog.getByRole('status').textContent(),/8 dari 12/);
+  await f.search.fill('tidak ditemukan');assert.equal(await list.isVisible(),false);assert.match(await f.dialog.getByRole('status').textContent(),/Pegawai tidak ditemukan/);
+ });
+ await check('account employee selection distinguishes duplicate names and submits only the selected ID',async()=>{
+  const f=await accountForm();await accountCredentials(f);await f.search.fill('pramana');assert.equal(await f.dialog.getByRole('option').count(),2);
+  await f.dialog.getByRole('option',{name:'Adi Pramana PG-101',exact:true}).click();assert.equal(await f.dialog.locator('[name=employee_id]').inputValue(),'fixture-adi-a');
+  await f.search.fill('pg-102');assert.equal(await f.dialog.locator('[name=employee_id]').inputValue(),'');
+  await f.dialog.getByRole('option',{name:'Adi Pramana PG-102',exact:true}).click();assert.equal(await f.search.inputValue(),'Adi Pramana');assert.equal(await f.dialog.getByRole('listbox').isVisible(),false);
+  await f.dialog.getByRole('button',{name:'Simpan',exact:true}).click();await f.page.getByRole('dialog',{name:'pegawai.fixture',exact:true}).waitFor();
+  assert.deepEqual(f.calls.find(c=>c.path==='/api/users'&&c.method==='POST').body,{username:'pegawai.fixture',password:'FixturePassword!2026',employee_id:'fixture-adi-b'});
+ });
+ await check('employee search supports keyboard selection, Tab and Escape without prematurely submitting or closing the form',async()=>{
+  const f=await accountForm();await f.search.fill('pramana');await f.search.press('ArrowDown');
+  assert.equal(await f.dialog.getByRole('option',{selected:true}).textContent(),'Adi PramanaPG-101');
+  assert.equal(await f.search.getAttribute('aria-activedescendant'),await f.dialog.getByRole('option',{selected:true}).getAttribute('id'));
+  await f.search.press('Escape');assert.equal(await f.dialog.isVisible(),true);assert.equal(await f.dialog.getByRole('listbox').isVisible(),false);
+  await f.search.press('ArrowUp');await f.search.press('Enter');assert.equal(await f.dialog.locator('[name=employee_id]').inputValue(),'fixture-adi-b');
+  assert.equal(f.calls.some(c=>c.path==='/api/users'&&c.method==='POST'),false);
+  await f.search.fill('pramana');await f.search.press('Tab');assert.equal(await f.dialog.getByRole('listbox').isVisible(),false);
+ });
+ await check('unselected employee text cannot silently save an account and clearing keeps employee linking optional',async()=>{
+  const f=await accountForm();await accountCredentials(f,'tanpa.pegawai');await f.search.fill('pramana');await f.dialog.getByRole('option',{name:'Adi Pramana PG-101',exact:true}).click();
+  await f.search.fill('tidak ditemukan');await f.dialog.getByRole('button',{name:'Simpan',exact:true}).click();
+  assert.equal(await f.search.evaluate(input=>input.validity.valid),false);assert.equal(await f.dialog.locator('[name=employee_id]').inputValue(),'');assert.equal(f.calls.some(c=>c.path==='/api/users'&&c.method==='POST'),false);
+  await f.search.fill('');await f.dialog.getByRole('button',{name:'Simpan',exact:true}).click();await f.page.getByRole('dialog',{name:'tanpa.pegawai',exact:true}).waitFor();
+  assert.equal(f.calls.find(c=>c.path==='/api/users'&&c.method==='POST').body.employee_id,'');
+ });
+ await check('the account employee search fits mobile screens and handles an empty employee directory',async()=>{
+  const f=await accountForm({viewport:{width:320,height:800}});await f.search.fill('pegawai');
+  const box=await f.dialog.boundingBox();assert(box.x>=0&&box.x+box.width<=320);assert.equal(await f.dialog.evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  assert.equal(await f.dialog.getByRole('listbox').evaluate(el=>el.clientHeight<=220&&el.scrollHeight>el.clientHeight),true);
+  await f.page.screenshot({path:resolve(output,'account-employee-search-mobile.png'),fullPage:true});
+  await f.dialog.getByRole('button',{name:'Batal',exact:true}).click();await f.page.setViewportSize({width:1440,height:960});await f.page.getByRole('button',{name:'Buat akun',exact:true}).click();await f.page.getByRole('combobox').fill('pramana');
+  await f.page.screenshot({path:resolve(output,'account-employee-search-desktop.png'),fullPage:true});
+  const empty=await accountForm({employees:[]});assert.match(await empty.dialog.getByRole('status').textContent(),/Belum ada pegawai/);assert.equal(await empty.dialog.getByRole('listbox').isVisible(),false);
  });
  await check('Super Admin permission checkboxes are editable and saving refreshes the current account menus',async()=>{
   const f=await fixture({roleEditor:true});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();
