@@ -40,6 +40,26 @@ Atasan, Sekban, dan Kaban tidak memerlukan izin khusus untuk menyetujui: tahap d
 5. Keuangan menambah tahun anggaran dan Pos RKA; Purchasing mengisi daftar vendor.
 6. Beri role sesuai tabel di atas. Pastikan setiap pemohon punya penempatan utama aktif dengan atasan di data SDM; halaman Beranda Pengadaan menampilkan data yang masih kurang.
 
+## Coba di komputer sendiri (port lokal)
+
+Database demo Pengadaan terpisah dari demo SDM/Keamanan (`data/demo`) dan dari data asli. Dari folder proyek di PowerShell:
+
+```powershell
+./scripts/start-demo-pengadaan.ps1            # http://127.0.0.1:3000
+./scripts/start-demo-pengadaan.ps1 -Port 3100 # bila port 3000 dipakai
+```
+
+Atau manual:
+
+```powershell
+node scripts/demo-pengadaan.mjs
+$env:DATA_DIR = 'data/demo-pengadaan'
+$env:APP_ORIGIN = 'http://127.0.0.1:3000'
+node server.mjs
+```
+
+Semua akun memakai password `BesakihDemo!2026`: `pemohon.demo` (staf pelayanan), `kabid.demo` (atasan pemohon), `keuangan.demo`, `sekban.demo`, `kaban.demo`, `purchasing.demo`, `spi.demo`, `plh.demo` (calon Plh), dan `admin.demo` (Super Admin + Pengelola Pengadaan). Demo berisi tiga PR: satu menunggu Kabid, satu sudah bernomor di Antrean Purchasing, dan satu jasa Rp6,5 juta menunggu Kaban. Gunakan jendela browser privat atau browser lain untuk masuk sebagai dua akun sekaligus. Hapus folder `data/demo-pengadaan` untuk mengulang dari awal.
+
 ## Uji lokal
 
 ```text
