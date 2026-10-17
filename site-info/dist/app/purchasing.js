@@ -8,7 +8,17 @@ export const purchasingTitles={purchasing:'Beranda Pengadaan','pr-mine':'Pengaju
 export const purchasingRoutes=Object.keys(purchasingTitles);
 export const purchasingNav=[['purchasing','Beranda','dashboard','purchasing:home'],['pr-mine','Pengajuan Saya','document','purchasing:submit'],['pr-approvals','Persetujuan','check','purchasing:home'],['pr-queue','Antrean Purchasing','folder','purchasing:procurement'],['pr-all','Semua PR','log','purchasing:read_all'],['vendors','Vendor','building','purchasing:vendors'],['budget','Pos RKA','audit','purchasing:budget'],['purchasing-reports','Laporan','filter','purchasing:reports'],['purchasing-settings','Pengaturan','settings','purchasing:settings']];
 export const purchasingAllowed=key=>key==='home'||Boolean(state.purchasing?.capabilities?.[key]);
-export async function loadPurchasingOverview(){state.purchasing=await api('purchasing/overview');return state.purchasing;}
+export async function loadPurchasingOverview(){state.purchasing=await api('purchasing/overview');state.purchasingAt=Date.now();return state.purchasing;}
+// Butir lonceng notifikasi dari ringkasan Pengadaan.
+export function purchasingNotices(){
+  const c=state.purchasing?.counts;if(!c)return [];
+  return [
+    c.approvals&&{route:'pr-approvals',count:c.approvals,title:'PR menunggu persetujuan Anda',note:'Tahap Diketahui, Verifikasi, Disetujui, atau PO/SPK',ico:'check'},
+    c.my_action&&{route:'pr-mine',count:c.my_action,title:'Pengajuan Anda perlu tindakan',note:'Dikembalikan atau menunggu konfirmasi harga',ico:'document'},
+    c.completeness&&{route:'pr-queue',count:c.completeness,title:'PR menunggu pemeriksaan Purchasing',note:'Beri nomor PR dan PIC pembelian',ico:'folder'}
+  ].filter(Boolean);
+}
+export function resetPurchasingState(){Object.assign(P,{items:[],detail:null,lookups:null,view:'',year:null,status:'',budget:null,vendors:null,settings:null,delegations:[],report:null});}
 
 const P={items:[],detail:null,lookups:null,view:'',year:null,status:'',budget:null,vendors:null,settings:null,delegations:[]};
 const rp=v=>v===null||v===undefined?'—':`Rp${number(v)}`;

@@ -112,3 +112,16 @@ a.stat-card:hover{border-color:var(--md-sys-color-primary)}
   @page{size:A4;margin:16mm}
 }
 @media(max-width:599px){.pg-sign-row{flex-direction:column}.pg-sheet{padding:14px}}
+/* Pemilih ruang kerja tiga modul dan panel notifikasi */
+.workspace-switch.three{display:grid;grid-template-columns:1fr 1fr;gap:4px;border-radius:var(--md-sys-shape-corner-extra-large)}
+.workspace-switch.three button:nth-child(3){grid-column:1/-1}
+.bell-panel{position:fixed;z-index:50;width:min(360px,calc(100vw - 24px));background:var(--md-sys-color-surface-container-lowest);color:var(--md-sys-color-on-surface);border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-large);box-shadow:0 12px 32px rgba(0,0,0,.18);padding:8px;display:grid;gap:2px}
+.bell-panel header{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 8px}
+.bell-item{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px;padding:12px;border-radius:var(--md-sys-shape-corner-medium);color:inherit;text-decoration:none}
+.bell-item:hover,.bell-item:focus-visible{background:var(--md-sys-color-surface-container-high);text-decoration:none}
+.bell-item>.icon{color:var(--md-sys-color-primary)}
+.bell-item strong,.bell-item small{display:block}
+.bell-item small{color:var(--md-sys-color-on-surface-variant);font-size:12px;margin-top:2px}
+.bell-empty{margin:4px 8px 10px;color:var(--md-sys-color-on-surface-variant);font-size:13px}
+.bell-footer{display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border-top:1px solid var(--md-sys-color-outline-variant);margin-top:4px;font-size:13px}
+.notification-dot{padding:0 4px;text-align:center}

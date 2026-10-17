@@ -24,7 +24,7 @@ const person=(key,name,position,unitKey,supervisor=null)=>{const pos=insert(db,'
 person('kaban','Kaban Fiktif','Kepala Badan','SEK');person('sekban','Sekban Fiktif','Sekretaris Badan','SEK',people.kaban);person('kabid','Kabid Fiktif','Kabid Operasional','OPS',people.sekban);person('staf','Staf Fiktif','Staf Operasional','OPS',people.kabid);person('beli','Purchasing Fiktif','Staf Purchasing','UMM',people.sekban);person('keu','Keuangan Fiktif','Verifikator','KEU',people.sekban);
 const account=(username,roles,employee)=>{const u=insert(db,'users',{username,password_hash:hash,status:'ACTIVE',employee_id:employee?.id||null,must_change_password:0,failed_login_count:0,password_changed_at:now()});for(const [code,scope] of roles)insert(db,'user_roles',{user_id:u.id,role_id:one(db,'SELECT id FROM roles WHERE code=?',code).id,scope_kind:scope});return u;};
 for(const key of ['staf','kabid','sekban','kaban'])account(key,[['PURCHASE_REQUESTER','SELF']],people[key]);
-account('beli',[['PURCHASING_STAFF','ALL']],people.beli);account('keu',[['FINANCE_VERIFIER','ALL']],people.keu);account('kelola',[['PURCHASE_ADMIN','ALL']]);
+account('beli',[['PURCHASING_STAFF','ALL']],people.beli);account('gabungan',[['SDM','ALL'],['COORDINATOR','ALL'],['PURCHASE_ADMIN','ALL']]);account('keu',[['FINANCE_VERIFIER','ALL']],people.keu);account('kelola',[['PURCHASE_ADMIN','ALL']]);
 const {createServer}=await import('node:http');
 const port=await new Promise(done=>{const probe=createServer();probe.listen(0,'127.0.0.1',()=>{const p=probe.address().port;probe.close(()=>done(p));});});
 const base=`http://127.0.0.1:${port}`,app=createApp({db,dataDir:dir,origin:base});
@@ -82,6 +82,28 @@ try{
     const form=page.locator('dialog').last();if(verify)await form.getByLabel('Pos RKA').selectOption({index:1});
     await submitDialog(page,'Simpan keputusan');await context.close();
   };
+  await check('lonceng memberi tahu atasan tentang PR yang menunggu, termasuk setelah ganti akun di tab yang sama',async()=>{
+    const {page,context}=await login('staf');
+    await page.locator('[data-action=profile]').click();await page.getByRole('button',{name:'Keluar'}).click();
+    const relogin=page.locator('#login-form');await relogin.getByLabel('Username').fill('kabid');await relogin.getByLabel('Password',{exact:true}).fill(password);await page.getByRole('button',{name:'Masuk ke portal'}).click();
+    const panel=page.locator('.bell-panel');await panel.getByText('PR menunggu persetujuan Anda').waitFor();
+    assert.equal(await page.locator('[data-bell-count]').textContent(),'1');
+    assert.equal(await page.locator('.nav-link[href="#pr-approvals"] .badge-count').textContent(),'1');
+    await page.screenshot({path:resolve(output,'06-lonceng-atasan.png')});
+    await panel.locator('a.bell-item').click();await page.locator('[data-action=pg-open]').first().waitFor();
+    assert.equal(await panel.count(),0);await page.reload();await page.locator('[data-action=pg-open]').first().waitFor();
+    assert.equal(await page.locator('.bell-panel').count(),0,'pengingat otomatis hanya sekali per sesi');
+    await page.locator('[data-action=notifications]').click();await page.locator('.bell-panel').getByText('PR menunggu persetujuan Anda').waitFor();
+    await page.keyboard.press('Escape');assert.equal(await page.locator('.bell-panel').count(),0);
+    await context.close();
+  });
+  await check('pemilih ruang kerja tiga modul tetap di dalam batas sidebar',async()=>{
+    const {page,context}=await login('gabungan');const box=await page.locator('.workspace-switch').boundingBox();
+    const buttons=page.locator('.workspace-switch button');assert.equal(await buttons.count(),3);
+    for(let i=0;i<3;i++){const b=await buttons.nth(i).boundingBox();assert(b.x>=box.x-0.5&&b.x+b.width<=box.x+box.width+0.5&&b.y+b.height<=box.y+box.height+0.5,`tombol ruang kerja ${i+1} keluar batas`);}
+    await page.locator('.sidebar').screenshot({path:resolve(output,'07-tiga-ruang-kerja.png')});
+    await context.close();
+  });
   await check('atasan, Keuangan, dan Sekban menyetujui dari antrean Persetujuan',async()=>{
     await approve('kabid');await approve('keu',{verify:true});await approve('sekban');
     const row=one(db,'SELECT status,final_approver_kind FROM purchase_requests');assert.deepEqual({...row},{status:'pending_completeness_check',final_approver_kind:'SEKBAN'});
