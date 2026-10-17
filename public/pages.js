@@ -1,7 +1,8 @@
 import {loadAnnouncementsPage} from './announcements.js';
+import {purchasingTitles,purchasingRoutes,loadPurchasingPage} from './purchasing.js';
 import {state,api,permitted} from './api.js';
 import {esc,icon,avatar,badge,formatDate,formatTime,empty,button,number,options,localToday,labels} from './ui.js';
-export const pageTitles={announcements:'Informasi Internal',dashboard:'Dashboard SDM',employees:'Data Pegawai',organization:'Struktur Organisasi',imports:'Tinjau Impor Pegawai',documents:'Regulasi & SOP',training:'Kegiatan & Pelatihan',coaching:'Coaching',security:'Dashboard Keamanan',roster:'Jadwal & Penugasan','roster-settings':'Pengaturan Jadwal',logbook:'Logbook & Patroli',incidents:'Laporan Kejadian',sop:'SOP Keamanan',accounts:'Akun Pengguna',roles:'Role & Izin',audit:'Riwayat Aktivitas'};
+export const pageTitles={announcements:'Informasi Internal',dashboard:'Dashboard SDM',employees:'Data Pegawai',organization:'Struktur Organisasi',imports:'Tinjau Impor Pegawai',documents:'Regulasi & SOP',training:'Kegiatan & Pelatihan',coaching:'Coaching',security:'Dashboard Keamanan',roster:'Jadwal & Penugasan','roster-settings':'Pengaturan Jadwal',logbook:'Logbook & Patroli',incidents:'Laporan Kejadian',sop:'SOP Keamanan',accounts:'Akun Pengguna',roles:'Role & Izin',audit:'Riwayat Aktivitas',...purchasingTitles};
 export const configNames={posts:'Wilayah & pos',groups:'Kelompok',members:'Anggota kelompok',shifts:'Shift',eligibility:'Kelayakan pos',rules:'Aturan kerja',patterns:'Pola rotasi',bindings:'Anchor & fase',requirements:'Kebutuhan rutin',overrides:'Penyesuaian sementara',unavailability:'Ketidaktersediaan'};
 const rowAction=(type,id)=>`<button class="icon-button" data-action="detail" data-type="${type}" data-id="${esc(id)}" aria-label="Lihat detail">${icon('chevron')}</button>`;
 export const heading=(title,description,actions='')=>`<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(description)}</p></div><div class="actions">${actions}</div></div>`;
@@ -15,6 +16,7 @@ const dateSquare=d=>`<div class="date-square"><span>${esc(formatDate(d,{month:'s
 const person=(name,sub,i=0)=>`<div class="table-person">${avatar(name,i)}<div><strong>${esc(name)}</strong><small>${esc(sub)}</small></div></div>`;
 export async function loadPage(route) {
   if(route==='announcements')return loadAnnouncementsPage();
+  if(purchasingRoutes.includes(route))return loadPurchasingPage(route);
   state.route=route;state.page=1;state.filter='';state.unit='';state.category='';
   if(['dashboard','security'].includes(route)){state.date=state.date||localToday();state.dashboard=await api(`dashboard?module=${route==='security'?'security':'hr'}&as_of=${state.date}`);return dashboardPage(route==='security');}
   if(route==='employees'){const [rows,lookups]=await Promise.all([api('employees'),api('lookups?purpose=employees')]);state.items=rows.items;state.lookups=lookups;return employeesPage();}

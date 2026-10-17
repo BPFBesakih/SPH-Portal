@@ -70,7 +70,7 @@ export default {
    if(b.action==='health'){
     const ready=await transaction(client,identity,storage,async db=>{
      const r=await one(db,"SELECT count(*)::integer total,count(*) FILTER(WHERE rowsecurity)::integer protected FROM pg_catalog.pg_tables WHERE schemaname='portal'");
-     return r.total===48&&r.protected===48;
+     return r.total===65&&r.protected===65;
     },false);
     assert(ready,'Modul portal belum siap.',503);return Response.json({ok:true,healthy:true,revision:'20261016.1'},{headers:{'Cache-Control':'no-store'}});
    }

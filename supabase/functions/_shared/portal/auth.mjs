@@ -16,8 +16,22 @@ export const resourceActions = {
   'security.incidents': ['read', 'create', 'update', 'reopen', 'download'],
   'admin.users': ['read', 'manage', 'reset'],
   'admin.roles': ['read', 'manage'],
-  'admin.audit': ['read']
+  'admin.audit': ['read'],
+  'purchasing.requests': ['create', 'read', 'verify'],
+  'purchasing.procurement': ['manage'],
+  'purchasing.vendors': ['read', 'manage', 'sensitive'],
+  'purchasing.budget': ['read', 'manage'],
+  'purchasing.reports': ['read', 'export'],
+  'purchasing.settings': ['manage']
 };
+export const purchasingRoleCodes = {
+  PURCHASE_REQUESTER: ['Pemohon Pengadaan', ['purchasing.requests.create', 'purchasing.requests.read']],
+  PURCHASING_STAFF: ['Staf Purchasing', ['purchasing.requests.read', 'purchasing.procurement.manage', 'purchasing.vendors.read', 'purchasing.vendors.manage', 'purchasing.vendors.sensitive', 'purchasing.budget.read', 'purchasing.reports.read']],
+  FINANCE_VERIFIER: ['Verifikator Keuangan', ['purchasing.requests.read', 'purchasing.requests.verify', 'purchasing.budget.read', 'purchasing.budget.manage', 'purchasing.vendors.read', 'purchasing.vendors.sensitive', 'purchasing.reports.read']],
+  PURCHASE_AUDITOR: ['Pemeriksa SPI', ['purchasing.requests.read', 'purchasing.vendors.read', 'purchasing.budget.read', 'purchasing.reports.read', 'purchasing.reports.export', 'admin.audit.read']],
+  PURCHASE_ADMIN: ['Pengelola Pengadaan', ['purchasing.settings.manage', 'purchasing.requests.read', 'purchasing.vendors.read', 'purchasing.vendors.manage', 'purchasing.vendors.sensitive', 'purchasing.budget.read', 'purchasing.budget.manage']]
+};
+const purchasingRoles = Object.entries(purchasingRoleCodes).map(([code, [name, codes]]) => [code, name, c => codes.includes(c)]);
 export async function grants(db, user) {
   return await all(db, `SELECT ur.id,ur.scope_kind,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=?`, user.id);
 }

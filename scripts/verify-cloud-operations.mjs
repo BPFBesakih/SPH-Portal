@@ -4,7 +4,7 @@ import {pathToFileURL, fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {all,one,insert,update,run,now,today,tx} from '../supabase/functions/_shared/portal/db.mjs';
-import {can,assertAdminRemains} from '../supabase/functions/_shared/portal/auth.mjs';
+import {can,assertAdminRemains,resourceActions} from '../supabase/functions/_shared/portal/auth.mjs';
 import {routeOperation} from '../supabase/functions/_shared/portal/router.mjs';
 import {buildSnapshot,generateAssignments,validateAssignments} from '../supabase/functions/_shared/portal/roster.mjs';
 
@@ -43,7 +43,7 @@ try{
  await pg.exec('SET search_path=portal,pg_catalog');
  await check('operational schema has RLS and no direct client or service-role grants',async()=>{
   const tables=await pg.query("SELECT tablename,rowsecurity FROM pg_tables WHERE schemaname='portal'");
-  assert.equal(tables.rows.length,48);assert(tables.rows.every(t=>t.rowsecurity));
+  assert.equal(tables.rows.length,65);assert(tables.rows.every(t=>t.rowsecurity));
   for(const role of ['anon','authenticated','service_role']){
    assert.equal((await pg.query('SELECT has_schema_privilege($1,\'portal\',\'USAGE\') ok',[role])).rows[0].ok,false);
    assert.equal((await pg.query("SELECT count(*)::int n FROM pg_tables WHERE schemaname='portal' AND has_table_privilege($1,schemaname||'.'||tablename,'SELECT,INSERT,UPDATE,DELETE')",[role])).rows[0].n,0);
@@ -211,6 +211,60 @@ try{
   assert.equal((await call(sdm,'dashboard')).total,2);
   assert((await call(sdm,'exports/employees')).csv.includes('Pegawai Fiktif'));
   const me=await call(officer,'portal/me');assert.equal(me.user.username,'officer');assert.equal(me.demo,false);assert(!JSON.stringify(me).includes('access_token'));
+ });
+ await check('purchasing PR, approvals, PO, receipt and budget usage run on PostgreSQL within the query bound',async()=>{
+  const pdf=Buffer.from('%PDF-1.4 fiktif').toString('base64');
+  const units={};for(const code of ['SEKR','OPSR','UMMR','KEUR'])units[code]=await call(sdm,'units','POST',{code,name:`Unit ${code}`});
+  const people={};
+  const person=async(key,unitCode,supervisor=null)=>{
+   const pos=await call(sdm,'positions','POST',{code:`PP_${key.toUpperCase()}`,name:`Jabatan ${key}`,org_unit_id:units[unitCode].id});
+   people[key]=await call(sdm,'employees','POST',{employee_no:`PJ-${key.toUpperCase()}`,full_name:`Pegawai ${key}`,employment_status:'Tetap',joined_on:'2020-01-01',position_id:pos.id,valid_from:'2020-01-01',supervisor_employee_id:supervisor?.id||null});
+   people[key].position_id=pos.id;return people[key];
+  };
+  await person('kaban','SEKR');await person('sekban','SEKR',people.kaban);await person('kabid','OPSR',people.sekban);await person('staf','OPSR',people.kabid);await person('beli','UMMR',people.sekban);await person('keu','KEUR',people.sekban);
+  const u={};
+  for(const key of ['kaban','sekban','kabid','staf'])u[key]=await account(`pj_${key}`,'PURCHASE_REQUESTER',people[key].id,'SELF');
+  u.beli=await account('pj_beli','PURCHASING_STAFF',people.beli.id);u.keu=await account('pj_keu','FINANCE_VERIFIER',people.keu.id);u.spi=await account('pj_spi','PURCHASE_AUDITOR');u.kelola=await account('pj_kelola','PURCHASE_ADMIN');
+  assert.equal((await pg.query("SELECT count(*)::int n FROM public.app_role_permissions rp JOIN public.app_roles r ON r.id=rp.role_id WHERE r.code='PURCHASE_ADMIN'")).rows[0].n,7);
+  const catalog=Object.entries(resourceActions).filter(([r])=>r.startsWith('purchasing.')).flatMap(([r,actions])=>actions.map(a=>`${r}.${a}`)).sort();
+  assert.deepEqual((await pg.query("SELECT code FROM public.app_permissions WHERE module_code='purchasing' ORDER BY code")).rows.map(r=>r.code),catalog);
+  await call(u.kelola,'purchasing/settings','PATCH',{settings:{officials:{sekban_position_id:people.sekban.position_id,kaban_position_id:people.kaban.position_id},unit_codes:{[units.OPSR.id]:'OPS'}}});
+  const year=Number(today().slice(0,4)),needed=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+  const by=await call(u.keu,'purchasing/budget/years','POST',{year});
+  const line=await call(u.keu,'purchasing/budget/lines','POST',{budget_year_id:by.id,code:'BHP',name:'Barang habis pakai',ceiling:20000000});
+  const v1=await call(u.beli,'purchasing/vendors','POST',{name:'Toko Fiktif Satu',leader_nik:'5108012345678901',account_no:'0011223344'}),v2=await call(u.beli,'purchasing/vendors','POST',{name:'Toko Fiktif Dua'});
+  const evidence=(await call(u.staf,'uploads','POST',{name:'penawaran.pdf',mime_type:'application/pdf',data:pdf})).id;
+  let pr=await call(u.staf,'purchasing/requests','POST',{needed_on:needed,items:[{description:'Kertas',item_kind:'GOODS',quantity:'2,5',unit:'rim',unit_price:600000,reason:'Stok habis',attachments:[{form:'FILE',file_id:evidence}]}]});
+  assert.equal(pr.estimated_total,1500000);assert.equal(pr.request_code,`PJ-${year}-0001`);
+  const step=async(user,extra={})=>{const view=await call(user,`purchasing/requests/${pr.id}`);assert(view.actions.step,`step for ${user.username}`);return call(user,`purchasing/requests/${pr.id}/decide`,'POST',{step_id:view.actions.step.id,row_version:view.row_version,action:'APPROVE',...extra});};
+  await assert.rejects(call(u.keu,`purchasing/requests/${pr.id}/decide`,'POST',{step_id:pr.steps[0].id,row_version:pr.row_version,action:'APPROVE'}),e=>e.status===403);
+  pr=await step(u.kabid);pr=await step(u.keu,{budget_line_id:line.id});assert.equal(pr.final_approver_kind,'SEKBAN');pr=await step(u.sekban);
+  assert.equal(pr.status,'pending_completeness_check');assert.equal(pr.budget_line.commitment,1500000);
+  pr=await call(u.beli,`purchasing/requests/${pr.id}/completeness`,'POST',{action:'ACCEPT',row_version:pr.row_version});assert.match(pr.pr_number,/^001\/PR\/OPS\//);
+  const [paper]=pr.items;
+  for(const [vendor,price] of [[v1,580000],[v2,590000]])pr=await call(u.beli,`purchasing/requests/${pr.id}/quotes`,'POST',{item_id:paper.id,vendor_id:vendor.id,unit_price:price,evidence:[{form:'LINK',url:'https://toko.example/harga'}]});
+  pr=await call(u.beli,`purchasing/requests/${pr.id}/quotes/${pr.items[0].quotes[0].id}/select`,'POST',{});
+  pr=await call(u.beli,`purchasing/requests/${pr.id}/orders`,'POST',{path:'B'});
+  let order=pr.orders[0];assert.equal(order.total,1450000);
+  pr=await call(u.beli,`purchasing/orders/${order.id}/submit`,'POST',{row_version:order.row_version});
+  const sekban=await call(u.sekban,`purchasing/requests/${pr.id}`);
+  pr=await call(u.sekban,`purchasing/orders/${order.id}/decide`,'POST',{step_id:sekban.actions.step.id,row_version:pr.orders[0].row_version,action:'APPROVE'});
+  order=pr.orders[0];assert.match(order.document.number,/^001\/PO\/PURCHASE\//);
+  const po=pr.documents.find(d=>d.doc_type==='PO');assert.equal((await call(u.spi,`purchasing/verify/${po.verification_code}`)).hash_valid,true);
+  assert.equal((await call(u.spi,`purchasing/documents/${po.id}`)).snapshot.vendor.account_no,'••••3344');
+  pr=await call(u.beli,`purchasing/orders/${order.id}/purchase`,'POST',{row_version:order.row_version,purchased_on:today()});
+  const invoice=(await call(u.beli,'uploads','POST',{name:'nota.pdf',mime_type:'application/pdf',data:pdf})).id;
+  pr=await call(u.beli,`purchasing/orders/${order.id}/receive`,'POST',{row_version:pr.orders[0].row_version,received_on:today(),condition_note:'Baik',invoice_total:1450000,invoice:[{form:'FILE',file_id:invoice}]});
+  assert.equal(pr.status,'completed');
+  const budget=await call(u.keu,'purchasing/budget','GET',{},`year=${year}`);assert.equal(budget.items[0].realization,1450000);assert.equal(budget.items[0].commitment,0);
+  assert.equal((await call(u.spi,'purchasing/reports','GET',{},`year=${year}`)).realized_value,1450000);
+  assert.match((await call(u.spi,'purchasing/export','GET',{},`year=${year}`)).csv,/001\/PR\/OPS/);
+  assert.equal((await call(u.staf,`files/${evidence}`)).binary,true);await assert.rejects(call(u.staf,`files/${invoice}`),e=>e.status===403);
+  assert.equal((await call(u.kabid,'portal/me')).purchasing_pending,0);
+  await assert.rejects(pg.query('UPDATE portal.purchase_approval_steps SET reason=$1 WHERE request_id=$2',['ubah',pr.id]),/sudah diputuskan/);
+  const original=db.query;let queries=0;db.query=(...args)=>{queries++;return original(...args);};
+  try{await call(u.beli,`purchasing/requests/${pr.id}`);}finally{db.query=original;}
+  assert(queries<=25,`purchasing detail used ${queries} queries`);
  });
  await check('employee deactivation revokes portal sessions through the original account authority',async()=>{
   const before=await one(db,'SELECT * FROM employees WHERE id=?',otherEmployee.id);

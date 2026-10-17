@@ -42,6 +42,8 @@ Antrean API pada frontend mencegah request paralel dari tab yang sama berebut le
 
 Untuk fitur Dokumentasi dan hapus kegiatan khusus itadmin, terapkan migrasi tambahan `20261016234704_training_documentation_and_deletion.sql` setelah migrasi 009, kemudian deploy ulang `portal-api` sebelum aset Pages. Migrasi menambah penanda penghapusan dan jenis lampiran tanpa menghapus data atau memberi akses baru. Baseline 009 yang sudah diterapkan tidak ditulis ulang oleh generator.
 
+Modul Pengadaan menambah migrasi `20261017210000_purchasing_module.sql` (17 tabel; total 65 tabel `portal`). Terapkan migrasi itu sebelum deploy ulang `portal-api`, karena health check fungsi baru menunggu 65 tabel ber-RLS. Rincian role, urutan penerapan, dan pengaturan awal ada di `docs/PENGADAAN.md`.
+
 Alat pengembangan terpisah berada di `scripts/cloud-tools/`. Pasang dependensi dari lockfile dengan pnpm, kemudian:
 
 ```text

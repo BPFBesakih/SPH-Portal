@@ -23,6 +23,7 @@ const resourcesBlock = authSource.match(/export const resourceActions = \{([\s\S
 assert.ok(resourcesBlock, 'Established resourceActions catalog must be available');
 const expectedCatalog = [...resourcesBlock.matchAll(/'([^']+)'\s*:\s*\[([^\]]*)\]/g)]
   .flatMap(([, resource, actions]) => [...actions.matchAll(/'([^']+)'/g)].map(([, action]) => `${resource}.${action}`))
+  .filter((code) => !code.startsWith('purchasing.')) // Modul Pengadaan ditambahkan migrasi 20261017210000.
   .sort();
 assert.equal(expectedCatalog.length, 43);
 let checks = 0;

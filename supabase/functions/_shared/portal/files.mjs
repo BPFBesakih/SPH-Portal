@@ -5,7 +5,8 @@ import {basename} from 'node:path';
 import {randomUUID, createHash} from 'node:crypto';
 import {all, one, get, insert, tx, audit, assert, text, now} from './db.mjs';
 import {has, can, employeeContext, postContext, reportContext, announcementsManager, documentAllowed, trainingAllowed} from './auth.mjs';
-const attachments = [['employee_files', 'employee_id', 'employee'], ['employee_contracts', 'employee_id', 'contract'], ['document_versions', 'document_id', 'document'], ['training_materials', 'training_event_id', 'material'], ['participant_certificates', 'training_participant_id', 'certificate'], ['logbook_files', 'logbook_entry_id', 'logbook'], ['incident_files', 'incident_id', 'incident'], ['announcement_files', 'announcement_id', 'announcement']];
+import {purchaseFileAllowed} from './purchasing.mjs';
+const attachments = [['employee_files', 'employee_id', 'employee'], ['employee_contracts', 'employee_id', 'contract'], ['document_versions', 'document_id', 'document'], ['training_materials', 'training_event_id', 'material'], ['participant_certificates', 'training_participant_id', 'certificate'], ['logbook_files', 'logbook_entry_id', 'logbook'], ['incident_files', 'incident_id', 'incident'], ['announcement_files', 'announcement_id', 'announcement'], ['purchase_attachments', 'request_id', 'purchase']];
 export async function claimFile(db, user, id) {
   const f = await get(db, 'files', id);
   assert(f.status === 'AVAILABLE' && f.uploaded_by === user.id, 'Berkas tidak tersedia untuk dilampirkan.', 403);
@@ -39,6 +40,7 @@ export async function fileAllowed(db, user, id) {
       const incident = await get(db, 'incidents', link.incident_id);
       if (await can(db, user, 'security.incidents.download', await reportContext(db, incident))) return true;
     }
+    if (type === 'purchase' && await purchaseFileAllowed(db, user, link)) return true;
     if (type === 'announcement') {
       const a = await get(db, 'announcements', link.announcement_id);
       if (await announcementsManager(db, user) || a.published_at && ['PUBLISHED', 'ARCHIVED'].includes(a.status) && (!a.starts_at || a.starts_at <= now())) return true;
@@ -47,7 +49,7 @@ export async function fileAllowed(db, user, id) {
   return false;
 }
 export async function upload(db, user, b, dataDir) {
-  assert(await announcementsManager(db, user) || await asyncSome(['hr.documents.manage', 'hr.employee_files.manage', 'hr.training.manage', 'hr.training.participants', 'security.logbook.create', 'security.incidents.create', 'security.incidents.update'], async p => await has(db, user, p)), 'Akses unggah ditolak.', 403);
+  assert(await announcementsManager(db, user) || await asyncSome(['hr.documents.manage', 'hr.employee_files.manage', 'hr.training.manage', 'hr.training.participants', 'security.logbook.create', 'security.incidents.create', 'security.incidents.update', 'purchasing.requests.create', 'purchasing.procurement.manage'], async p => await has(db, user, p)), 'Akses unggah ditolak.', 403);
   const name = basename(text(b.name, 'Nama berkas', 180)).replace(/[\r\n"]/g, '_');
   assert(typeof b.data === 'string' && (/^[A-Za-z0-9+/]*={0,2}$/).test(b.data), 'Isi berkas tidak valid.');
   const data = Buffer.from(b.data, 'base64'), max = 10 * 1024 * 1024;

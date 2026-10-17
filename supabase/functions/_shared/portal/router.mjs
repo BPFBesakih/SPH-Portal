@@ -9,11 +9,12 @@ import {adminRoutes} from './admin.mjs';
 import {announcementRoutes} from './announcements.mjs';
 import {dashboard,lookups} from './read-models.mjs';
 import {upload,download,attach} from './files.mjs';
+import {purchasingRoutes,purchasingPendingCount} from './purchasing.mjs';
 export async function routeOperation({db,user,path,method,body={},query=''}){
  assert(typeof path==='string'&&/^[a-z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)&&path.length<=512,'Alamat API tidak valid.',404);
  assert(['GET','POST','PATCH','DELETE'].includes(method),'Metode tidak diizinkan.',405);
  const p=path.split('/');const url=new URL(`https://portal.invalid/?${query}`);
- if(path==='portal/me'&&method==='GET')return {user:safeUser(user),name:user.employee_id?(await get(db,'employees',user.employee_id)).full_name:user.username,permissions:[...new Set((await grants(db,user)).map(g=>g.code))],announcements_manage:await announcementsManager(db,user),demo:false};
+ if(path==='portal/me'&&method==='GET')return {user:safeUser(user),name:user.employee_id?(await get(db,'employees',user.employee_id)).full_name:user.username,permissions:[...new Set((await grants(db,user)).map(g=>g.code))],announcements_manage:await announcementsManager(db,user),purchasing_pending:await purchasingPendingCount(db,user),demo:false};
  assert(!user.must_change_password,'Anda wajib mengganti password sementara terlebih dahulu.',428);
  if(path==='dashboard'&&method==='GET')return dashboard(db,user,url.searchParams.get('module')||'hr',url.searchParams.get('as_of')||undefined);
  if(path==='lookups'&&method==='GET')return lookups(db,user,url.searchParams.get('purpose')||'employees',url.searchParams.get('session_id'));
@@ -37,6 +38,6 @@ export async function routeOperation({db,user,path,method,body={},query=''}){
   return {binary:true,data:Buffer.from(data).toString('base64'),mime_type:file.mime_type,name:file.original_name,inline:url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)};
  }
  const ctx={db,user,p,method,body,url};
- for(const handler of [announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes]){const result=await handler(ctx);if(result!==undefined)return result;}
+ for(const handler of [announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined)return result;}
  throw new AppError(404,'Alamat API tidak ditemukan.');
 }

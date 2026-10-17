@@ -11,6 +11,7 @@ import {adminRoutes} from './lib/admin.mjs';
 import {announcementRoutes} from './lib/announcements.mjs';
 import {dashboard,lookups} from './lib/read-models.mjs';
 import {upload,download,attach} from './lib/files.mjs';
+import {purchasingRoutes,purchasingPendingCount} from './lib/purchasing.mjs';
 
 const root=fileURLToPath(new URL('.',import.meta.url));
 function cookie(name,value,httpOnly=true,maxAge=8*3600){return `${name}=${value}; Path=/; SameSite=Strict; Max-Age=${maxAge}${httpOnly?'; HttpOnly':''}${process.env.COOKIE_SECURE==='true'?'; Secure':''}`;}
@@ -57,7 +58,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       const user=authenticate(db,req);user.request_id=requestId;
       if(mutating)assert(typeof req.headers['x-csrf-token']==='string'&&digest(req.headers['x-csrf-token'])===user.session.csrf_hash,'Token keamanan tidak valid. Muat ulang halaman.',403);
       if(p[0]==='auth'&&p[1]==='me'&&method==='GET'){
-        const token=cookies(req.headers.cookie).besakih_csrf;send({user:safeUser(user),name:user.employee_id?one(db,'SELECT full_name FROM employees WHERE id=?',user.employee_id)?.full_name:user.username,csrfToken:token&&digest(token)===user.session.csrf_hash?token:null,permissions:[...new Set(grants(db,user).map(g=>g.code))],announcements_manage:announcementsManager(db,user),demo:one(db,"SELECT value FROM app_settings WHERE key='demo_mode'").value==='true'});return;
+        const token=cookies(req.headers.cookie).besakih_csrf;send({user:safeUser(user),name:user.employee_id?one(db,'SELECT full_name FROM employees WHERE id=?',user.employee_id)?.full_name:user.username,csrfToken:token&&digest(token)===user.session.csrf_hash?token:null,permissions:[...new Set(grants(db,user).map(g=>g.code))],announcements_manage:announcementsManager(db,user),purchasing_pending:purchasingPendingCount(db,user),demo:one(db,"SELECT value FROM app_settings WHERE key='demo_mode'").value==='true'});return;
       }
       if(p[0]==='auth'&&p[1]==='logout'&&method==='POST'){run(db,'UPDATE auth_sessions SET revoked_at=? WHERE id=?',now(),user.session.id);res.setHeader('Set-Cookie',[cookie('besakih_session','',true,0),cookie('besakih_csrf','',false,0)]);send({ok:true});return;}
       if(p[0]==='auth'&&p[1]==='password'&&method==='POST'){await changePassword(db,user,body);send({ok:true});return;}
@@ -75,7 +76,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(p[0]==='attachments'&&method==='POST'){send(attach(db,user,body.type,body.owner_id,body),201);return;}
       if(p[0]==='files'&&p[1]&&method==='GET') {const {file,data}=download(db,user,p[1],dataDir);res.writeHead(200,{'Content-Type':file.mime_type,'Content-Disposition':`${url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.original_name)}`,'Content-Length':data.length,'Cache-Control':'private, no-store'});res.end(data);return;}
       const ctx={db,user,p,method,body,url};
-      for(const handler of [announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
+      for(const handler of [announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
       throw new AppError(404,'Alamat API tidak ditemukan.');
     } catch(error) {
       const conflict=/UNIQUE constraint/.test(error.message),invalid=/FOREIGN KEY constraint|CHECK constraint|NOT NULL constraint/.test(error.message);

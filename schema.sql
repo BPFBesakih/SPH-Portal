@@ -166,3 +166,84 @@ CREATE TABLE IF NOT EXISTS announcement_files (
 CREATE TABLE IF NOT EXISTS announcement_reads (
  announcement_id TEXT NOT NULL REFERENCES announcements(id), user_id TEXT NOT NULL REFERENCES users(id), content_version INTEGER NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY(announcement_id,user_id));
 CREATE INDEX IF NOT EXISTS announcement_publication ON announcements(status,starts_at,ends_at);
+
+-- Modul Pengadaan (PR sampai serah terima). Uang dalam rupiah bulat; jumlah dan volume per seribu.
+CREATE TABLE IF NOT EXISTS budget_years (
+ id TEXT PRIMARY KEY, year INTEGER NOT NULL UNIQUE CHECK(year BETWEEN 2000 AND 2100), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS budget_lines (
+ id TEXT PRIMARY KEY, budget_year_id TEXT NOT NULL REFERENCES budget_years(id), code TEXT NOT NULL, name TEXT NOT NULL, org_unit_id TEXT REFERENCES org_units(id), ceiling INTEGER NOT NULL CHECK(ceiling>=0), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(budget_year_id,code));
+CREATE TABLE IF NOT EXISTS vendors (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, leader_name TEXT, leader_title TEXT, leader_nik TEXT, contact_name TEXT, address TEXT, phone TEXT, bank_name TEXT, bank_branch TEXT, account_no TEXT, account_name TEXT, notes TEXT, is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS purchase_delegations (
+ id TEXT PRIMARY KEY, from_employee_id TEXT NOT NULL REFERENCES employees(id), to_employee_id TEXT NOT NULL REFERENCES employees(id), starts_on TEXT NOT NULL, ends_on TEXT NOT NULL, reason TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK(ends_on>=starts_on), CHECK(from_employee_id<>to_employee_id));
+CREATE TABLE IF NOT EXISTS purchase_number_sequences (
+ id TEXT PRIMARY KEY, doc_type TEXT NOT NULL, sequence_key TEXT NOT NULL, year INTEGER NOT NULL, last_no INTEGER NOT NULL CHECK(last_no>=0),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, UNIQUE(doc_type,sequence_key,year));
+CREATE TABLE IF NOT EXISTS purchase_requests (
+ id TEXT PRIMARY KEY, request_code TEXT NOT NULL UNIQUE, pr_number TEXT UNIQUE, requester_employee_id TEXT NOT NULL REFERENCES employees(id), submitted_by TEXT NOT NULL REFERENCES users(id), org_unit_id TEXT NOT NULL REFERENCES org_units(id),
+ requester_name TEXT NOT NULL, requester_no TEXT NOT NULL, position_name TEXT NOT NULL, unit_name TEXT NOT NULL, supervisor_employee_id TEXT REFERENCES employees(id), request_date TEXT NOT NULL, needed_on TEXT NOT NULL,
+ budget_line_id TEXT REFERENCES budget_lines(id), special_budget INTEGER NOT NULL DEFAULT 0 CHECK(special_budget IN(0,1)),
+ status TEXT NOT NULL CHECK(status IN('pending_acknowledgement','pending_verification','pending_final_approval','returned','rejected','cancelled','pending_completeness_check','in_procurement','pending_requester_confirmation','pending_reverification','pending_reapproval','completed')),
+ estimated_total INTEGER NOT NULL CHECK(estimated_total>=0), approved_total INTEGER CHECK(approved_total>=0), final_approver_kind TEXT CHECK(final_approver_kind IN('SEKBAN','KABAN')), procurement_path TEXT CHECK(procurement_path IN('A','B','C')),
+ pic_employee_id TEXT REFERENCES employees(id), revision_no INTEGER NOT NULL DEFAULT 1 CHECK(revision_no>0), confirmation_round INTEGER NOT NULL DEFAULT 0, closed_reason TEXT, closed_at TEXT, completed_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK(needed_on>=request_date));
+CREATE INDEX IF NOT EXISTS purchase_request_status ON purchase_requests(status);
+CREATE INDEX IF NOT EXISTS purchase_request_requester ON purchase_requests(requester_employee_id);
+CREATE TABLE IF NOT EXISTS purchase_request_items (
+ id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES purchase_requests(id), line_no INTEGER NOT NULL CHECK(line_no>0), description TEXT NOT NULL, item_kind TEXT NOT NULL CHECK(item_kind IN('GOODS','SERVICE')),
+ quantity_milli INTEGER NOT NULL CHECK(quantity_milli>0), unit TEXT NOT NULL, unit_price INTEGER NOT NULL CHECK(unit_price>=0), subtotal INTEGER NOT NULL CHECK(subtotal>=0),
+ approved_unit_price INTEGER NOT NULL CHECK(approved_unit_price>=0), approved_subtotal INTEGER NOT NULL CHECK(approved_subtotal>=0), reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN('ACTIVE','CANCELLED')),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(request_id,line_no));
+CREATE TABLE IF NOT EXISTS purchase_attachments (
+ id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES purchase_requests(id), owner_type TEXT NOT NULL CHECK(owner_type IN('ITEM','QUOTE','ORDER','APPOINTMENT')), owner_id TEXT NOT NULL,
+ attachment_kind TEXT NOT NULL CHECK(attachment_kind IN('REFERENCE','PRICE_EVIDENCE','VENDOR_INVOICE','SIGNED_SCAN')), form TEXT NOT NULL CHECK(form IN('LINK','TEXT','FILE')), url TEXT, note TEXT, file_id TEXT UNIQUE REFERENCES files(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id),
+ CHECK((form='FILE')=(file_id IS NOT NULL)), CHECK(form<>'LINK' OR url IS NOT NULL), CHECK(form<>'TEXT' OR note IS NOT NULL));
+CREATE INDEX IF NOT EXISTS purchase_attachment_owner ON purchase_attachments(owner_type,owner_id);
+CREATE TABLE IF NOT EXISTS purchase_approval_steps (
+ id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES purchase_requests(id), object_type TEXT NOT NULL CHECK(object_type IN('REQUEST','APPOINTMENT','ORDER')), object_id TEXT NOT NULL, cycle_no INTEGER NOT NULL,
+ step_kind TEXT NOT NULL CHECK(step_kind IN('ACKNOWLEDGE','VERIFY','FINAL','REVERIFY','REAPPROVE','APPOINTMENT','ORDER')), target_kind TEXT NOT NULL CHECK(target_kind IN('EMPLOYEE','VERIFIERS')), target_employee_id TEXT REFERENCES employees(id), target_label TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN('PENDING','APPROVED','RETURNED','REJECTED','SKIPPED','SUPERSEDED')), actor_user_id TEXT REFERENCES users(id), actor_employee_id TEXT REFERENCES employees(id), actor_name TEXT, actor_position TEXT,
+ as_delegate INTEGER NOT NULL DEFAULT 0 CHECK(as_delegate IN(0,1)), reason TEXT, acted_at TEXT, reassigned_from_employee_id TEXT REFERENCES employees(id), reassign_reason TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK(target_kind='VERIFIERS' OR target_employee_id IS NOT NULL));
+CREATE INDEX IF NOT EXISTS purchase_steps_request ON purchase_approval_steps(request_id,status);
+CREATE INDEX IF NOT EXISTS purchase_steps_target ON purchase_approval_steps(target_employee_id,status);
+CREATE TRIGGER IF NOT EXISTS purchase_step_decided BEFORE UPDATE ON purchase_approval_steps WHEN OLD.acted_at IS NOT NULL BEGIN SELECT RAISE(ABORT,'Tahap yang sudah diputuskan tidak dapat diubah'); END;
+CREATE TRIGGER IF NOT EXISTS purchase_step_no_delete BEFORE DELETE ON purchase_approval_steps BEGIN SELECT RAISE(ABORT,'Tahap persetujuan tidak dapat dihapus'); END;
+CREATE TABLE IF NOT EXISTS purchase_price_quotes (
+ id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES purchase_requests(id), item_id TEXT NOT NULL REFERENCES purchase_request_items(id), vendor_id TEXT REFERENCES vendors(id), store_name TEXT NOT NULL, unit_price INTEGER NOT NULL CHECK(unit_price>=0),
+ is_selected INTEGER NOT NULL DEFAULT 0 CHECK(is_selected IN(0,1)), not_cheapest_reason TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS purchase_price_confirmations (
+ id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES purchase_requests(id), item_id TEXT NOT NULL REFERENCES purchase_request_items(id), round_no INTEGER NOT NULL CHECK(round_no>0),
+ old_unit_price INTEGER NOT NULL, new_unit_price INTEGER NOT NULL CHECK(new_unit_price>=0), old_subtotal INTEGER NOT NULL, new_subtotal INTEGER NOT NULL, reason TEXT NOT NULL,
+ answer TEXT NOT NULL DEFAULT 'PENDING' CHECK(answer IN('PENDING','ACCEPTED','CANCELLED')), answered_at TEXT, answered_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(request_id,item_id,round_no));
+CREATE TABLE IF NOT EXISTS vendor_orders (
+ id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES purchase_requests(id), vendor_id TEXT REFERENCES vendors(id), store_name TEXT NOT NULL, path TEXT NOT NULL CHECK(path IN('A','B','C')), document_kind TEXT NOT NULL CHECK(document_kind IN('PO','SPK','NONE')),
+ status TEXT NOT NULL CHECK(status IN('draft','pending_appointment_approval','pending_order_approval','ordered','purchased','received','cancelled')), total INTEGER NOT NULL CHECK(total>=0), due_on TEXT, cancelled_reason TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK(path='A' OR vendor_id IS NOT NULL), CHECK((path='A')=(document_kind='NONE')));
+CREATE INDEX IF NOT EXISTS vendor_order_request ON vendor_orders(request_id);
+CREATE TABLE IF NOT EXISTS vendor_order_items (
+ id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES vendor_orders(id), request_item_id TEXT NOT NULL REFERENCES purchase_request_items(id), quantity_milli INTEGER NOT NULL CHECK(quantity_milli>0), unit TEXT NOT NULL,
+ calc_volume_milli INTEGER CHECK(calc_volume_milli>0), calc_unit TEXT, unit_price INTEGER NOT NULL CHECK(unit_price>=0), subtotal INTEGER NOT NULL CHECK(subtotal>=0), needed_on TEXT NOT NULL,
+ purchase_unit_price INTEGER CHECK(purchase_unit_price>=0), received_quantity_milli INTEGER CHECK(received_quantity_milli>=0),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(order_id,request_item_id), CHECK((calc_volume_milli IS NULL)=(calc_unit IS NULL)));
+CREATE TABLE IF NOT EXISTS vendor_appointments (
+ id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES vendor_orders(id), reason TEXT NOT NULL, number TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN('PENDING','APPROVED','REJECTED')), decided_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS vendor_order_documents (
+ id TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE REFERENCES vendor_orders(id), doc_kind TEXT NOT NULL CHECK(doc_kind IN('PO','SPK')), number TEXT UNIQUE, doc_date TEXT, work_description TEXT, work_duration_days INTEGER CHECK(work_duration_days>0),
+ payment_terms TEXT NOT NULL, billing_text TEXT NOT NULL, signer_employee_id TEXT REFERENCES employees(id), signer_name TEXT, signer_position TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS order_receipts (
+ id TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE REFERENCES vendor_orders(id), purchased_on TEXT NOT NULL, received_on TEXT, received_by_employee_id TEXT REFERENCES employees(id), condition_note TEXT, invoice_total INTEGER CHECK(invoice_total>=0),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK(received_on IS NULL OR received_on>=purchased_on));
+CREATE TABLE IF NOT EXISTS purchase_documents (
+ id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES purchase_requests(id), doc_type TEXT NOT NULL CHECK(doc_type IN('PR','PO','SPK','SPV')), object_id TEXT NOT NULL, number TEXT, snapshot_json TEXT NOT NULL, snapshot_hash TEXT NOT NULL, verification_code TEXT NOT NULL UNIQUE, superseded_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE INDEX IF NOT EXISTS purchase_document_object ON purchase_documents(object_id);

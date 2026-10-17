@@ -7,7 +7,7 @@ import {generate} from './cloud-tools/node_modules/astring/dist/astring.mjs';
 // Generated output is committed and checked on PostgreSQL before deployment.
 const destination=new URL('../supabase/functions/_shared/portal/',import.meta.url);
 mkdirSync(destination,{recursive:true});
-const names=['auth','files','hr','security','field-reports','roster','announcements','read-models','admin'];
+const names=['auth','files','hr','security','field-reports','roster','announcements','read-models','admin','purchasing-rules','purchasing'];
 const modules=[];
 for(const name of names){
  let source=readFileSync(new URL(`../lib/${name}.mjs`,import.meta.url),'utf8');
