@@ -19,11 +19,12 @@ const check=async(name,fn)=>{await fn();console.log(`PASS ${name}`);checks++;};
 const permissions=['admin.users.read','admin.users.manage','admin.users.reset','admin.roles.read','admin.roles.manage','admin.audit.read'];
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
-async function fixture({signedIn=true,required=false,roleEditor=false,mayManage=true,employees=[],viewport={width:1440,height:960}}={}){
+async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],viewport={width:1440,height:960}}={}){
  const context=await browser.newContext({viewport,baseURL:origin});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
  let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
  const systemRole={id:'fixture-system-role',code:'SUPER_ADMIN',name:'Super Admin',is_system:1,is_active:1,row_version:1,permissions:[...permissions]};
- const users=[{...me.user,grants:[]}];
+ const grantRole={id:'fixture-employee-role',code:'EMPLOYEE',name:'Pegawai',is_active:1,is_system:0,permissions:['hr.employees.read']};
+ const users=[{...me.user,grants:accountGrants}];
  const catalog=[...permissions,'hr.employees.read'].map(code=>({code,resource:code.split('.').slice(0,2).join('.'),action:code.split('.').at(-1)}));
  page.on('pageerror',e=>errors.push(e.message));page.on('console',msg=>{if(msg.type()==='error'&&!msg.text().includes('Failed to load resource'))errors.push(msg.text());});
  await page.route(`${origin}/**`,async route=>{
@@ -36,10 +37,11 @@ async function fixture({signedIn=true,required=false,roleEditor=false,mayManage=
    else if(!authenticated){status=401;body={error:'SESSION_ENDED',message:'Sesi berakhir. Silakan masuk kembali.'};}
    else if(url.pathname==='/api/portal/me')body={...me,permissions:currentPermissions,user:{...me.user,must_change_password:required}};
    else if(url.pathname==='/api/users'&&req.method()==='POST'){const sent=req.postDataJSON();const user={...me.user,id:`fixture-created-${users.length}`,username:sent.username,employee_id:sent.employee_id||null,must_change_password:true,grants:[]};users.push(user);body=user;}
+   else if(grantEditor&&url.pathname===`/api/users/${me.user.id}/grants`&&req.method()==='POST'){const sent=req.postDataJSON();users[0].grants=sent.grants.map((g,index)=>({...g,id:`fixture-grant-${index}`,role_name:g.role_id===grantRole.id?grantRole.name:'Petugas Keamanan'}));users[0].row_version++;body={ok:true};}
    else if(url.pathname==='/api/users')body={items:users};
-   else if(url.pathname==='/api/lookups')body={employees};
+   else if(url.pathname==='/api/lookups')body={employees,units:grantEditor?[{id:'fixture-unit',name:'Sekretariat'}]:[],posts:grantEditor?[{id:'fixture-post',name:'Pos Fiktif'}]:[]};
    else if(url.pathname==='/api/announcements')body={items:[],can_manage:true};
-   else if(url.pathname==='/api/roles')body={items:roleEditor?[systemRole]:[],permissions:roleEditor?catalog:[]};
+   else if(url.pathname==='/api/roles')body={items:grantEditor?[grantRole]:roleEditor?[systemRole]:[],permissions:roleEditor?catalog:[]};
    else if(roleEditor&&url.pathname===`/api/roles/${systemRole.id}`&&req.method()==='PATCH'){const change=req.postDataJSON();assert(mayManage);systemRole.permissions=change.permissions;systemRole.row_version++;currentPermissions=[...change.permissions];body={...systemRole};}
    else if(url.pathname==='/api/settings')body={allow_gap_publication:'false'};
    else if(url.pathname==='/api/audit')body={items:[]};
@@ -124,6 +126,19 @@ try{
   await f.dialog.getByRole('button',{name:'Batal',exact:true}).click();await f.page.setViewportSize({width:1440,height:960});await f.page.getByRole('button',{name:'Buat akun',exact:true}).click();await f.page.getByRole('combobox').fill('pramana');
   await f.page.screenshot({path:resolve(output,'account-employee-search-desktop.png'),fullPage:true});
   const empty=await accountForm({employees:[]});assert.match(await empty.dialog.getByRole('status').textContent(),/Belum ada pegawai/);assert.equal(await empty.dialog.getByRole('listbox').isVisible(),false);
+ });
+ await check('granting unit access preserves existing post grants while new grants offer only the three supported scopes',async()=>{
+  const existing={id:'fixture-post-grant',role_id:'fixture-officer-role',role_name:'Petugas Keamanan',scope_kind:'ASSIGNED_POSTS',units:[],posts:['fixture-post']};
+  const f=await fixture({grantEditor:true,accountGrants:[existing]});await f.page.getByRole('button',{name:'Lihat detail',exact:true}).click();await f.page.getByRole('button',{name:'Berikan role',exact:true}).click();
+  const form=f.page.getByRole('dialog',{name:'Berikan role & cakupan',exact:true});await form.waitFor();
+  assert.deepEqual(await form.getByLabel('Cakupan',{exact:true}).locator('option').evaluateAll(options=>options.map(option=>option.value)),['','SELF','ASSIGNED_UNITS','ALL']);
+  assert.equal(await form.locator('[name=posts]').count(),0);
+  await form.getByLabel('Role',{exact:true}).selectOption('fixture-employee-role');await form.getByLabel('Cakupan',{exact:true}).selectOption('ASSIGNED_UNITS');
+  await form.getByLabel('Unit (untuk cakupan unit)',{exact:true}).selectOption('fixture-unit');await form.getByLabel('Sertakan unit turunan',{exact:true}).check();
+  await f.page.screenshot({path:resolve(output,'grant-scope-without-posts.png'),fullPage:true});
+  await form.getByRole('button',{name:'Simpan',exact:true}).click();await form.waitFor({state:'hidden'});
+  const sent=f.calls.find(c=>c.path===`/api/users/${me.user.id}/grants`&&c.method==='POST').body;
+  assert.deepEqual(sent,{row_version:1,grants:[{role_id:'fixture-officer-role',scope_kind:'ASSIGNED_POSTS',units:[],posts:['fixture-post']},{role_id:'fixture-employee-role',scope_kind:'ASSIGNED_UNITS',units:[{org_unit_id:'fixture-unit',include_descendants:true}],posts:[]}]});
  });
  await check('Super Admin permission checkboxes are editable and saving refreshes the current account menus',async()=>{
   const f=await fixture({roleEditor:true});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();
