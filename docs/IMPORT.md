@@ -45,3 +45,11 @@ Script menambahkan unit utama dan posisi dari bagan jika belum ada, lalu menampu
 Maksimal satu profil dibuat per baris calon. Nomor pegawai tetap unik secara global. Semua perubahan dicatat pada audit. Tidak ada akun login, hak akses, keanggotaan kelompok, kelayakan pos, jadwal, atau kebijakan kerja yang terbentuk dari nama/jabatan dalam bagan.
 
 Folder `data/` diabaikan Git dan Docker build karena berisi data personal serta database. Pada server baru, pindahkan JSON staging lewat saluran internal dan ikuti langkah impor dalam [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## Posisi Staf dan THL
+
+Empat label sumber yang menggabungkan “Staf dan THL” dipisahkan menjadi pilihan Staf dan THL untuk Kebersihan Lingkungan, Kebersihan Bangunan, Pertamanan, dan Pengolahan Sampah. Koreksi data master PostgreSQL tersedia pada `supabase/setup/separate-staff-thl-positions.sql` dan dapat dijalankan ulang tanpa menggandakan posisi.
+
+Penempatan utama yang masih terbuka diarahkan ke posisi terpisah berdasarkan status kerja tersimpan: `Pegawai Kontrak (PKWT)` ke Staf dan `Tenaga Harian Lepas` ke THL. Status lain menghentikan seluruh transaksi untuk ditinjau. Tanggal, atasan, dan penempatan historis yang sudah ditutup tetap dipertahankan; posisi gabungan dinonaktifkan dari pilihan baru. Sumber impor tetap menyimpan label asli. Koreksi posisi dan penempatan dicatat dalam audit, tanpa mengubah status kerja, akun, atau izin akses.
+
+Koreksi produksi pada 17 Oktober 2026 menghasilkan delapan pilihan posisi aktif dan memisahkan 52 penempatan: 25 Staf serta 27 THL. Verifikasi tidak menemukan penempatan utama terbuka pada empat posisi gabungan atau ketidaksesuaian status. Fingerprint data pegawai selain versi/waktu pembaruan, tanggal/atasan penempatan, akun, pemberian role, dan izin tetap sama. Salinan sebelum perubahan dan hasil pemeriksaan disimpan pada folder lokal `data/imports/staff-thl-20261017/` yang diabaikan Git.
