@@ -37,3 +37,32 @@ test('Drive failures and redirects never disclose upstream details or follow ano
   assert.equal(f.calls.some(c=>c.url.startsWith('https://attacker.invalid')),false);
  }
 });
+test('Drive storage identifies token, permission and folder errors without returning private Google details',async()=>{
+ for(const [stage,status,reason] of [['token',400,'invalid_grant'],['token',401,'invalid_client'],['upload',403,'insufficientPermissions'],['upload',404,'notFound'],['upload',403,'storageQuotaExceeded']]){
+  const storage=createDriveStorage(env,async url=>{
+   if(url==='https://oauth2.googleapis.com/token'&&stage!=='token')return Response.json({access_token:'private-access-token'});
+   return Response.json(stage==='token'?{error:reason,error_description:'private-google-detail'}:{error:{message:'private-google-detail',errors:[{reason,message:'private-google-detail'}]}},{status});
+  });
+  await assert.rejects(storage.put(Buffer.from('x'),'image/png'),error=>{
+   assert.equal(error.status,503);assert.deepEqual(error.details,{service:'google_drive',stage,upstream_status:status,reason});
+   assert.equal(JSON.stringify(error).includes('private-'),false);assert.equal(error.message.includes('private-'),false);return true;
+  });
+ }
+});
+test('unknown or oversized Google errors cannot inject private values into storage diagnostics',async()=>{
+ for(const body of [JSON.stringify({error:{message:'private-message',errors:[{reason:'private-token-or-folder-id'}]}}),'private-upstream-response'.repeat(2000)]){
+  const storage=createDriveStorage(env,async url=>url==='https://oauth2.googleapis.com/token'?Response.json({access_token:'private-access-token'}):new Response(body,{status:403}));
+  await assert.rejects(storage.put(Buffer.from('x'),'image/png'),error=>error.details.stage==='upload'&&error.details.reason==='unknown'&&!JSON.stringify(error).includes('private-'));
+ }
+});
+test('Drive settings ignore surrounding whitespace consistently with the connection check',async()=>{
+ const padded=Object.fromEntries(Object.entries(env).map(([key,value])=>[key,` \n${value}\n `]));
+ const storage=createDriveStorage(padded,async(url,init)=>{
+  if(url==='https://oauth2.googleapis.com/token'){
+   for(const [name,key] of [['client_id','GOOGLE_DRIVE_CLIENT_ID'],['client_secret','GOOGLE_DRIVE_CLIENT_SECRET'],['refresh_token','GOOGLE_DRIVE_REFRESH_TOKEN']])assert.equal(init.body.get(name),env[key]);
+   return Response.json({access_token:'fixture-access'});
+  }
+  const body=await init.body.text();assert(body.includes('"parents":["fixture_folder"]'));return Response.json({id:'fixture_file_001'});
+ });
+ assert.equal(await storage.put(Buffer.from('x'),'image/png'),'fixture_file_001');
+});

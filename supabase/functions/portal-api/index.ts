@@ -91,6 +91,7 @@ export default {
    return Response.json({ok:true,result},{headers:{'Cache-Control':'no-store','X-SPH-Modules-Revision':'20261016.1'}});
   }catch(error){
    if(!workCompleted){await storage?.rollback();await identity?.rollback();}
+   if(error instanceof AppError&&error.details?.service==='google_drive')console.warn(JSON.stringify({event:'storage_error',request_id:requestId,stage:error.details.stage,upstream_status:error.details.upstream_status,reason:error.details.reason}));
    const code=error?.code;
    const status=error instanceof AppError?error.status:['23505','40001','40P01','55P03'].includes(code)?409:['23502','23503','23514','22P02'].includes(code)?422:503;
    const message=error instanceof AppError?error.message:status===409?'Data atau proses sudah berubah. Muat ulang sebelum mencoba kembali.':status===422?'Relasi atau nilai data tidak valid.':'Modul portal belum dapat diakses.';

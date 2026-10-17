@@ -146,27 +146,66 @@ function createIdentity(env, fetchImpl = globalThis.fetch.bind(globalThis)) {
 // supabase/functions/_shared/portal/drive.mjs
 import { Buffer } from "node:buffer";
 import { randomUUID as randomUUID3 } from "node:crypto";
+var knownReasons = /* @__PURE__ */ new Set(["invalid_grant", "invalid_client", "unauthorized_client", "access_denied", "authError", "insufficientPermissions", "insufficientFilePermissions", "appNotAuthorizedToFile", "notFound", "storageQuotaExceeded", "dailyLimitExceeded", "userRateLimitExceeded", "rateLimitExceeded", "accessNotConfigured", "domainPolicy", "badRequest", "backendError"]);
+async function errorReason(response) {
+  const reader = response.body?.getReader();
+  if (!reader) return "unknown";
+  const chunks = [];
+  let size = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > 16384) {
+        await reader.cancel();
+        return "unknown";
+      }
+      chunks.push(value);
+    }
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const reason = typeof body.error === "string" ? body.error : body.error?.errors?.find((e) => knownReasons.has(e.reason))?.reason;
+    return knownReasons.has(reason) ? reason : "unknown";
+  } catch {
+    return "unknown";
+  } finally {
+    reader.releaseLock();
+  }
+}
+function storageError(stage, status, reason) {
+  let message = "Penyimpanan berkas belum dapat diakses.";
+  if (reason === "invalid_grant") message = "Koneksi Google Drive perlu dihubungkan ulang. Token akses telah kedaluwarsa atau dicabut.";
+  else if (["invalid_client", "unauthorized_client"].includes(reason)) message = "Konfigurasi OAuth Google Drive tidak valid. Administrator perlu memeriksa koneksi penyimpanan.";
+  else if (["insufficientPermissions", "access_denied"].includes(reason)) message = "Izin koneksi Google Drive belum mengizinkan tindakan ini. Administrator perlu memeriksa izin unggah.";
+  else if (["insufficientFilePermissions", "appNotAuthorizedToFile", "domainPolicy"].includes(reason)) message = "Aplikasi belum memiliki izin untuk menyimpan berkas di folder Google Drive tujuan.";
+  else if (reason === "notFound" || status === 404) message = "Folder atau berkas Google Drive tidak ditemukan atau belum dapat diakses aplikasi.";
+  else if (reason === "storageQuotaExceeded") message = "Penyimpanan Google Drive penuh. Hubungi administrator untuk memeriksa kuota.";
+  else if (["dailyLimitExceeded", "userRateLimitExceeded", "rateLimitExceeded"].includes(reason)) message = "Batas penggunaan Google Drive tercapai. Coba lagi beberapa saat atau hubungi administrator.";
+  else if (reason === "accessNotConfigured") message = "Google Drive API belum aktif untuk koneksi penyimpanan aplikasi.";
+  else if (reason === "network_error") message = "Penyimpanan berkas belum dapat dihubungi.";
+  else if (stage === "upload") message = `Google Drive menolak unggahan berkas (HTTP ${status}). Hubungi administrator.`;
+  else if (stage === "token") message = `Koneksi Google Drive gagal memperbarui akses (HTTP ${status}). Hubungi administrator.`;
+  return new AppError(503, message, { service: "google_drive", stage, upstream_status: status, reason });
+}
 function createDriveStorage(env, fetchImpl = globalThis.fetch.bind(globalThis)) {
-  const folder = env.GOOGLE_DRIVE_FOLDER_ID;
+  const value = (name) => typeof env[name] === "string" ? env[name].trim() : "";
+  const folder = value("GOOGLE_DRIVE_FOLDER_ID"), clientId = value("GOOGLE_DRIVE_CLIENT_ID"), clientSecret = value("GOOGLE_DRIVE_CLIENT_SECRET"), refreshToken = value("GOOGLE_DRIVE_REFRESH_TOKEN");
   const created = [];
   let access;
-  async function request(url, options = {}) {
+  async function request(url, options = {}, stage = "storage") {
     let r;
     try {
       r = await fetchImpl(url, { ...options, redirect: "manual", signal: AbortSignal.timeout(12e3) });
     } catch {
-      throw new AppError(503, "Penyimpanan berkas belum dapat dihubungi.");
+      throw storageError(stage, null, "network_error");
     }
-    if (!r.ok) {
-      await r.body?.cancel();
-      throw new AppError(503, "Penyimpanan berkas belum dapat diakses.");
-    }
+    if (!r.ok) throw storageError(stage, r.status, await errorReason(r));
     return r;
   }
   async function token() {
     if (access) return access;
-    assert(folder && env.GOOGLE_DRIVE_CLIENT_ID && env.GOOGLE_DRIVE_CLIENT_SECRET && env.GOOGLE_DRIVE_REFRESH_TOKEN, "Penyimpanan berkas belum dikonfigurasi.", 503);
-    const r = await request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", client_id: env.GOOGLE_DRIVE_CLIENT_ID, client_secret: env.GOOGLE_DRIVE_CLIENT_SECRET, refresh_token: env.GOOGLE_DRIVE_REFRESH_TOKEN }) });
+    assert(folder && clientId && clientSecret && refreshToken, "Penyimpanan berkas belum dikonfigurasi.", 503);
+    const r = await request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken }) }, "token");
     const j = await r.json();
     assert(typeof j.access_token === "string" && j.access_token.length < 8192, "Penyimpanan berkas belum dapat diakses.", 503);
     access = j.access_token;
@@ -187,7 +226,7 @@ Content-Type: ${mime}\r
 \r
 `, data, `\r
 --${boundary}--`]);
-      const r = await request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", { method: "POST", headers: { ...await headers(), "Content-Type": `multipart/related; boundary=${boundary}` }, body });
+      const r = await request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", { method: "POST", headers: { ...await headers(), "Content-Type": `multipart/related; boundary=${boundary}` }, body }, "upload");
       const file = await r.json();
       valid(file.id);
       created.push(file.id);
@@ -195,22 +234,22 @@ Content-Type: ${mime}\r
     },
     async get(id) {
       valid(id);
-      const meta = await (await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,parents,trashed,appProperties`, { headers: await headers() })).json();
+      const meta = await (await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,parents,trashed,appProperties`, { headers: await headers() }, "metadata")).json();
       assert(meta.id === id && !meta.trashed && meta.parents?.includes(folder) && meta.appProperties?.sph_portal === "v1", "Berkas tidak tersedia.", 404);
-      const r = await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`, { headers: await headers() });
+      const r = await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`, { headers: await headers() }, "download");
       const chunks = [];
       let size = 0;
       const reader = r.body.getReader();
       try {
         for (; ; ) {
-          const { done, value } = await reader.read();
+          const { done, value: value2 } = await reader.read();
           if (done) break;
-          size += value.length;
+          size += value2.length;
           if (size > 10 * 1024 * 1024) {
             await reader.cancel();
             throw new AppError(503, "Berkas melebihi ukuran yang diizinkan.");
           }
-          chunks.push(value);
+          chunks.push(value2);
         }
       } finally {
         reader.releaseLock();
@@ -220,7 +259,7 @@ Content-Type: ${mime}\r
     async rollback() {
       for (const id of created) {
         try {
-          await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`, { method: "DELETE", headers: await headers() });
+          await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`, { method: "DELETE", headers: await headers() }, "cleanup");
         } catch {
         }
       }
@@ -2561,6 +2600,7 @@ var index_default = {
         await storage?.rollback();
         await identity?.rollback();
       }
+      if (error instanceof AppError && error.details?.service === "google_drive") console.warn(JSON.stringify({ event: "storage_error", request_id: requestId, stage: error.details.stage, upstream_status: error.details.upstream_status, reason: error.details.reason }));
       const code = error?.code;
       const status = error instanceof AppError ? error.status : ["23505", "40001", "40P01", "55P03"].includes(code) ? 409 : ["23502", "23503", "23514", "22P02"].includes(code) ? 422 : 503;
       const message = error instanceof AppError ? error.message : status === 409 ? "Data atau proses sudah berubah. Muat ulang sebelum mencoba kembali." : status === 422 ? "Relasi atau nilai data tidak valid." : "Modul portal belum dapat diakses.";
