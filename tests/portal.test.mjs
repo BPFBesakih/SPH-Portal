@@ -145,7 +145,7 @@ test('kejadian idempoten, riwayat penyelesaian dan pembukaan kembali tersimpan',
   const a=await call(securityRoutes,f,'incidents','POST',payload),b=await call(securityRoutes,f,'incidents','POST',payload);assert.equal(a.id,b.id);assert.equal(one(f.db,'SELECT count(*) n FROM incidents').n,1);await assert.rejects(call(securityRoutes,f,'incidents','POST',{...payload,chronology:'Berbeda'}),/laporan berbeda/);
   let i=await call(securityRoutes,f,`incidents/${a.id}/updates`,'POST',{row_version:a.row_version,status:'IN_PROGRESS',responsible_employee_id:f.employees[1].id,notes:'Ditangani'});i=await call(securityRoutes,f,`incidents/${a.id}/updates`,'POST',{row_version:i.row_version,status:'RESOLVED',notes:'Barang diserahkan'});await call(securityRoutes,f,`incidents/${a.id}/updates`,'POST',{row_version:i.row_version,status:'IN_PROGRESS',notes:'Perlu pengecekan ulang'});const history=all(f.db,'SELECT * FROM incident_updates WHERE incident_id=?',a.id);assert.equal(history.length,4);assert(history.some(h=>h.notes==='Barang diserahkan'));assert(history.some(h=>h.event_type==='REOPENED'));
 });
-test('HTTP: logo dan favicon PNG tersedia tanpa membuka berkas privat',async t=>{
+test('HTTP: logo, favicon, dan foto WebP tersedia tanpa membuka berkas privat',async t=>{
   const f=fixture(t),directory=mkdtempSync(resolve(tmpdir(),'besakih-brand-')),{server}=createApp({db:f.db,dataDir:directory});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   t.after(async()=>{await new Promise(r=>server.close(r));cleanup(directory);});
@@ -165,6 +165,13 @@ test('HTTP: logo dan favicon PNG tersedia tanpa membuka berkas privat',async t=>
     assert.equal(head.status,200);assert.equal(head.headers.get('content-type'),'image/png');assert.equal((await head.arrayBuffer()).byteLength,0);
   }
   assert.equal((await fetch(`${origin}/schema.sql`)).status,404);
+  for(const name of ['besakih-temple','besakih-landscape','besakih-candi','besakih-wantilan','besakih-talent','besakih-shuttle']){
+    const response=await fetch(`${origin}/assets/photos/${name}.webp`);
+    assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/webp');
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()),readFileSync(new URL(`../public/assets/photos/${name}.webp`,import.meta.url)));
+    const head=await fetch(`${origin}/assets/photos/${name}.webp`,{method:'HEAD'});
+    assert.equal(head.status,200);assert.equal(head.headers.get('content-type'),'image/webp');assert.equal((await head.arrayBuffer()).byteLength,0);
+  }
   assert.equal((await fetch(`${origin}/assets/%2e%2e%2fschema.sql`)).status,404);
   assert.equal((await fetch(`${origin}/assets/favicon.png`,{method:'POST'})).status,405);
 });

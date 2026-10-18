@@ -10,7 +10,7 @@ if(!playwrightPath||!executablePath)throw new Error('Supply Playwright module an
 const {chromium}=await import(pathToFileURL(resolve(playwrightPath)).href);
 const root=resolve('site-info/dist'),output=resolve('test-results/cloud-portal-ui');await mkdir(output,{recursive:true});
 const headerSource=await readFile(resolve(root,'_headers'),'utf8');const csp=headerSource.split(/\r?\n/).find(l=>l.trim().startsWith('Content-Security-Policy:')).trim().slice(24).trim();
-const server=createServer(async(req,res)=>{const path=resolve(root,`.${new URL(req.url,'http://fixture').pathname.replace(/\/$/,'/index.html')}`);if(!path.startsWith(root+sep)){res.writeHead(404).end();return;}try{const body=await readFile(path);res.writeHead(200,{'Content-Type':{'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png'}[extname(path)]||'application/octet-stream','Content-Security-Policy':csp,'Permissions-Policy':'camera=(self), microphone=(), geolocation=(self)','Cache-Control':'no-store'}).end(body);}catch{res.writeHead(404).end();}});
+const server=createServer(async(req,res)=>{const path=resolve(root,`.${new URL(req.url,'http://fixture').pathname.replace(/\/$/,'/index.html')}`);if(!path.startsWith(root+sep)){res.writeHead(404).end();return;}try{const body=await readFile(path);res.writeHead(200,{'Content-Type':{'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp'}[extname(path)]||'application/octet-stream','Content-Security-Policy':csp,'Permissions-Policy':'camera=(self), microphone=(), geolocation=(self)','Cache-Control':'no-store'}).end(body);}catch{res.writeHead(404).end();}});
 await new Promise(ready=>server.listen(0,'127.0.0.1',ready));
 const base=`http://127.0.0.1:${server.address().port}`,origin='https://portal.test';
 const browser=await chromium.launch({executablePath,headless:true});
@@ -19,8 +19,9 @@ const check=async(name,fn)=>{await fn();console.log(`PASS ${name}`);checks++;};
 const permissions=['admin.users.read','admin.users.manage','admin.users.reset','admin.roles.read','admin.roles.manage','admin.audit.read'];
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
-async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],viewport={width:1440,height:960}}={}){
- const context=await browser.newContext({viewport,baseURL:origin});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
+async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960}}={}){
+ const context=await browser.newContext({viewport,baseURL:origin,reducedMotion});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
+ if(clock)await page.clock.install({time:new Date('2026-10-18T00:00:00Z')});
  let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
  const systemRole={id:'fixture-system-role',code:'SUPER_ADMIN',name:'Super Admin',is_system:1,is_active:1,row_version:1,permissions:[...permissions]};
  const grantRole={id:'fixture-employee-role',code:'EMPLOYEE',name:'Pegawai',is_active:1,is_system:0,permissions:['hr.employees.read']};
@@ -67,6 +68,39 @@ try{
   await f.page.locator('.sidebar').evaluate(async e=>{await Promise.all(e.getAnimations().map(a=>a.finished));});
   const box=await f.page.locator('.sidebar').boundingBox();assert(box.x>=0&&box.width<=320);
   await f.page.screenshot({path:resolve(output,'admin-mobile.png'),fullPage:true});
+ });
+ await check('four new login photos rotate and fade automatically without playback controls or changing the login input',async()=>{
+  const f=await fixture({signedIn:false,clock:true});
+  await f.page.getByRole('heading',{name:'Masuk ke portal',exact:true}).waitFor();
+  await f.page.clock.pauseAt(new Date('2026-10-18T00:00:05Z'));
+  const slides=f.page.locator('.photo-slide');
+  assert.equal(await slides.count(),4);
+  assert.equal(new Set(await slides.evaluateAll(images=>images.map(image=>image.src))).size,4);
+  assert.deepEqual(await slides.evaluateAll(images=>images.map(image=>new URL(image.src).pathname.split('/').at(-1))),['besakih-candi.webp','besakih-wantilan.webp','besakih-talent.webp','besakih-shuttle.webp']);
+  assert.equal(await f.page.locator('besakih-photo-slideshow button, .photo-controls, .photo-counter').count(),0);
+  assert(await slides.evaluateAll(async images=>{await Promise.all(images.map(image=>image.decode()));return images.every(image=>image.naturalWidth>0);}));
+  await f.page.getByLabel('Username',{exact:true}).fill('pegawai.contoh');
+  for(const index of [1,2,3,0]){
+   await f.page.clock.runFor(7100);
+   await f.page.locator(`.photo-slide-${index}.is-active`).waitFor();
+   assert.equal(await f.page.locator('.photo-slide.is-active').count(),1);
+   if(index===1){
+    // CSS transitions use the compositor's clock, independently of fake JS timers.
+    await new Promise(resolve=>setTimeout(resolve,600));
+    const opacity=await f.page.locator('.photo-slide.is-active').evaluate(image=>Number(getComputedStyle(image).opacity));
+    assert(opacity>0&&opacity<1,`The incoming photo should fade in instead of switching immediately (opacity ${opacity}).`);
+   }
+  }
+  assert.equal(await f.page.getByLabel('Username',{exact:true}).inputValue(),'pegawai.contoh');
+  assert(await f.page.getByLabel('Username',{exact:true}).evaluate(input=>input===document.activeElement));
+ });
+ await check('reduced motion keeps the decorative background still and the mobile login fits without controls',async()=>{
+  const f=await fixture({signedIn:false,clock:true,reducedMotion:'reduce',viewport:{width:320,height:800}});
+  await f.page.getByRole('heading',{name:'Masuk ke portal',exact:true}).waitFor();
+  await f.page.clock.pauseAt(new Date('2026-10-18T00:00:05Z'));
+  await f.page.clock.runFor(21000);assert(await f.page.locator('.photo-slide-0.is-active').isVisible());
+  assert.equal(await f.page.locator('besakih-photo-slideshow button').count(),0);
+  assert(await f.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  });
  await check('the app uses the Supabase login bridge, clears the password and logs out with CSRF',async()=>{
   const f=await fixture({signedIn:false});await f.page.getByLabel('Username',{exact:true}).fill('itadmin');await f.page.getByLabel('Password',{exact:true}).fill('FixturePassword!2026');await f.page.getByRole('button',{name:'Masuk ke portal',exact:false}).click();

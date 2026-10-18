@@ -103,3 +103,39 @@ footer a { color: inherit; }
   footer { font-size: 11px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Photo treatment and readable type match the full PWA workspace. */
+:root {
+  --besakih-color-on-photo: #fff;
+  --besakih-color-photo-muted: #f5eef0;
+  --besakih-photo-scrim: linear-gradient(180deg, #17141577 0%, #17141522 35%, #171415e6 100%);
+}
+body { font-size: 1rem; line-height: 1.6; }
+h1 { font-size: 2.25rem; font-weight: 700; }
+.intro { font-size: 1rem; }
+form > label:not(.checkbox-label) { font-size: .9375rem; font-weight: 600; }
+.checkbox-label, .help, .account-tag, .text-button { font-size: .9375rem; }
+.button { font-size: 1rem; font-weight: 650; min-height: 52px; }
+.eyebrow, .field-hint, footer { font-size: .875rem; }
+.notice, .preparation-note p { font-size: 1rem; }
+.preparation-note h2 { font-size: 1.375rem; font-weight: 700; }
+.brand-panel-photo { position: relative; isolation: isolate; overflow: hidden; color: var(--besakih-color-on-photo); gap: 24px; }
+.brand-panel-photo::before { content: ''; position: absolute; inset: 0; background: var(--besakih-photo-scrim); z-index: -1; }
+.brand-panel-photo .brand small, .brand-panel-photo .brand-story > p:not(.eyebrow) { color: var(--besakih-color-photo-muted); }
+.brand-panel-photo .eyebrow, .brand-panel-photo .back-link { color: var(--besakih-color-on-photo); }
+.brand-panel-photo .brand strong { font-size: 1.5rem; font-weight: 700; }
+.brand-panel-photo .brand-story { margin-top: auto; padding-bottom: 0; }
+.brand-panel-photo .brand-story h2 { font-weight: 700; }
+.brand-panel-photo .brand-story .brand-note { font-size: .9375rem !important; }
+.brand-panel-photo .back-link { font-size: .9375rem; }
+.brand-panel-photo .brand-rule { background: var(--besakih-color-on-photo); opacity: .7; margin-block: 24px 16px; }
+footer { flex-wrap: wrap; }
+@media (max-width: 680px) {
+  .brand-panel-photo { min-height: 320px; padding: 24px; gap: 20px; }
+  .brand-panel-photo .brand-story { display: block; padding: 0; }
+  .brand-panel-photo .brand-story h2 { font-size: 1.875rem; line-height: 1.2; letter-spacing: -.7px; margin-bottom: 12px; }
+  .brand-panel-photo .brand-story .eyebrow, .brand-panel-photo .brand-story .brand-note, .brand-panel-photo .brand-rule { display: none; }
+  .brand-panel-photo .brand-story > p:not(.eyebrow) { font-size: .9375rem; margin: 0; }
+  .form-panel { min-height: 0; padding-top: 24px; }
+  h1 { font-size: 2rem; }
+}

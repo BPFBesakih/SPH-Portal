@@ -8,23 +8,26 @@
   <title>Masuk — SPH Portal</title>
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="stylesheet" href="/assets/portal.css">
+  <link rel="stylesheet" href="/app/photo-slideshow.css">
+  <script type="module" src="/app/photo-slideshow.js"></script>
   <script src="/assets/portal.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Lewati ke konten</a>
   <div class="auth-layout">
-    <aside class="brand-panel" aria-label="SPH Portal BP Besakih">
+    <aside class="brand-panel brand-panel-photo" aria-label="SPH Portal BP Besakih">
       <a class="brand" href="/">
         <img src="/assets/logo.png" width="56" height="56" alt="">
         <span><strong>SPH Portal</strong><small>BP Besakih</small></span>
       </a>
       <div class="brand-story">
         <p class="eyebrow">Portal internal</p>
-        <h2>Terhubung untuk<br>mendukung kerja.</h2>
-        <p>Akses akun kerja Anda melalui SPH Portal.</p>
+        <h2>Bersama merawat<br>kawasan suci.</h2>
+        <p>Satu ruang untuk mendukung tim, pelayanan, dan operasional BP Besakih.</p>
         <span class="brand-rule" aria-hidden="true"></span>
         <p class="brand-note">SDM &amp; Keamanan<br>BP Besakih</p>
       </div>
+      <besakih-photo-slideshow></besakih-photo-slideshow>
       <a class="back-link" href="/">← Kembali ke informasi portal</a>
     </aside>
     <main id="main" class="form-panel">

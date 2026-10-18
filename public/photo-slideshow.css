@@ -1,0 +1,22 @@
+/* Decorative, automatic photo transitions; no playback UI. */
+besakih-photo-slideshow { display: contents; }
+.photo-slides { position: absolute; inset: 0; z-index: -2; overflow: hidden; }
+.photo-slide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  filter: blur(2px);
+  transform: scale(1.06);
+  transition: opacity 1800ms ease-in-out, filter 1800ms ease-in-out, transform 9000ms cubic-bezier(.2,.65,.3,1);
+}
+.photo-slide-0 { object-position: center; }
+.photo-slide-1 { object-position: center; }
+.photo-slide-2 { object-position: center 42%; }
+.photo-slide-3 { object-position: 58% center; }
+.photo-slide.is-active { opacity: 1; filter: blur(0); transform: scale(1); }
+@media (prefers-reduced-motion: reduce) {
+  .photo-slide { transition: none; filter: none; transform: none; }
+}

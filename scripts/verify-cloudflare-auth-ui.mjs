@@ -20,7 +20,7 @@ const server = createServer(async (request, response) => {
   if (!path.startsWith(root + sep)) { response.writeHead(403).end(); return; }
   try {
     const bytes = await readFile(path);
-    response.writeHead(200, { 'Content-Type': { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png' }[extname(path)] ?? 'application/octet-stream', 'Content-Security-Policy': csp, 'Cache-Control': 'no-store' });
+    response.writeHead(200, { 'Content-Type': { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png','.webp':'image/webp' }[extname(path)] ?? 'application/octet-stream', 'Content-Security-Policy': csp, 'Cache-Control': 'no-store' });
     response.end(bytes);
   } catch { response.writeHead(404).end(); }
 });
@@ -78,6 +78,8 @@ try {
     assert.equal(await page.locator('#login-view').isVisible(), true);
     assert.equal(await page.locator('#notice').isVisible(), false);
     assert.equal(await page.getByRole('button', { name: 'Masuk', exact: true }).isEnabled(), true);
+    assert.equal(await page.locator('.photo-slide').count(), 4);
+    assert(await page.locator('.photo-slide').evaluateAll(async images => { await Promise.all(images.map(image => image.decode())); return images.every(image => image.naturalWidth > 0); }));
     await page.screenshot({ path: resolve(output, 'login-desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
