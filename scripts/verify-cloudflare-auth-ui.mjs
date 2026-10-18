@@ -33,7 +33,7 @@ const browser = await chromium.launch({ executablePath, headless: true });
 const csrf = 'synthetic-csrf-cookie-for-browser-fixture';
 const account = { username: 'akun_uji', must_change_password: true, role_assignments: [] };
 const oldPassword = 'Fiktif-saat-ini-2026!';
-const newPassword = 'Fiktif-password-baru-2026!';
+const newPassword = '654321';
 const browserErrors = [];
 let passed = 0;
 

@@ -4093,7 +4093,7 @@ async function adminRoutes(c) {
     }
     if (m === "POST" && !id) {
       await requireAccess(db, user, "admin.users.manage");
-      assert(typeof b.password === "string" && b.password.length >= 12 && b.password.length <= 128, "Password harus 12\u2013128 karakter.");
+      assert(typeof b.password === "string" && b.password.length >= 6 && b.password.length <= 128, "Password harus 6\u2013128 karakter.");
       const username = text(b.username, "Username", 64).toLowerCase();
       assert(/^[a-z0-9._-]{1,64}$/.test(username), "Username hanya berisi huruf kecil, angka, titik, garis bawah atau tanda hubung.");
       assert(!await one(db, "SELECT id FROM users WHERE username=?", username), "Username sudah digunakan.", 409);
@@ -4619,7 +4619,7 @@ async function transaction(client, identity, storage, work, mutating = true) {
 async function recover(client, identity, storage, b, requestId) {
   assert(typeof b.client_ip === "string" && b.client_ip.length <= 45 && /^[a-f0-9:.]+$/i.test(b.client_ip), "Permintaan tidak valid.", 400);
   const input = b.body;
-  assert(typeof input?.token === "string" && /^[a-f0-9]{48}$/.test(input.token) && typeof input.new_password === "string" && input.new_password.length >= 12 && input.new_password.length <= 128, "Kredensial pemulihan atau password tidak valid.", 422);
+  assert(typeof input?.token === "string" && /^[a-f0-9]{48}$/.test(input.token) && typeof input.new_password === "string" && input.new_password.length >= 6 && input.new_password.length <= 128, "Kredensial pemulihan atau password tidak valid.", 422);
   const allowed = await transaction(client, identity, storage, async (db) => {
     const slot = (await db.query("SELECT public.portal_take_login_slot($1,$2) result", [hash(`username\0recovery:${input.token}`), hash(`ip\0${b.client_ip}`)]))[0].result;
     return slot === true;

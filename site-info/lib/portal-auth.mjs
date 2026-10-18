@@ -381,12 +381,12 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       }
       if (action === 'password') {
         requireValue(typeof body.current_password === 'string' && body.current_password.length >= 1 && body.current_password.length <= 128
-          && typeof body.new_password === 'string' && body.new_password.length >= 12 && body.new_password.length <= 128
+          && typeof body.new_password === 'string' && body.new_password.length >= 6 && body.new_password.length <= 128
           && body.new_password !== body.current_password, 'INVALID_REQUEST', 400);
       }
       if (action === 'recover') {
         requireValue(typeof body.token === 'string' && /^[a-f0-9]{48}$/.test(body.token)
-          && typeof body.new_password === 'string' && body.new_password.length >= 12 && body.new_password.length <= 128, 'INVALID_REQUEST', 400);
+          && typeof body.new_password === 'string' && body.new_password.length >= 6 && body.new_password.length <= 128, 'INVALID_REQUEST', 400);
         const result = await api('/functions/v1/portal-api', { admin: true, budget: 30000,
           body: { action: 'recover', body, client_ip: clientIp(request) } });
         requireValue(result.ok || result.data?.ok === false && typeof result.data.request_id === 'string');

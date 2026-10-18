@@ -36,7 +36,7 @@ async function transaction(client,identity,storage,work,mutating=true){
 }
 async function recover(client,identity,storage,b,requestId){
  assert(typeof b.client_ip==='string'&&b.client_ip.length<=45&&/^[a-f0-9:.]+$/i.test(b.client_ip),'Permintaan tidak valid.',400);
- const input=b.body;assert(typeof input?.token==='string'&&/^[a-f0-9]{48}$/.test(input.token)&&typeof input.new_password==='string'&&input.new_password.length>=12&&input.new_password.length<=128,'Kredensial pemulihan atau password tidak valid.',422);
+ const input=b.body;assert(typeof input?.token==='string'&&/^[a-f0-9]{48}$/.test(input.token)&&typeof input.new_password==='string'&&input.new_password.length>=6&&input.new_password.length<=128,'Kredensial pemulihan atau password tidak valid.',422);
  // Consume the token and revoke sessions before the external Auth update. An
  // uncertain Auth result never restores a used token or re-enables old sessions.
  const allowed=await transaction(client,identity,storage,async db=>{

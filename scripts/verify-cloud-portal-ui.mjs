@@ -120,7 +120,7 @@ try{
   f.search=f.dialog.getByRole('combobox',{name:'Tautkan pegawai (opsional)'});return f;
  }
  async function accountCredentials(f,username='pegawai.fixture'){
-  await f.dialog.getByLabel('Username',{exact:true}).fill(username);await f.dialog.getByLabel('Password sementara (minimal 12 karakter)',{exact:true}).fill('FixturePassword!2026');
+  await f.dialog.getByLabel('Username',{exact:true}).fill(username);await f.dialog.getByLabel('Password sementara (minimal 6 karakter)',{exact:true}).fill('123456');
  }
  await check('account employee search starts empty, matches partial names and limits long result lists',async()=>{
   const f=await accountForm(),list=f.dialog.getByRole('listbox');assert.equal(await list.isVisible(),false);
@@ -134,7 +134,7 @@ try{
   await f.search.fill('pg-102');assert.equal(await f.dialog.locator('[name=employee_id]').inputValue(),'');
   await f.dialog.getByRole('option',{name:'Adi Pramana PG-102',exact:true}).click();assert.equal(await f.search.inputValue(),'Adi Pramana');assert.equal(await f.dialog.getByRole('listbox').isVisible(),false);
   await f.dialog.getByRole('button',{name:'Simpan',exact:true}).click();await f.page.getByRole('dialog',{name:'pegawai.fixture',exact:true}).waitFor();
-  assert.deepEqual(f.calls.find(c=>c.path==='/api/users'&&c.method==='POST').body,{username:'pegawai.fixture',password:'FixturePassword!2026',employee_id:'fixture-adi-b'});
+  assert.deepEqual(f.calls.find(c=>c.path==='/api/users'&&c.method==='POST').body,{username:'pegawai.fixture',password:'123456',employee_id:'fixture-adi-b'});
  });
  await check('employee search supports keyboard selection, Tab and Escape without prematurely submitting or closing the form',async()=>{
   const f=await accountForm();await f.search.fill('pramana');await f.search.press('ArrowDown');

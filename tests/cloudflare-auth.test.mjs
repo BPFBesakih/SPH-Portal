@@ -459,6 +459,14 @@ test('password change sends current_password to user Auth before clearing the fl
   assert.deepEqual(rate, { p_username_hash: hash('username\0itadmin'), p_ip_hash: hash('ip\0' + '192.0.2.1') });
 });
 
+test('six-character passwords reach Auth and complete the required password change', async () => {
+  const f = fixture(); const session = await login(f);
+  const response = await f.handler(request('password', { ...session, body: { current_password: '123456', new_password: '654321' } }), f.env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(f.calls.find(c => c.method === 'PUT').body, { current_password: '123456', password: '654321' });
+  assert.equal(f.called('portal_complete_password_change').length, 1);
+});
+
 test('rejected or rate-limited password updates never call completion and retain the current session', async () => {
   for (const [options, status] of [[{ updateStatus: 400 }, 422], [{ updateStatus: 422 }, 422], [{ limited: true }, 429]]) {
     const f = fixture(options); const session = await login(f);

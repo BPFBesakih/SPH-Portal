@@ -4,7 +4,7 @@ import {mkdtempSync,rmSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {resolve,sep} from 'node:path';
 import {openDb,all,one,run,get,insert,now,today} from '../lib/db.mjs';
-import {seedPermissions,hashPasswordSync,can,coachingAllowed,assertAdminRemains} from '../lib/auth.mjs';
+import {seedPermissions,hashPasswordSync,verifyPassword,can,coachingAllowed,assertAdminRemains} from '../lib/auth.mjs';
 import {hrRoutes} from '../lib/hr.mjs';
 import {adminRoutes} from '../lib/admin.mjs';
 import {securityRoutes} from '../lib/security.mjs';
@@ -48,6 +48,13 @@ async function makePeriod(f,postIds=f.posts.map(p=>p.id),from='2099-01-10',to='2
 }
 async function draft(f,period,basedOn){return call(rosterRoutes,f,`periods/${period.id}/revisions`,'POST',{rules_version_id:f.rules.id,seed:'fixed',based_on_revision_id:basedOn});}
 async function generate(f,r,extra={}){return call(rosterRoutes,f,`revisions/${r.id}/generate`,'POST',{row_version:r.row_version,...extra});}
+
+test('password menerima enam karakter dan menolak lima karakter',async()=>{
+  const hash=hashPasswordSync('654321');
+  assert.equal(await verifyPassword('654321',hash),true);
+  assert.throws(()=>hashPasswordSync('12345'),/6–128/);
+  assert.throws(()=>hashPasswordSync('x'.repeat(129)),/6–128/);
+});
 
 test('database menjaga foreign key, unique identifier dan audit append-only',t=>{
   const f=fixture(t);assert.throws(()=>insert(f.db,'employees',{employee_no:'P0',full_name:'Duplikat',employment_status:'Kontrak',joined_on:'2020-01-01',is_active:1}),/UNIQUE/);

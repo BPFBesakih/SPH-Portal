@@ -21,7 +21,7 @@ export async function adminRoutes(c) {
     }
     if (m === 'POST' && !id) {
       await requireAccess(db, user, 'admin.users.manage');
-      assert(typeof b.password === 'string' && b.password.length >= 12 && b.password.length <= 128, 'Password harus 12–128 karakter.');
+      assert(typeof b.password === 'string' && b.password.length >= 6 && b.password.length <= 128, 'Password harus 6–128 karakter.');
       const username = text(b.username, 'Username', 64).toLowerCase();
       assert((/^[a-z0-9._-]{1,64}$/).test(username), 'Username hanya berisi huruf kecil, angka, titik, garis bawah atau tanda hubung.');
       assert(!await one(db, 'SELECT id FROM users WHERE username=?', username), 'Username sudah digunakan.', 409);
