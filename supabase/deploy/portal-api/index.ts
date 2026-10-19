@@ -144,127 +144,146 @@ function createIdentity(env, fetchImpl = globalThis.fetch.bind(globalThis)) {
 }
 
 // supabase/functions/_shared/portal/drive.mjs
-import { Buffer } from "node:buffer";
-import { randomUUID as randomUUID3 } from "node:crypto";
-var knownReasons = /* @__PURE__ */ new Set(["invalid_grant", "invalid_client", "unauthorized_client", "access_denied", "authError", "insufficientPermissions", "insufficientFilePermissions", "appNotAuthorizedToFile", "notFound", "storageQuotaExceeded", "dailyLimitExceeded", "userRateLimitExceeded", "rateLimitExceeded", "accessNotConfigured", "domainPolicy", "badRequest", "backendError"]);
-async function errorReason(response) {
-  const reader = response.body?.getReader();
-  if (!reader) return "unknown";
-  const chunks = [];
-  let size = 0;
-  try {
-    for (; ; ) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.length;
-      if (size > 16384) {
-        await reader.cancel();
-        return "unknown";
-      }
-      chunks.push(value);
-    }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const reason = typeof body.error === "string" ? body.error : body.error?.errors?.find((e) => knownReasons.has(e.reason))?.reason;
-    return knownReasons.has(reason) ? reason : "unknown";
-  } catch {
-    return "unknown";
-  } finally {
-    reader.releaseLock();
-  }
+import {Buffer} from 'node:buffer';
+import {randomUUID as randomUUID3} from 'node:crypto';
+
+
+const knownReasons=new Set(['invalid_grant','invalid_client','unauthorized_client','access_denied','authError','insufficientPermissions','insufficientFilePermissions','appNotAuthorizedToFile','notFound','storageQuotaExceeded','dailyLimitExceeded','userRateLimitExceeded','rateLimitExceeded','accessNotConfigured','domainPolicy','badRequest','backendError']);
+async function errorReason(response){
+ const reader=response.body?.getReader();if(!reader)return 'unknown';const chunks=[];let size=0;
+ try{
+  for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>16384){await reader.cancel();return 'unknown';}chunks.push(value);}
+  const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  const reason=typeof body.error==='string'?body.error:body.error?.errors?.find(e=>knownReasons.has(e.reason))?.reason;
+  return knownReasons.has(reason)?reason:'unknown';
+ }catch{return 'unknown';}finally{reader.releaseLock();}
 }
-function storageError(stage, status, reason) {
-  let message = "Penyimpanan berkas belum dapat diakses.";
-  if (reason === "invalid_grant") message = "Koneksi Google Drive perlu dihubungkan ulang. Token akses telah kedaluwarsa atau dicabut.";
-  else if (["invalid_client", "unauthorized_client"].includes(reason)) message = "Konfigurasi OAuth Google Drive tidak valid. Administrator perlu memeriksa koneksi penyimpanan.";
-  else if (["insufficientPermissions", "access_denied"].includes(reason)) message = "Izin koneksi Google Drive belum mengizinkan tindakan ini. Administrator perlu memeriksa izin unggah.";
-  else if (["insufficientFilePermissions", "appNotAuthorizedToFile", "domainPolicy"].includes(reason)) message = "Aplikasi belum memiliki izin untuk menyimpan berkas di folder Google Drive tujuan.";
-  else if (reason === "notFound" || status === 404) message = "Folder atau berkas Google Drive tidak ditemukan atau belum dapat diakses aplikasi.";
-  else if (reason === "storageQuotaExceeded") message = "Penyimpanan Google Drive penuh. Hubungi administrator untuk memeriksa kuota.";
-  else if (["dailyLimitExceeded", "userRateLimitExceeded", "rateLimitExceeded"].includes(reason)) message = "Batas penggunaan Google Drive tercapai. Coba lagi beberapa saat atau hubungi administrator.";
-  else if (reason === "accessNotConfigured") message = "Google Drive API belum aktif untuk koneksi penyimpanan aplikasi.";
-  else if (reason === "network_error") message = "Penyimpanan berkas belum dapat dihubungi.";
-  else if (stage === "upload") message = `Google Drive menolak unggahan berkas (HTTP ${status}). Hubungi administrator.`;
-  else if (stage === "token") message = `Koneksi Google Drive gagal memperbarui akses (HTTP ${status}). Hubungi administrator.`;
-  return new AppError(503, message, { service: "google_drive", stage, upstream_status: status, reason });
+function storageError(stage,status,reason){
+ let message='Penyimpanan berkas belum dapat diakses.';
+ if(reason==='invalid_grant')message='Koneksi Google Drive perlu dihubungkan ulang. Token akses telah kedaluwarsa atau dicabut.';
+ else if(['invalid_client','unauthorized_client'].includes(reason))message='Konfigurasi OAuth Google Drive tidak valid. Administrator perlu memeriksa koneksi penyimpanan.';
+ else if(['insufficientPermissions','access_denied'].includes(reason))message='Izin koneksi Google Drive belum mengizinkan tindakan ini. Administrator perlu memeriksa izin unggah.';
+ else if(['insufficientFilePermissions','appNotAuthorizedToFile','domainPolicy'].includes(reason))message='Aplikasi belum memiliki izin untuk menyimpan berkas di folder Google Drive tujuan.';
+ else if(reason==='notFound'||status===404)message='Folder atau berkas Google Drive tidak ditemukan atau belum dapat diakses aplikasi.';
+ else if(reason==='storageQuotaExceeded')message='Penyimpanan Google Drive penuh. Hubungi administrator untuk memeriksa kuota.';
+ else if(['dailyLimitExceeded','userRateLimitExceeded','rateLimitExceeded'].includes(reason))message='Batas penggunaan Google Drive tercapai. Coba lagi beberapa saat atau hubungi administrator.';
+ else if(reason==='accessNotConfigured')message='Google Drive API belum aktif untuk koneksi penyimpanan aplikasi.';
+ else if(reason==='network_error')message='Penyimpanan berkas belum dapat dihubungi.';
+ else if(stage==='upload')message=`Google Drive menolak unggahan berkas (HTTP ${status}). Hubungi administrator.`;
+ else if(stage==='token')message=`Koneksi Google Drive gagal memperbarui akses (HTTP ${status}). Hubungi administrator.`;
+ return new AppError(503,message,{service:'google_drive',stage,upstream_status:status,reason});
 }
-function createDriveStorage(env, fetchImpl = globalThis.fetch.bind(globalThis)) {
-  const value = (name) => typeof env[name] === "string" ? env[name].trim() : "";
-  const folder = value("GOOGLE_DRIVE_FOLDER_ID"), clientId = value("GOOGLE_DRIVE_CLIENT_ID"), clientSecret = value("GOOGLE_DRIVE_CLIENT_SECRET"), refreshToken = value("GOOGLE_DRIVE_REFRESH_TOKEN");
-  const created = [];
-  let access;
-  async function request(url, options = {}, stage = "storage") {
-    let r;
-    try {
-      r = await fetchImpl(url, { ...options, redirect: "manual", signal: AbortSignal.timeout(12e3) });
-    } catch {
-      throw storageError(stage, null, "network_error");
-    }
-    if (!r.ok) throw storageError(stage, r.status, await errorReason(r));
-    return r;
-  }
-  async function token() {
-    if (access) return access;
-    assert(folder && clientId && clientSecret && refreshToken, "Penyimpanan berkas belum dikonfigurasi.", 503);
-    const r = await request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken }) }, "token");
-    const j = await r.json();
-    assert(typeof j.access_token === "string" && j.access_token.length < 8192, "Penyimpanan berkas belum dapat diakses.", 503);
-    access = j.access_token;
-    return access;
-  }
-  const headers = async () => ({ Authorization: `Bearer ${await token()}` });
-  const valid = (id) => assert(typeof id === "string" && /^[A-Za-z0-9_-]{8,200}$/.test(id), "Berkas tidak tersedia.", 404);
-  return {
-    async put(data, mime) {
-      const boundary = `sph_${randomUUID3()}`;
-      const metadata = { name: randomUUID3(), parents: [folder], appProperties: { sph_portal: "v1" } };
-      const body = new Blob([`--${boundary}\r
-Content-Type: application/json; charset=UTF-8\r
-\r
-${JSON.stringify(metadata)}\r
---${boundary}\r
-Content-Type: ${mime}\r
-\r
-`, data, `\r
---${boundary}--`]);
-      const r = await request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", { method: "POST", headers: { ...await headers(), "Content-Type": `multipart/related; boundary=${boundary}` }, body }, "upload");
-      const file = await r.json();
-      valid(file.id);
-      created.push(file.id);
-      return file.id;
-    },
-    async get(id) {
-      valid(id);
-      const meta = await (await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,parents,trashed,appProperties`, { headers: await headers() }, "metadata")).json();
-      assert(meta.id === id && !meta.trashed && meta.parents?.includes(folder) && meta.appProperties?.sph_portal === "v1", "Berkas tidak tersedia.", 404);
-      const r = await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`, { headers: await headers() }, "download");
-      const chunks = [];
-      let size = 0;
-      const reader = r.body.getReader();
-      try {
-        for (; ; ) {
-          const { done, value: value2 } = await reader.read();
-          if (done) break;
-          size += value2.length;
-          if (size > 10 * 1024 * 1024) {
-            await reader.cancel();
-            throw new AppError(503, "Berkas melebihi ukuran yang diizinkan.");
-          }
-          chunks.push(value2);
-        }
-      } finally {
-        reader.releaseLock();
-      }
-      return Buffer.concat(chunks);
-    },
-    async rollback() {
-      for (const id of created) {
-        try {
-          await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`, { method: "DELETE", headers: await headers() }, "cleanup");
-        } catch {
-        }
-      }
-    }
-  };
+const driveModuleFolders=Object.freeze({
+ sop:'SPH-Portal-SOP',pelatihan:'SPH-Portal-Pelatihan',pegawai:'SPH-Portal-Pegawai',
+ patroli:'SPH-Portal-Patroli',kejadian:'SPH-Portal-Kejadian',informasi:'SPH-Portal-Informasi',
+ pengadaan:'SPH-Portal-Pengadaan',website:'SPH-Portal-Website',
+});
+function driveModuleForOperation(path,body={}){
+ const resource=typeof path==='string'?path.split('/')[0]:'';
+ if(resource==='attachments')return {employee:'pegawai',logbook:'patroli',incident:'kejadian'}[body?.type]||null;
+ const module={documents:'sop',training:'pelatihan',employees:'pegawai',logbook:'patroli',incidents:'kejadian',announcements:'informasi',purchasing:'pengadaan',website:'website'}[resource];
+ return typeof module==='string'?module:null;
+}
+function createDriveStorage(env,fetchImpl=globalThis.fetch.bind(globalThis),options={}){
+ const value=name=>typeof env[name]==='string'?env[name].trim():'';
+ const folder=value('GOOGLE_DRIVE_FOLDER_ID'),clientId=value('GOOGLE_DRIVE_CLIENT_ID'),clientSecret=value('GOOGLE_DRIVE_CLIENT_SECRET'),refreshToken=value('GOOGLE_DRIVE_REFRESH_TOKEN');
+ const created=[],moves=[],claimed=new Set(),folders=new Map();let access;
+ const folderType='application/vnd.google-apps.folder';
+ const metadataFields='id,parents,trashed,mimeType,appProperties';
+ async function request(url,options={},stage='storage'){
+  let r;try{r=await fetchImpl(url,{...options,redirect:'manual',signal:AbortSignal.timeout(12000)});}catch{throw storageError(stage,null,'network_error');}
+  if(!r.ok)throw storageError(stage,r.status,await errorReason(r));return r;
+ }
+ async function token(){
+  if(access)return access;
+  assert(folder&&clientId&&clientSecret&&refreshToken,'Penyimpanan berkas belum dikonfigurasi.',503);
+  const r=await request('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:clientId,client_secret:clientSecret,refresh_token:refreshToken})},'token');
+  const j=await r.json();assert(typeof j.access_token==='string'&&j.access_token.length<8192,'Penyimpanan berkas belum dapat diakses.',503);access=j.access_token;return access;
+ }
+ const headers=async()=>({Authorization:`Bearer ${await token()}`});
+ const valid=id=>assert(typeof id==='string'&&/^[A-Za-z0-9_-]{8,200}$/.test(id),'Berkas tidak tersedia.',404);
+ const knownModule=module=>typeof module==='string'&&Object.hasOwn(driveModuleFolders,module);
+ const validFolder=(meta,module)=>meta&&typeof meta.id==='string'&&/^[A-Za-z0-9_-]{8,200}$/.test(meta.id)&&meta.trashed===false&&meta.mimeType===folderType&&meta.parents?.length===1&&meta.parents[0]===folder&&meta.appProperties?.sph_portal==='v1'&&meta.appProperties.sph_module===module;
+ async function metadata(id){
+  valid(id);
+  try{return await (await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=${metadataFields}`,{headers:await headers()},'metadata')).json();}
+  catch(error){if(error instanceof AppError&&error.details?.stage==='metadata'&&error.details.upstream_status===404)throw new AppError(404,'Berkas tidak tersedia.');throw error;}
+ }
+ async function moduleFolder(module){
+  assert(knownModule(module),'Modul penyimpanan tidak valid.');
+  if(!folders.has(module)){
+   const pending=(async()=>{
+    valid(folder);
+    const url=new URL('https://www.googleapis.com/drive/v3/files');
+    url.searchParams.set('q',`'${folder}' in parents and trashed = false and mimeType = '${folderType}' and appProperties has { key='sph_portal' and value='v1' } and appProperties has { key='sph_module' and value='${module}' }`);
+    url.searchParams.set('fields',`files(${metadataFields})`);url.searchParams.set('pageSize','100');url.searchParams.set('orderBy','createdTime');
+    const listing=await (await request(url.href,{headers:await headers()},'folder')).json();
+    const existing=listing.files?.find(meta=>validFolder(meta,module));if(existing)return existing.id;
+    const meta=await (await request(`https://www.googleapis.com/drive/v3/files?fields=${metadataFields}`,{method:'POST',headers:{...await headers(),'Content-Type':'application/json'},body:JSON.stringify({name:driveModuleFolders[module],mimeType:folderType,parents:[folder],appProperties:{sph_portal:'v1',sph_module:module}})},'folder')).json();
+    assert(validFolder(meta,module),'Folder penyimpanan belum dapat diverifikasi.',503);return meta.id;
+   })();folders.set(module,pending);
+   try{return await pending;}catch(error){folders.delete(module);throw error;}
+  }return folders.get(module);
+ }
+ async function ownedMetadata(id){
+  const meta=await metadata(id);
+  assert(meta.id===id&&meta.trashed===false&&typeof meta.mimeType==='string'&&meta.mimeType!==folderType&&meta.appProperties?.sph_portal==='v1'&&meta.parents?.length===1,'Berkas tidak tersedia.',404);
+  if(meta.parents[0]===folder)return meta;
+  const parent=await metadata(meta.parents[0]),module=parent?.appProperties?.sph_module;
+  assert(knownModule(module)&&validFolder(parent,module)&&parent.id===meta.parents[0]&&(!meta.appProperties.sph_module||meta.appProperties.sph_module===module),'Berkas tidak tersedia.',404);
+  return meta;
+ }
+ async function move(id,from,to,properties){
+  const url=new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`);
+  url.searchParams.set('addParents',to);url.searchParams.set('removeParents',from);url.searchParams.set('fields',metadataFields);
+  return (await request(url.href,{method:'PATCH',headers:{...await headers(),'Content-Type':'application/json'},body:JSON.stringify({appProperties:properties})},'organize')).json();
+ }
+ async function organize(id,module,meta){
+  assert(knownModule(module),'Modul penyimpanan tidak valid.');meta=meta||await ownedMetadata(id);
+  if(meta.parents[0]!==folder&&meta.appProperties.sph_module===module)return;
+  const target=await moduleFolder(module);if(meta.parents[0]===target)return;
+  // Record before PATCH so an uncertain network result can be reconciled on rollback.
+  moves.push({id,from:meta.parents[0],to:target,properties:{...meta.appProperties}});
+  const moved=await move(id,meta.parents[0],target,{...meta.appProperties,sph_module:module});
+  assert(moved.id===id&&moved.parents?.length===1&&moved.parents[0]===target&&moved.appProperties?.sph_portal==='v1'&&moved.appProperties.sph_module===module,'Pemindahan berkas belum dapat diverifikasi.',503);
+ }
+ return {
+  async put(data,mime){
+   const boundary=`sph_${randomUUID3()}`;
+   const module=options.module;assert(module==null||knownModule(module),'Modul penyimpanan tidak valid.');
+   const parent=module?await moduleFolder(module):folder;
+   const meta={name:randomUUID3(),parents:[parent],appProperties:{sph_portal:'v1',...(module?{sph_module:module}:{})}};
+   const body=new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`,data,`\r\n--${boundary}--`]);
+   const r=await request('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',{method:'POST',headers:{...await headers(),'Content-Type':`multipart/related; boundary=${boundary}`},body},'upload');
+   const file=await r.json();valid(file.id);created.push(file.id);return file.id;
+  },
+  claim(id){valid(id);claimed.add(id);},
+  async finalize(){
+   if(!claimed.size)return;
+   assert(knownModule(options.module),'Modul lampiran belum dapat ditentukan.',503);
+   for(const id of claimed)await organize(id,options.module);
+   claimed.clear();
+  },
+  async get(id,module){
+   const meta=await ownedMetadata(id);
+   if(module)await organize(id,module,meta);
+   const r=await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`,{headers:await headers()},'download');
+   const chunks=[];let size=0;const reader=r.body.getReader();
+   try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>10*1024*1024){await reader.cancel();throw new AppError(503,'Berkas melebihi ukuran yang diizinkan.');}chunks.push(value);}}finally{reader.releaseLock();}
+   return Buffer.concat(chunks);
+  },
+  async rollback(){
+   for(const entry of moves.slice().reverse()){
+    if(created.includes(entry.id))continue;
+    try{
+     const meta=await ownedMetadata(entry.id);if(meta.parents[0]!==entry.to)continue;
+     // Drive merges appProperties; null removes a newly added property.
+     await move(entry.id,entry.to,entry.from,{...entry.properties,sph_module:entry.properties.sph_module||null});
+    }catch{/* Both the original root and verified module folders remain readable. */}
+   }
+   for(const id of created){try{await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`,{method:'DELETE',headers:await headers()},'cleanup');}catch{/* An unlinked private upload remains inaccessible through the portal. */}}
+  },
+ };
 }
 
 // supabase/functions/_shared/portal/router.mjs
@@ -306,7 +325,16 @@ var purchasingRoleCodes = {
 };
 var purchasingRoles = Object.entries(purchasingRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
 async function grants(db, user) {
-  return await all(db, `SELECT ur.id,ur.scope_kind,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=?`, user.id);
+  return await all(db, `SELECT DISTINCT ur.id,ur.scope_kind,r.code role_code,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN permissions p ON EXISTS(SELECT 1 FROM role_permissions rp WHERE rp.role_id=r.id AND rp.permission_id=p.id) OR (r.code='SUPER_ADMIN' AND ur.scope_kind='ALL') WHERE ur.user_id=?`, user.id);
+}
+var IT_ADMIN_PERMISSIONS = ["admin.users.read", "admin.users.manage", "admin.users.reset", "admin.roles.read", "admin.roles.manage", "admin.audit.read"];
+async function isSuperAdmin(db, user) {
+  return Boolean(await one(db, "SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=? AND r.is_active=1 AND r.code='SUPER_ADMIN' AND ur.scope_kind='ALL'", user.id));
+}
+async function protectAdminAccount(db, actor, targetId) {
+  assert(await isSuperAdmin(db, actor) || !await isSuperAdmin(db, {
+    id: targetId
+  }), "Hanya Superadmin yang boleh mengubah akun atau memulihkan password Superadmin.", 403);
 }
 async function employeeContext(db, id, asOf) {
   const e = await one(db, `SELECT e.id employee_id,p.org_unit_id FROM employees e LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?) LEFT JOIN positions p ON p.id=ep.position_id WHERE e.id=?`, asOf || today(), asOf || today(), id);
@@ -358,6 +386,7 @@ async function coachingAllowed(db, user, action, session) {
   });
 }
 async function documentAllowed(db, user, action, doc) {
+  if (doc.is_archived) return false;
   const permission = `hr.documents.${action}`;
   if (!["read", "download"].includes(action)) return await can(db, user, permission, {
     org_unit_id: doc.owner_org_unit_id
@@ -385,7 +414,7 @@ async function trainingAllowed(db, user, action, event) {
 }
 async function assertAdminRemains(db) {
   const users = await all(db, `SELECT u.* FROM users u LEFT JOIN employees e ON e.id=u.employee_id WHERE u.status='ACTIVE' AND (u.employee_id IS NULL OR e.is_active=1)`);
-  assert(await asyncSome(users, async (u) => await can(db, u, "admin.users.manage") && await can(db, u, "admin.roles.manage")), "Administrator terakhir yang aktif tidak boleh dinonaktifkan atau kehilangan izin.", 409);
+  assert(await asyncSome(users, async u => await isSuperAdmin(db, u)), "Administrator terakhir dengan role Superadmin yang aktif tidak boleh dinonaktifkan atau kehilangan role.", 409);
 }
 var safeUser = (u) => ({
   id: u.id,
@@ -412,6 +441,7 @@ var DEFAULT_SETTINGS = Object.freeze({
   min_quotes_per_item: 2,
   officials: {
     sekban_position_id: null,
+    sekban_deputy_position_id: null,
     kaban_position_id: null
   },
   unit_codes: {},
@@ -624,12 +654,13 @@ async function purchasingSettings(db) {
   }
   return mergeSettings(stored);
 }
-async function purchasingAccess(db, user) {
-  const rows = (await grants(db, user)).filter((g) => g.code.startsWith("purchasing.") || g.code === "admin.audit.read");
-  const unitRows = rows.some((g) => g.scope_kind === "ASSIGNED_UNITS") ? await all(db, "SELECT user_role_id,org_unit_id,include_descendants FROM user_role_units WHERE user_role_id IN (SELECT id FROM user_roles WHERE user_id=?)", user.id) : [];
-  const tree = unitRows.some((u) => u.include_descendants) ? await all(db, "SELECT id,parent_id FROM org_units") : [];
-  const below = (root) => {
-    const found = /* @__PURE__ */ new Set([root]);
+async function purchasingAccess(db, user, settings) {
+  settings = settings || await purchasingSettings(db);
+  const rows = (await grants(db, user)).filter(g => g.code.startsWith("purchasing.") || g.code === "admin.audit.read");
+  const unitRows = rows.some(g => g.scope_kind === "ASSIGNED_UNITS") ? await all(db, "SELECT user_role_id,org_unit_id,include_descendants FROM user_role_units WHERE user_role_id IN (SELECT id FROM user_roles WHERE user_id=?)", user.id) : [];
+  const tree = unitRows.some(u => u.include_descendants) ? await all(db, "SELECT id,parent_id FROM org_units") : [];
+  const below = root => {
+    const found = new Set([root]);
     let grew = true;
     while (grew) {
       grew = false;
@@ -645,15 +676,15 @@ async function purchasingAccess(db, user) {
     const p = perms[g.code] || (perms[g.code] = {
       all: false,
       self: false,
-      units: /* @__PURE__ */ new Set()
+      units: new Set()
     });
-    if (g.scope_kind === "ALL") p.all = true;
-    else if (g.scope_kind === "SELF") p.self = true;
-    else if (g.scope_kind === "ASSIGNED_UNITS") for (const u of unitRows.filter((u2) => u2.user_role_id === g.id)) for (const id of u.include_descendants ? below(u.org_unit_id) : [u.org_unit_id]) p.units.add(id);
+    if (g.scope_kind === "ALL") p.all = true; else if (g.scope_kind === "SELF") p.self = true; else if (g.scope_kind === "ASSIGNED_UNITS") for (const u of unitRows.filter(u2 => u2.user_role_id === g.id)) for (const id of u.include_descendants ? below(u.org_unit_id) : [u.org_unit_id]) p.units.add(id);
   }
   return {
+    superadmin: rows.some(g => g.role_code === "SUPER_ADMIN" && g.scope_kind === "ALL"),
+    sekban_peers: await sekbanPeers(db, settings, user.employee_id, today()),
     perms,
-    has: (code) => Boolean(perms[code]),
+    has: code => Boolean(perms[code]),
     allows: (code, ctx = {}) => {
       const p = perms[code];
       if (!p) return false;
@@ -661,7 +692,7 @@ async function purchasingAccess(db, user) {
       if (p.self && user.employee_id && ctx.employee_id === user.employee_id) return true;
       return Boolean(ctx.org_unit_id && p.units.has(ctx.org_unit_id));
     },
-    broad: (code) => {
+    broad: code => {
       const p = perms[code];
       return Boolean(p && (p.all || p.units.size));
     }
@@ -675,6 +706,20 @@ async function employeeOnDate(db, employeeId, asOf = today()) {
 async function positionHolders(db, positionId, asOf) {
   return await all(db, `SELECT DISTINCT e.id,e.full_name,e.employee_no,e.phone,p.name position_name FROM employee_placements ep JOIN employees e ON e.id=ep.employee_id JOIN positions p ON p.id=ep.position_id
     WHERE ep.position_id=? AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?) AND e.is_active=1 ORDER BY e.full_name`, positionId, asOf, asOf);
+}
+async function sekbanHolders(db, settings, asOf) {
+  const ids = [settings.officials.sekban_position_id, settings.officials.sekban_deputy_position_id, settings.officials.kaban_position_id];
+  if (!ids.every(Boolean) || new Set(ids).size !== 3) return [];
+  const holders = await all(db, `SELECT DISTINCT ep.position_id,e.id,e.full_name,e.employee_no,e.phone,p.name position_name
+    FROM employee_placements ep JOIN employees e ON e.id=ep.employee_id JOIN positions p ON p.id=ep.position_id
+    WHERE ep.position_id IN (?,?,?) AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?) AND e.is_active=1 AND p.is_active=1`, ...ids, asOf, asOf);
+  if (ids.some(id => holders.filter(h => h.position_id === id).length !== 1) || new Set(holders.map(h => h.id)).size !== 3) return [];
+  return holders.filter(h => h.position_id !== settings.officials.kaban_position_id);
+}
+async function sekbanPeers(db, settings, employeeId, asOf) {
+  if (!employeeId || !settings.officials.sekban_deputy_position_id) return [];
+  const holders = await sekbanHolders(db, settings, asOf);
+  return holders.some(h => h.id === employeeId) ? [...new Set(holders.map(h => h.id))].filter(id => id !== employeeId) : [];
 }
 async function official(db, settings, kind, asOf) {
   const name = kind === "SEKBAN" ? "Sekban" : "Kaban", positionId = settings.officials[kind === "SEKBAN" ? "sekban_position_id" : "kaban_position_id"];
@@ -772,7 +817,7 @@ async function supersedePending(db, requestId, objectId = null) {
 }
 async function finalTarget(db, settings, request, kind, asOf) {
   let approver = await official(db, settings, kind, asOf);
-  if (approver.id === request.requester_employee_id && kind === "SEKBAN") {
+  if (kind === "SEKBAN" && (approver.id === request.requester_employee_id || (await sekbanPeers(db, settings, approver.id, asOf)).includes(request.requester_employee_id))) {
     kind = "KABAN";
     approver = await official(db, settings, "KABAN", asOf);
   }
@@ -789,13 +834,14 @@ async function actingAs(db, acc, user, request, step, asOf) {
   assert(step.status === "PENDING", "Tahap ini sudah diputuskan. Muat ulang data.", 409);
   assert(user.employee_id, "Akun Anda belum tertaut ke data pegawai.", 403);
   assert(user.employee_id !== request.requester_employee_id, "Pemohon tidak boleh bertindak di tahap persetujuan PR-nya sendiri.", 403);
+  if (acc.superadmin) return 0;
   if (step.target_kind === "VERIFIERS") {
     assert(acc.allows("purchasing.requests.verify", {
       org_unit_id: request.org_unit_id
     }), "Anda tidak berwenang memverifikasi PR ini.", 403);
     return 0;
   }
-  if (step.target_employee_id === user.employee_id) return 0;
+  if (step.target_employee_id === user.employee_id || acc.sekban_peers.includes(step.target_employee_id)) return 0;
   assert((await delegatorsOf(db, user.employee_id, asOf)).includes(step.target_employee_id), "Tahap ini menunggu penyetuju lain.", 403);
   return 1;
 }
@@ -811,9 +857,9 @@ async function decide(db, user, me, step, status, reason, asDelegate) {
     acted_at: now()
   });
 }
-async function involvedIn(db, user, request, asOf) {
+async function involvedIn(db, acc, user, request, asOf) {
   if (!user.employee_id) return false;
-  const ids = [user.employee_id, ...await delegatorsOf(db, user.employee_id, asOf)];
+  const ids = [user.employee_id, ...acc.sekban_peers, ...await delegatorsOf(db, user.employee_id, asOf)];
   return Boolean(await one(db, `SELECT 1 hit FROM purchase_approval_steps WHERE request_id=? AND (actor_employee_id=? OR target_employee_id IN (${ids.map(() => "?").join(",")})) LIMIT 1`, request.id, user.employee_id, ...ids));
 }
 async function viewOf(db, acc, user, request, asOf) {
@@ -823,7 +869,7 @@ async function viewOf(db, acc, user, request, asOf) {
   };
   const staff = acc.allows("purchasing.procurement.manage", ctx) || acc.allows("purchasing.requests.verify", ctx);
   const reader = acc.broad("purchasing.requests.read") && acc.allows("purchasing.requests.read", ctx);
-  const involved = staff || reader ? true : await involvedIn(db, user, request, asOf);
+  const involved = staff || reader ? true : await involvedIn(db, acc, user, request, asOf);
   const own = Boolean(user.employee_id && request.requester_employee_id === user.employee_id);
   return {
     own,
@@ -1209,11 +1255,11 @@ async function issueOrderDocument(db, user, settings, request, order, step, appr
   const doc = await one(db, "SELECT * FROM vendor_order_documents WHERE order_id=?", order.id);
   const issued = today(), yr = year(issued);
   const number = documentNumber(doc.doc_kind, await nextSequence(db, doc.doc_kind, "PURCHASE", yr, numberFloor(settings, doc.doc_kind, yr)), issued);
-  const target = await employeeOnDate(db, step.target_employee_id, issued);
+  const target = await isSuperAdmin(db, user) || (await sekbanPeers(db, settings, approvedBy.id, issued)).includes(step.target_employee_id) ? approvedBy : await employeeOnDate(db, step.target_employee_id, issued);
   const saved = await update(db, "vendor_order_documents", doc.id, doc.row_version, {
     number,
     doc_date: issued,
-    signer_employee_id: step.target_employee_id,
+    signer_employee_id: target?.id || step.target_employee_id,
     signer_name: target?.full_name || approvedBy.full_name,
     signer_position: target?.position_name || approvedBy.position_name || null
   });
@@ -1284,12 +1330,12 @@ async function listRequests(db, acc, user, view, url) {
   };
 }
 async function pendingSteps(db, acc, user, asOf) {
-  const ids = user.employee_id ? [user.employee_id, ...await delegatorsOf(db, user.employee_id, asOf)] : [];
-  const mine = ids.length ? await all(db, `SELECT s.*,r.requester_employee_id FROM purchase_approval_steps s JOIN purchase_requests r ON r.id=s.request_id WHERE s.status='PENDING' AND s.target_kind='EMPLOYEE' AND s.target_employee_id IN (${ids.map(() => "?").join(",")}) ORDER BY s.created_at`, ...ids) : [];
-  const verify = acc.has("purchasing.requests.verify") ? (await all(db, "SELECT s.*,r.requester_employee_id,r.org_unit_id FROM purchase_approval_steps s JOIN purchase_requests r ON r.id=s.request_id WHERE s.status='PENDING' AND s.target_kind='VERIFIERS' ORDER BY s.created_at")).filter((s) => acc.allows("purchasing.requests.verify", {
+  const ids = user.employee_id ? [user.employee_id, ...acc.sekban_peers, ...await delegatorsOf(db, user.employee_id, asOf)] : [];
+  const mine = acc.superadmin ? await all(db, "SELECT s.*,r.requester_employee_id FROM purchase_approval_steps s JOIN purchase_requests r ON r.id=s.request_id WHERE s.status='PENDING' ORDER BY s.created_at") : ids.length ? await all(db, `SELECT s.*,r.requester_employee_id FROM purchase_approval_steps s JOIN purchase_requests r ON r.id=s.request_id WHERE s.status='PENDING' AND s.target_kind='EMPLOYEE' AND s.target_employee_id IN (${ids.map(() => "?").join(",")}) ORDER BY s.created_at`, ...ids) : [];
+  const verify = !acc.superadmin && acc.has("purchasing.requests.verify") ? (await all(db, "SELECT s.*,r.requester_employee_id,r.org_unit_id FROM purchase_approval_steps s JOIN purchase_requests r ON r.id=s.request_id WHERE s.status='PENDING' AND s.target_kind='VERIFIERS' ORDER BY s.created_at")).filter(s => acc.allows("purchasing.requests.verify", {
     org_unit_id: s.org_unit_id
   })) : [];
-  return [...mine, ...verify].filter((s) => s.requester_employee_id !== user.employee_id);
+  return [...mine, ...verify].filter(s => s.requester_employee_id !== user.employee_id);
 }
 async function requestDetail(db, acc, user, settings, request) {
   const asOf = today(), view = await viewOf(db, acc, user, request, asOf);
@@ -1310,7 +1356,7 @@ async function requestDetail(db, acc, user, settings, request) {
     const docs = await all(db, "SELECT d.* FROM vendor_order_documents d JOIN vendor_orders o ON o.id=d.order_id WHERE o.request_id=?", request.id);
     const appointments = await all(db, "SELECT a.* FROM vendor_appointments a JOIN vendor_orders o ON o.id=a.order_id WHERE o.request_id=? ORDER BY a.created_at", request.id);
     const receipts = await all(db, "SELECT r.* FROM order_receipts r JOIN vendor_orders o ON o.id=r.order_id WHERE o.request_id=?", request.id);
-    orders = orderRows.map((o) => ({
+    orders = orderRows.map(o => ({
       id: o.id,
       path: o.path,
       document_kind: o.document_kind,
@@ -1334,38 +1380,39 @@ async function requestDetail(db, acc, user, settings, request) {
           leader_nik: o.leader_nik
         } : {}
       } : null,
-      items: orderItems.filter((i) => i.order_id === o.id).map((i) => ({
+      items: orderItems.filter(i => i.order_id === o.id).map(i => ({
         ...i,
         unit_price: Number(i.unit_price),
         subtotal: Number(i.subtotal),
         purchase_unit_price: i.purchase_unit_price === null ? null : Number(i.purchase_unit_price)
       })),
-      document: docs.find((d) => d.order_id === o.id) || null,
-      appointments: appointments.filter((a) => a.order_id === o.id),
-      receipt: receipts.find((r) => r.order_id === o.id) || null,
-      attachments: attachments2.filter((a) => a.owner_type === "ORDER" && a.owner_id === o.id)
+      document: docs.find(d => d.order_id === o.id) || null,
+      appointments: appointments.filter(a => a.order_id === o.id),
+      receipt: receipts.find(r => r.order_id === o.id) || null,
+      attachments: attachments2.filter(a => a.owner_type === "ORDER" && a.owner_id === o.id)
     }));
   } else {
-    orders = (await all(db, "SELECT id,status,due_on FROM vendor_orders WHERE request_id=? AND status<>'cancelled' ORDER BY created_at", request.id)).map((o) => ({
+    orders = (await all(db, "SELECT id,status,due_on FROM vendor_orders WHERE request_id=? AND status<>'cancelled' ORDER BY created_at", request.id)).map(o => ({
       id: o.id,
       status: o.status,
       due_on: o.due_on,
       late: isLate(o, asOf)
     }));
   }
-  const pending = steps.filter((s) => s.status === "PENDING");
+  const pending = steps.filter(s => s.status === "PENDING");
   const delegators = user.employee_id ? await delegatorsOf(db, user.employee_id, asOf) : [];
-  const myStep = pending.find((s) => {
+  const myStep = pending.find(s => {
     if (!user.employee_id || user.employee_id === request.requester_employee_id) return false;
+    if (acc.superadmin) return true;
     if (s.target_kind === "VERIFIERS") return acc.allows("purchasing.requests.verify", {
       org_unit_id: request.org_unit_id
     });
-    return s.target_employee_id === user.employee_id || delegators.includes(s.target_employee_id);
+    return s.target_employee_id === user.employee_id || acc.sekban_peers.includes(s.target_employee_id) || delegators.includes(s.target_employee_id);
   });
   const staff = acc.allows("purchasing.procurement.manage", {
     org_unit_id: request.org_unit_id
   });
-  const covered = new Set(orders.filter((o) => o.status !== "cancelled" && o.items).flatMap((o) => o.items.map((i) => i.request_item_id)));
+  const covered = new Set(orders.filter(o => o.status !== "cancelled" && o.items).flatMap(o => o.items.map(i => i.request_item_id)));
   const total = Number(request.approved_total ?? request.estimated_total);
   let suggestion = null;
   if (staff && request.status === "pending_completeness_check") {
@@ -1375,7 +1422,7 @@ async function requestDetail(db, acc, user, settings, request) {
   return {
     ...requestRow(request),
     view: view.full ? "full" : "requester",
-    items: items.map((i) => ({
+    items: items.map(i => ({
       ...i,
       unit_price: Number(i.unit_price),
       subtotal: Number(i.subtotal),
@@ -1383,18 +1430,18 @@ async function requestDetail(db, acc, user, settings, request) {
       approved_subtotal: Number(i.approved_subtotal),
       quantity: formatQuantity(i.quantity_milli),
       ordered: covered.has(i.id),
-      attachments: attachments2.filter((a) => a.owner_type === "ITEM" && a.owner_id === i.id),
-      quotes: quotes.filter((q) => q.item_id === i.id).map((q) => ({
+      attachments: attachments2.filter(a => a.owner_type === "ITEM" && a.owner_id === i.id),
+      quotes: quotes.filter(q => q.item_id === i.id).map(q => ({
         ...q,
         unit_price: Number(q.unit_price),
-        attachments: attachments2.filter((a) => a.owner_type === "QUOTE" && a.owner_id === q.id)
+        attachments: attachments2.filter(a => a.owner_type === "QUOTE" && a.owner_id === q.id)
       }))
     })),
-    steps: steps.map((s) => ({
+    steps: steps.map(s => ({
       ...s,
       label: STEP_LABELS[s.step_kind]
     })),
-    confirmations: confirmations.map((c) => ({
+    confirmations: confirmations.map(c => ({
       ...c,
       old_unit_price: Number(c.old_unit_price),
       new_unit_price: Number(c.new_unit_price),
@@ -1403,7 +1450,7 @@ async function requestDetail(db, acc, user, settings, request) {
     })),
     orders,
     documents,
-    budget_line: request.budget_line_id ? (await budgetLines(db, year(request.request_date))).find((l) => l.id === request.budget_line_id) || null : null,
+    budget_line: request.budget_line_id ? (await budgetLines(db, year(request.request_date))).find(l => l.id === request.budget_line_id) || null : null,
     allowed_paths: allowedPaths(total, settings),
     suggested_pr_number: suggestion,
     actions: {
@@ -1413,14 +1460,14 @@ async function requestDetail(db, acc, user, settings, request) {
         label: STEP_LABELS[myStep.step_kind],
         object_type: myStep.object_type,
         object_id: myStep.object_id,
-        as_delegate: myStep.target_kind === "EMPLOYEE" && myStep.target_employee_id !== user.employee_id
+        as_delegate: !acc.superadmin && myStep.target_kind === "EMPLOYEE" && myStep.target_employee_id !== user.employee_id && !acc.sekban_peers.includes(myStep.target_employee_id)
       } : null,
       revise: view.own && request.status === "returned",
       cancel: view.own && CANCELLABLE.includes(request.status) && !request.pr_number,
       answer: view.own && request.status === "pending_requester_confirmation",
       completeness: staff && request.status === "pending_completeness_check",
       procure: staff && request.status === "in_procurement",
-      reassign: acc.has("purchasing.settings.manage") && pending.some((s) => s.target_kind === "EMPLOYEE"),
+      reassign: acc.has("purchasing.settings.manage") && pending.some(s => s.target_kind === "EMPLOYEE"),
       verify_budget: acc.allows("purchasing.requests.verify", {
         org_unit_id: request.org_unit_id
       })
@@ -1481,26 +1528,32 @@ async function settingsValues(db, b, current) {
     comparison_min_total: amount("comparison_min_total", "Batas perbandingan harga"),
     officials: {
       ...current.officials,
-      ...s.officials || {}
+      ...s.officials || ({})
     },
     number_floor: {
       ...current.number_floor,
-      ...s.number_floor || {}
+      ...s.number_floor || ({})
     },
     organization: {
       ...current.organization,
-      ...s.organization || {}
+      ...s.organization || ({})
     },
     texts: {
       ...current.texts,
-      ...s.texts || {}
+      ...s.texts || ({})
     },
     unit_codes: s.unit_codes === void 0 ? current.unit_codes : s.unit_codes
   });
   const quotes = Number(next.min_quotes_per_item);
   assert(Number.isInteger(quotes) && quotes >= 2 && quotes <= 5, "Jumlah harga pembanding minimal 2\u20135.");
-  for (const key of ["sekban_position_id", "kaban_position_id"]) if (next.officials[key]) await pick(db, "positions", next.officials[key], "Posisi pejabat");
+  for (const key of ["sekban_position_id", "sekban_deputy_position_id", "kaban_position_id"]) if (next.officials[key]) await pick(db, "positions", next.officials[key], "Posisi pejabat");
   assert(!next.officials.sekban_position_id || next.officials.sekban_position_id !== next.officials.kaban_position_id, "Posisi Sekban dan Kaban harus berbeda.");
+  if (next.officials.sekban_deputy_position_id) {
+    const ids = [next.officials.sekban_position_id, next.officials.sekban_deputy_position_id, next.officials.kaban_position_id];
+    assert(ids.every(Boolean) && new Set(ids).size === 3, "Posisi Sekban, Wakil Sekban, dan Kaban harus diisi dan berbeda.");
+    const holders = await asyncMap(ids, async id => await positionHolders(db, id, today()));
+    assert(holders.every(rows => rows.length === 1) && new Set(holders.map(rows => rows[0].id)).size === 3, "Sekban, Wakil Sekban, dan Kaban harus mempunyai pemegang aktif yang berbeda dan tunggal.", 409);
+  }
   const floorYear = next.number_floor.year === null || next.number_floor.year === "" ? null : Number(next.number_floor.year);
   assert(floorYear === null || Number.isInteger(floorYear) && floorYear >= 2e3 && floorYear <= 2100, "Tahun nomor awal tidak valid.");
   const floor = {
@@ -1515,7 +1568,7 @@ async function settingsValues(db, b, current) {
   const codes = {};
   for (const [unitId, code] of Object.entries(next.unit_codes)) {
     if (!code) continue;
-    assert(/^[A-Za-z0-9_-]{1,20}$/.test(String(code)), "Kode unit untuk nomor PR hanya huruf, angka, garis bawah, atau tanda hubung (maks. 20).");
+    assert((/^[A-Za-z0-9_-]{1,20}$/).test(String(code)), "Kode unit untuk nomor PR hanya huruf, angka, garis bawah, atau tanda hubung (maks. 20).");
     await pick(db, "org_units", unitId, "Unit");
     codes[unitId] = String(code).toUpperCase();
   }
@@ -1536,6 +1589,7 @@ async function settingsValues(db, b, current) {
     min_quotes_per_item: quotes,
     officials: {
       sekban_position_id: next.officials.sekban_position_id || null,
+      sekban_deputy_position_id: next.officials.sekban_deputy_position_id || null,
       kaban_position_id: next.officials.kaban_position_id || null
     },
     unit_codes: codes,
@@ -1552,15 +1606,15 @@ async function reportRows(db, acc, yr) {
   return rows;
 }
 async function purchasingRoutes(c) {
-  const { db, user, p, method: m, body: b, url } = c;
+  const {db, user, p, method: m, body: b, url} = c;
   if (p[0] !== "purchasing") return void 0;
-  const acc = await purchasingAccess(db, user), settings = await purchasingSettings(db), asOf = today();
+  const settings = await purchasingSettings(db), acc = await purchasingAccess(db, user, settings), asOf = today();
   const section = p[1], id = p[2], action = p[3];
   if (section === "overview" && m === "GET") {
     const ctx = await requesterContext(db, user, acc, settings, asOf);
     const mine = user.employee_id ? await all(db, "SELECT status FROM purchase_requests WHERE requester_employee_id=? AND status IN ('returned','pending_requester_confirmation')", user.employee_id) : [];
     const approvals = await pendingSteps(db, acc, user, asOf);
-    const queue = acc.has("purchasing.procurement.manage") ? (await all(db, "SELECT status,org_unit_id FROM purchase_requests WHERE status IN ('pending_completeness_check','in_procurement')")).filter((r) => acc.allows("purchasing.procurement.manage", {
+    const queue = acc.has("purchasing.procurement.manage") ? (await all(db, "SELECT status,org_unit_id FROM purchase_requests WHERE status IN ('pending_completeness_check','in_procurement')")).filter(r => acc.allows("purchasing.procurement.manage", {
       org_unit_id: r.org_unit_id
     })) : [];
     const supervisor = ctx.me?.supervisor_employee_id ? await one(db, "SELECT full_name FROM employees WHERE id=?", ctx.me.supervisor_employee_id) : null;
@@ -1578,8 +1632,8 @@ async function purchasingRoutes(c) {
       counts: {
         my_action: mine.length,
         approvals: approvals.length,
-        completeness: queue.filter((r) => r.status === "pending_completeness_check").length,
-        procurement: queue.filter((r) => r.status === "in_procurement").length
+        completeness: queue.filter(r => r.status === "pending_completeness_check").length,
+        procurement: queue.filter(r => r.status === "in_procurement").length
       },
       rules: {
         sekban_max_total: settings.sekban_max_total,
@@ -1589,7 +1643,7 @@ async function purchasingRoutes(c) {
       },
       capabilities: {
         submit: acc.has("purchasing.requests.create"),
-        read_all: ["purchasing.requests.read", "purchasing.requests.verify", "purchasing.procurement.manage"].some((code) => acc.broad(code)),
+        read_all: ["purchasing.requests.read", "purchasing.requests.verify", "purchasing.procurement.manage"].some(code => acc.broad(code)),
         verify: acc.has("purchasing.requests.verify"),
         procurement: acc.has("purchasing.procurement.manage"),
         vendors: acc.has("purchasing.vendors.read"),
@@ -1608,7 +1662,7 @@ async function purchasingRoutes(c) {
     const yr = Number(url.searchParams.get("year")) || year(asOf);
     return {
       vendors: staff || acc.has("purchasing.vendors.read") ? await all(db, "SELECT id,name,address,phone FROM vendors WHERE is_active=1 ORDER BY name") : [],
-      budget_lines: staff || finance ? (await budgetLines(db, yr)).filter((l) => l.is_active) : [],
+      budget_lines: staff || finance ? (await budgetLines(db, yr)).filter(l => l.is_active) : [],
       employees: staff || admin ? await all(db, "SELECT id,full_name,employee_no FROM employees WHERE is_active=1 ORDER BY full_name") : [],
       positions: admin ? await all(db, "SELECT p.id,p.name,u.name unit_name FROM positions p JOIN org_units u ON u.id=p.org_unit_id WHERE p.is_active=1 ORDER BY p.name") : [],
       units: admin || finance ? await all(db, "SELECT id,code,name FROM org_units WHERE is_active=1 ORDER BY name") : []
@@ -1618,10 +1672,10 @@ async function purchasingRoutes(c) {
     if (!id && m === "GET") return await listRequests(db, acc, user, url.searchParams.get("view") || "mine", url);
     if (!id && m === "POST") return await tx(db, async () => {
       const ctx = await requesterContext(db, user, acc, settings, asOf);
-      assert(!ctx.missing.length, `PR belum dapat dikirim. Lengkapi: ${ctx.missing.join(" ")}`, ctx.missing.some((x) => x.startsWith("Izin")) ? 403 : 422);
+      assert(!ctx.missing.length, `PR belum dapat dikirim. Lengkapi: ${ctx.missing.join(" ")}`, ctx.missing.some(x => x.startsWith("Izin")) ? 403 : 422);
       const neededOn = date(b.needed_on, "Tanggal barang dibutuhkan");
       assert(neededOn >= asOf, "Tanggal barang dibutuhkan tidak boleh sebelum hari ini.");
-      const items = parseItems(b.items, settings), total = rule(() => sum(items.map((i) => i.subtotal)));
+      const items = parseItems(b.items, settings), total = rule(() => sum(items.map(i => i.subtotal)));
       const me = ctx.me, code = requestCode(year(asOf), await nextSequence(db, "PJ", "ALL", year(asOf)));
       const request2 = await insert(db, "purchase_requests", {
         request_code: code,
@@ -1660,8 +1714,8 @@ async function purchasingRoutes(c) {
       assert(request.row_version === versionOf(b), "PR sudah berubah. Muat ulang data.", 409);
       const neededOn = date(b.needed_on, "Tanggal barang dibutuhkan");
       assert(neededOn >= request.request_date, "Tanggal barang dibutuhkan tidak boleh sebelum tanggal pengajuan.");
-      const items = parseItems(b.items, settings), total = rule(() => sum(items.map((i) => i.subtotal)));
-      const kept = new Set((await all(db, "SELECT file_id FROM purchase_attachments WHERE request_id=? AND owner_type='ITEM' AND file_id IS NOT NULL", request.id)).map((r) => r.file_id));
+      const items = parseItems(b.items, settings), total = rule(() => sum(items.map(i => i.subtotal)));
+      const kept = new Set((await all(db, "SELECT file_id FROM purchase_attachments WHERE request_id=? AND owner_type='ITEM' AND file_id IS NOT NULL", request.id)).map(r => r.file_id));
       await run(db, "DELETE FROM purchase_attachments WHERE request_id=? AND owner_type='ITEM'", request.id);
       await run(db, "DELETE FROM purchase_request_items WHERE request_id=?", request.id);
       const ctx = await requesterContext(db, user, acc, settings, asOf);
@@ -1703,15 +1757,16 @@ async function purchasingRoutes(c) {
       const me = await employeeOnDate(db, user.employee_id, asOf);
       const verdict = b.action;
       assert(["APPROVE", "RETURN", "REJECT"].includes(verdict), "Tindakan tidak valid.");
-      const reason = verdict === "APPROVE" ? optional(b.reason, 2e3) : text(b.reason, verdict === "RETURN" ? "Alasan pengembalian" : "Alasan penolakan", 2e3);
+      const override = acc.superadmin && step.target_kind === "EMPLOYEE" && step.target_employee_id !== user.employee_id && !acc.sekban_peers.includes(step.target_employee_id);
+      const reason = override ? text(b.reason, "Alasan tindakan Superadmin menggantikan penyetuju", 2e3) : verdict === "APPROVE" ? optional(b.reason, 2e3) : text(b.reason, verdict === "RETURN" ? "Alasan pengembalian" : "Alasan penolakan", 2e3);
       if (verdict === "RETURN") assert(["ACKNOWLEDGE", "VERIFY", "FINAL"].includes(step.step_kind), "Tahap ini hanya dapat disetujui atau ditolak.");
-      const expected = {
+      const expected = ({
         ACKNOWLEDGE: "pending_acknowledgement",
         VERIFY: "pending_verification",
         FINAL: "pending_final_approval",
         REVERIFY: "pending_reverification",
         REAPPROVE: "pending_reapproval"
-      }[step.step_kind];
+      })[step.step_kind];
       assert(request.status === expected, "Status PR tidak sesuai dengan tahap ini. Muat ulang data.", 409);
       if (verdict !== "APPROVE") {
         await decide(db, user, me, step, verdict === "RETURN" ? "RETURNED" : "REJECTED", reason, asDelegate);
@@ -1732,7 +1787,7 @@ async function purchasingRoutes(c) {
         const line = await pick(db, "budget_lines", b.budget_line_id, "Pos RKA");
         assert(line.is_active, "Pos RKA tidak aktif.");
         const special = flag(b.special_budget);
-        const { kind, target } = await finalTarget(db, settings, request, finalApproverKind(Number(request.estimated_total), special, settings), asOf);
+        const {kind, target} = await finalTarget(db, settings, request, finalApproverKind(Number(request.estimated_total), special, settings), asOf);
         await decide(db, user, me, step, "APPROVED", reason, asDelegate);
         const updated = await setStatus(db, request, "pending_final_approval", {
           budget_line_id: line.id,
@@ -1756,14 +1811,13 @@ async function purchasingRoutes(c) {
           });
         }
         const approved = await all(db, "SELECT approved_subtotal FROM purchase_request_items WHERE request_id=? AND status='ACTIVE'", request.id);
-        const total = rule(() => sum(approved.map((i) => i.approved_subtotal)));
+        const total = rule(() => sum(approved.map(i => i.approved_subtotal)));
         await decide(db, user, me, step, "APPROVED", reason, asDelegate);
         const needsKaban = request.final_approver_kind === "SEKBAN" && finalApproverKind(total, request.special_budget, settings) === "KABAN";
         const updated = await setStatus(db, request, needsKaban ? "pending_reapproval" : "in_procurement", {
           approved_total: total
         });
-        if (needsKaban) await addStep(db, user, updated, "REAPPROVE", (await finalTarget(db, settings, updated, "KABAN", asOf)).target, request.revision_no);
-        else await freezeDocument(db, user, updated, "PR", updated.id, updated.pr_number, await requestSnapshot(db, settings, updated));
+        if (needsKaban) await addStep(db, user, updated, "REAPPROVE", (await finalTarget(db, settings, updated, "KABAN", asOf)).target, request.revision_no); else await freezeDocument(db, user, updated, "PR", updated.id, updated.pr_number, await requestSnapshot(db, settings, updated));
       } else if (step.step_kind === "REAPPROVE") {
         await decide(db, user, me, step, "APPROVED", reason, asDelegate);
         const updated = await setStatus(db, request, "in_procurement", {
@@ -1818,7 +1872,7 @@ async function purchasingRoutes(c) {
       assert(request.status === "in_procurement", "Perbandingan harga hanya untuk PR yang sedang diproses.", 409);
       const item = await pick(db, "purchase_request_items", b.item_id, "Item");
       assert(item.request_id === request.id && item.status === "ACTIVE", "Item tidak sesuai dengan PR ini.");
-      assert(!(await openOrderItems(db, request.id)).some((o) => o.request_item_id === item.id), "Item ini sudah masuk pesanan.", 409);
+      assert(!(await openOrderItems(db, request.id)).some(o => o.request_item_id === item.id), "Item ini sudah masuk pesanan.", 409);
       const vendor = b.vendor_id ? await pick(db, "vendors", b.vendor_id, "Vendor") : null;
       const storeName = vendor ? vendor.name : text(b.store_name, "Nama toko", 200);
       const evidence = attachmentList(b.evidence, "Bukti harga", "Bukti harga wajib dilampirkan (ATR-PG-02).");
@@ -1842,7 +1896,7 @@ async function purchasingRoutes(c) {
       assertStaff(acc, request);
       const quote = await get(db, "purchase_price_quotes", p[4]);
       assert(quote.request_id === request.id, "Harga tidak sesuai dengan PR ini.");
-      assert(!(await openOrderItems(db, request.id)).some((o) => o.request_item_id === quote.item_id), "Item ini sudah masuk pesanan.", 409);
+      assert(!(await openOrderItems(db, request.id)).some(o => o.request_item_id === quote.item_id), "Item ini sudah masuk pesanan.", 409);
       await run(db, "DELETE FROM purchase_attachments WHERE owner_type='QUOTE' AND owner_id=?", quote.id);
       await run(db, "DELETE FROM purchase_price_quotes WHERE id=?", quote.id);
       await audit(db, user, "REMOVE_QUOTE", "purchase_requests", request.id, {
@@ -1854,9 +1908,9 @@ async function purchasingRoutes(c) {
       assertStaff(acc, request);
       const quote = await get(db, "purchase_price_quotes", p[4]);
       assert(quote.request_id === request.id, "Harga tidak sesuai dengan PR ini.");
-      assert(!(await openOrderItems(db, request.id)).some((o) => o.request_item_id === quote.item_id), "Item ini sudah masuk pesanan.", 409);
+      assert(!(await openOrderItems(db, request.id)).some(o => o.request_item_id === quote.item_id), "Item ini sudah masuk pesanan.", 409);
       const siblings = await all(db, "SELECT * FROM purchase_price_quotes WHERE item_id=?", quote.item_id);
-      const cheapest = Math.min(...siblings.map((q) => Number(q.unit_price)));
+      const cheapest = Math.min(...siblings.map(q => Number(q.unit_price)));
       const reason = Number(quote.unit_price) > cheapest ? text(b.reason, "Alasan memilih harga yang bukan termurah", 1e3) : null;
       await run(db, "UPDATE purchase_price_quotes SET is_selected=0,not_cheapest_reason=NULL,updated_at=?,row_version=row_version+1 WHERE item_id=?", now(), quote.item_id);
       await run(db, "UPDATE purchase_price_quotes SET is_selected=1,not_cheapest_reason=?,updated_at=?,row_version=row_version+1 WHERE id=?", reason, now(), quote.id);
@@ -1871,11 +1925,11 @@ async function purchasingRoutes(c) {
       assert(request.status === "in_procurement", "Pesanan hanya dapat dibuat untuk PR yang sedang diproses.", 409);
       const path = b.path;
       assert(allowedPaths(Number(request.approved_total), settings).includes(path), path === "A" ? `Total PR ${formatRupiah(request.approved_total)} wajib lewat perbandingan harga atau surat penunjukan (ATR-PG-01).` : "Total PR di bawah batas perbandingan; gunakan jalur langsung beli.", 422);
-      const taken = new Set((await openOrderItems(db, request.id)).map((o) => o.request_item_id));
-      const active = (await all(db, "SELECT * FROM purchase_request_items WHERE request_id=? AND status='ACTIVE' ORDER BY line_no", request.id)).filter((i) => !taken.has(i.id));
-      const wanted = Array.isArray(b.item_ids) && b.item_ids.length ? b.item_ids : active.map((i) => i.id);
-      const items = wanted.map((itemId) => {
-        const item = active.find((i) => i.id === itemId);
+      const taken = new Set((await openOrderItems(db, request.id)).map(o => o.request_item_id));
+      const active = (await all(db, "SELECT * FROM purchase_request_items WHERE request_id=? AND status='ACTIVE' ORDER BY line_no", request.id)).filter(i => !taken.has(i.id));
+      const wanted = Array.isArray(b.item_ids) && b.item_ids.length ? b.item_ids : active.map(i => i.id);
+      const items = wanted.map(itemId => {
+        const item = active.find(i => i.id === itemId);
         assert(item, "Item sudah dipesan, dibatalkan, atau bukan milik PR ini.");
         return item;
       });
@@ -1883,15 +1937,15 @@ async function purchasingRoutes(c) {
       const created = [];
       if (path === "A") {
         const vendor = b.vendor_id ? await pick(db, "vendors", b.vendor_id, "Vendor") : null;
-        const prices = Object.fromEntries(items.map((i) => [i.id, b.prices?.[i.id] ?? Number(i.approved_unit_price)]));
+        const prices = Object.fromEntries(items.map(i => [i.id, b.prices?.[i.id] ?? Number(i.approved_unit_price)]));
         created.push(await createOrder(db, user, request, "A", vendor, vendor ? vendor.name : text(b.store_name, "Nama toko", 200), pricedLines(items, prices), "NONE"));
       } else if (path === "B") {
-        const quotes = await all(db, `SELECT * FROM purchase_price_quotes WHERE item_id IN (${items.map(() => "?").join(",")})`, ...items.map((i) => i.id));
-        const groups = /* @__PURE__ */ new Map();
+        const quotes = await all(db, `SELECT * FROM purchase_price_quotes WHERE item_id IN (${items.map(() => "?").join(",")})`, ...items.map(i => i.id));
+        const groups = new Map();
         for (const item of items) {
-          const own = quotes.filter((q) => q.item_id === item.id), stores = new Set(own.map((q) => q.store_name.trim().toLowerCase()));
+          const own = quotes.filter(q => q.item_id === item.id), stores = new Set(own.map(q => q.store_name.trim().toLowerCase()));
           assert(stores.size >= settings.min_quotes_per_item, `Item ${item.line_no} butuh minimal ${settings.min_quotes_per_item} harga dari toko berbeda (ATR-PG-02).`);
-          const chosen = own.filter((q) => q.is_selected);
+          const chosen = own.filter(q => q.is_selected);
           assert(chosen.length === 1, `Pilih satu harga untuk item ${item.line_no}.`);
           assert(chosen[0].vendor_id, `Harga terpilih item ${item.line_no} harus dari vendor yang terdaftar, karena PO/SPK memakai data vendor.`);
           const list = groups.get(chosen[0].vendor_id) || [];
@@ -1903,8 +1957,8 @@ async function purchasingRoutes(c) {
         }
         for (const [vendorId, list] of groups) {
           const vendor = await get(db, "vendors", vendorId);
-          const kind = documentKindFor(list.map((l) => l.item.item_kind));
-          const order = await createOrder(db, user, request, "B", vendor, vendor.name, pricedLines(list.map((l) => l.item), Object.fromEntries(list.map((l) => [l.item.id, l.price]))), kind);
+          const kind = documentKindFor(list.map(l => l.item.item_kind));
+          const order = await createOrder(db, user, request, "B", vendor, vendor.name, pricedLines(list.map(l => l.item), Object.fromEntries(list.map(l => [l.item.id, l.price]))), kind);
           await insert(db, "vendor_order_documents", {
             order_id: order.id,
             ...orderDocumentValues({}, settings, kind),
@@ -1914,8 +1968,8 @@ async function purchasingRoutes(c) {
         }
       } else {
         const vendor = await pick(db, "vendors", b.vendor_id, "Vendor");
-        const kind = documentKindFor(items.map((i) => i.item_kind));
-        const order = await createOrder(db, user, request, "C", vendor, vendor.name, pricedLines(items, b.prices || {}), kind);
+        const kind = documentKindFor(items.map(i => i.item_kind));
+        const order = await createOrder(db, user, request, "C", vendor, vendor.name, pricedLines(items, b.prices || ({})), kind);
         await insert(db, "vendor_order_documents", {
           order_id: order.id,
           ...orderDocumentValues(b.document, settings, kind),
@@ -1928,7 +1982,7 @@ async function purchasingRoutes(c) {
       });
       await audit(db, user, "CREATE_ORDERS", "purchase_requests", request.id, {
         path,
-        orders: created.map((o) => o.id)
+        orders: created.map(o => o.id)
       });
       return await requestDetail(db, acc, user, settings, await loadRequest(db, request.id));
     });
@@ -1937,7 +1991,7 @@ async function purchasingRoutes(c) {
       assert(request.status === "in_procurement", "Konfirmasi ulang hanya untuk PR yang sedang diproses.", 409);
       assert(request.row_version === versionOf(b), "PR sudah berubah. Muat ulang data.", 409);
       assert(Array.isArray(b.items) && b.items.length, "Pilih minimal satu item yang harganya berubah.");
-      const taken = new Set((await openOrderItems(db, request.id)).map((o) => o.request_item_id)), round = request.confirmation_round + 1;
+      const taken = new Set((await openOrderItems(db, request.id)).map(o => o.request_item_id)), round = request.confirmation_round + 1;
       for (const line of b.items) {
         const item = await pick(db, "purchase_request_items", line?.item_id, "Item");
         assert(item.request_id === request.id && item.status === "ACTIVE" && !taken.has(item.id), "Item sudah dipesan, dibatalkan, atau bukan milik PR ini.");
@@ -1971,17 +2025,16 @@ async function purchasingRoutes(c) {
       assert(request.row_version === versionOf(b), "PR sudah berubah. Muat ulang data.", 409);
       const open = await all(db, "SELECT * FROM purchase_price_confirmations WHERE request_id=? AND round_no=? AND answer='PENDING'", request.id, request.confirmation_round);
       const answers = Array.isArray(b.answers) ? b.answers : [];
-      assert(open.every((c2) => answers.some((a) => a.item_id === c2.item_id && typeof a.accept === "boolean")), "Jawab setiap item: setujui harga baru atau batalkan item.");
+      assert(open.every(c2 => answers.some(a => a.item_id === c2.item_id && typeof a.accept === "boolean")), "Jawab setiap item: setujui harga baru atau batalkan item.");
       let accepted = 0;
       for (const c2 of open) {
-        const accept = answers.find((a) => a.item_id === c2.item_id).accept;
+        const accept = answers.find(a => a.item_id === c2.item_id).accept;
         await update(db, "purchase_price_confirmations", c2.id, c2.row_version, {
           answer: accept ? "ACCEPTED" : "CANCELLED",
           answered_at: now(),
           answered_by: user.id
         });
-        if (accept) accepted++;
-        else {
+        if (accept) accepted++; else {
           const item = await get(db, "purchase_request_items", c2.item_id);
           await update(db, "purchase_request_items", item.id, item.row_version, {
             status: "CANCELLED"
@@ -1992,13 +2045,12 @@ async function purchasingRoutes(c) {
       if (!remaining.length) await setStatus(db, request, "cancelled", {
         closed_reason: "Semua item dibatalkan pemohon pada konfirmasi ulang harga.",
         closed_at: now()
-      });
-      else if (accepted) {
+      }); else if (accepted) {
         const updated = await setStatus(db, request, "pending_reverification");
         await addStep(db, user, updated, "REVERIFY", null, request.revision_no);
       } else {
         await setStatus(db, request, "in_procurement", {
-          approved_total: rule(() => sum(remaining.map((i) => i.approved_subtotal)))
+          approved_total: rule(() => sum(remaining.map(i => i.approved_subtotal)))
         });
         await completeIfDone(db, request);
       }
@@ -2020,7 +2072,7 @@ async function purchasingRoutes(c) {
         const doc = await one(db, "SELECT * FROM vendor_order_documents WHERE order_id=?", order.id);
         const values = orderDocumentValues({
           ...doc,
-          ...b.document || {}
+          ...b.document || ({})
         }, settings, doc.doc_kind);
         await update(db, "vendor_order_documents", doc.id, doc.row_version, values);
         if (values.doc_kind !== order.document_kind) await run(db, "UPDATE vendor_orders SET document_kind=? WHERE id=?", values.doc_kind, order.id);
@@ -2033,7 +2085,7 @@ async function purchasingRoutes(c) {
         const volume = line.calc_volume === void 0 || line.calc_volume === null || line.calc_volume === "" ? null : rule(() => quantityMilli(line.calc_volume, "Volume hitung"));
         const calcUnit = volume ? text(line.calc_unit, "Satuan volume hitung", 20) : null;
         const subtotal = rule(() => lineSubtotal(volume || row.quantity_milli, row.unit_price));
-        const item = requestItems.find((i) => i.id === row.request_item_id);
+        const item = requestItems.find(i => i.id === row.request_item_id);
         assert(subtotal <= Number(item.approved_subtotal), `Subtotal item ${item.line_no} melebihi nilai yang disetujui. Ajukan konfirmasi ulang (ATR-PG-09).`, 409);
         await update(db, "vendor_order_items", row.id, row.row_version, {
           needed_on: neededOn,
@@ -2043,7 +2095,7 @@ async function purchasingRoutes(c) {
         });
       }
       const lines = await all(db, "SELECT subtotal FROM vendor_order_items WHERE order_id=?", order.id);
-      const total = rule(() => sum(lines.map((i) => i.subtotal)));
+      const total = rule(() => sum(lines.map(i => i.subtotal)));
       const fresh2 = await get(db, "vendor_orders", order.id);
       await update(db, "vendor_orders", order.id, fresh2.row_version, {
         total
@@ -2070,6 +2122,7 @@ async function purchasingRoutes(c) {
       assert(order.row_version === versionOf(b), "Pesanan sudah berubah. Muat ulang data.", 409);
       const asDelegate = await actingAs(db, acc, user, request, step, asOf);
       const me = await employeeOnDate(db, user.employee_id, asOf);
+      if (acc.superadmin && step.target_kind === "EMPLOYEE" && step.target_employee_id !== user.employee_id && !acc.sekban_peers.includes(step.target_employee_id)) text(b.reason, "Alasan tindakan Superadmin menggantikan penyetuju", 2e3);
       assert(["APPROVE", "REJECT"].includes(b.action), "Tindakan tidak valid.");
       if (b.action === "REJECT") {
         const reason = text(b.reason, "Alasan penolakan", 2e3);
@@ -2095,7 +2148,7 @@ async function purchasingRoutes(c) {
           number,
           decided_at: now()
         });
-        const target = await employeeOnDate(db, step.target_employee_id, issued);
+        const target = acc.superadmin ? me : await employeeOnDate(db, step.target_employee_id, issued);
         const vendor = await get(db, "vendors", order.vendor_id);
         await freezeDocument(db, user, request, "SPV", appointment.id, number, {
           organization: settings.organization,
@@ -2110,7 +2163,7 @@ async function purchasingRoutes(c) {
           reason: savedAppointment.reason,
           total: Number(order.total),
           total_words: terbilang(Number(order.total)),
-          items: (await all(db, "SELECT i.description,oi.quantity_milli,oi.unit,oi.unit_price,oi.subtotal FROM vendor_order_items oi JOIN purchase_request_items i ON i.id=oi.request_item_id WHERE oi.order_id=? ORDER BY i.line_no", order.id)).map((i) => ({
+          items: (await all(db, "SELECT i.description,oi.quantity_milli,oi.unit,oi.unit_price,oi.subtotal FROM vendor_order_items oi JOIN purchase_request_items i ON i.id=oi.request_item_id WHERE oi.order_id=? ORDER BY i.line_no", order.id)).map(i => ({
             description: i.description,
             quantity: formatQuantity(i.quantity_milli),
             unit: i.unit,
@@ -2139,7 +2192,7 @@ async function purchasingRoutes(c) {
       const purchasedOn = date(b.purchased_on, "Tanggal beli");
       assert(purchasedOn <= asOf, "Tanggal beli tidak boleh di masa depan.");
       const rows = await all(db, "SELECT oi.*,i.line_no FROM vendor_order_items oi JOIN purchase_request_items i ON i.id=oi.request_item_id WHERE oi.order_id=?", order.id);
-      const prices = Object.fromEntries((Array.isArray(b.items) ? b.items : []).map((l) => [l.id, l.unit_price]));
+      const prices = Object.fromEntries((Array.isArray(b.items) ? b.items : []).map(l => [l.id, l.unit_price]));
       for (const row of rows) {
         const price = prices[row.id] === void 0 ? Number(row.unit_price) : rule(() => money(prices[row.id], `Harga beli item ${row.line_no}`));
         assert(price <= Number(row.unit_price), `Harga beli item ${row.line_no} lebih tinggi dari harga pesanan. Ajukan konfirmasi ulang sebelum membeli (ATR-PG-09).`, 409);
@@ -2168,9 +2221,9 @@ async function purchasingRoutes(c) {
       const receivedOn = date(b.received_on, "Tanggal serah terima");
       assert(receivedOn >= receipt.purchased_on && receivedOn <= asOf, "Tanggal serah terima harus antara tanggal beli dan hari ini.");
       const invoice = attachmentList(b.invoice, "Nota vendor", "Nota, kwitansi, atau invoice vendor wajib diunggah (ATR-ST-03).");
-      assert(invoice.every((a) => a.form === "FILE"), "Nota vendor harus berupa berkas yang diunggah.");
+      assert(invoice.every(a => a.form === "FILE"), "Nota vendor harus berupa berkas yang diunggah.");
       const rows = await all(db, "SELECT * FROM vendor_order_items WHERE order_id=?", order.id);
-      const received = Object.fromEntries((Array.isArray(b.items) ? b.items : []).map((l) => [l.id, l.received_quantity]));
+      const received = Object.fromEntries((Array.isArray(b.items) ? b.items : []).map(l => [l.id, l.received_quantity]));
       for (const row of rows) {
         const qty = received[row.id] === void 0 ? row.quantity_milli : rule(() => quantityMilli(received[row.id], "Jumlah diterima"));
         await update(db, "vendor_order_items", row.id, row.row_version, {
@@ -2269,7 +2322,7 @@ async function purchasingRoutes(c) {
     };
   }
   if (section === "verify" && id && m === "GET") {
-    assert(/^[a-f0-9]{20}$/.test(id), "Kode verifikasi tidak valid.", 404);
+    assert((/^[a-f0-9]{20}$/).test(id), "Kode verifikasi tidak valid.", 404);
     const doc = await one(db, "SELECT * FROM purchase_documents WHERE verification_code=?", id);
     assert(doc, "Dokumen dengan kode ini tidak ditemukan.", 404);
     const s = JSON.parse(doc.snapshot_json);
@@ -2295,7 +2348,7 @@ async function purchasingRoutes(c) {
     if (!id && m === "GET") {
       assert(acc.has("purchasing.vendors.read") || acc.has("purchasing.procurement.manage"), "Akses daftar vendor ditolak.", 403);
       return {
-        items: (await all(db, "SELECT * FROM vendors ORDER BY name")).map((v) => vendorRow(v, sensitive)),
+        items: (await all(db, "SELECT * FROM vendors ORDER BY name")).map(v => vendorRow(v, sensitive)),
         sensitive
       };
     }
@@ -2315,7 +2368,7 @@ async function purchasingRoutes(c) {
       const old = await get(db, "vendors", id);
       const row = await update(db, "vendors", id, versionOf(b), await vendorValues(b, old, sensitive));
       await audit(db, user, "UPDATE", "vendors", id, {
-        fields: Object.keys(b).filter((k) => k !== "row_version")
+        fields: Object.keys(b).filter(k => k !== "row_version")
       });
       return vendorRow(row, sensitive);
     });
@@ -2349,7 +2402,7 @@ async function purchasingRoutes(c) {
       const by = await pick(db, "budget_years", b.budget_year_id, "Tahun anggaran");
       if (b.org_unit_id) await pick(db, "org_units", b.org_unit_id, "Unit");
       const code = text(b.code, "Kode Pos RKA", 20).toUpperCase();
-      assert(/^[A-Z0-9_-]+$/.test(code), "Kode Pos RKA hanya huruf, angka, garis bawah, atau tanda hubung.");
+      assert((/^[A-Z0-9_-]+$/).test(code), "Kode Pos RKA hanya huruf, angka, garis bawah, atau tanda hubung.");
       const row = await insert(db, "budget_lines", {
         budget_year_id: by.id,
         code,
@@ -2388,6 +2441,7 @@ async function purchasingRoutes(c) {
       settings,
       officials: {
         sekban: settings.officials.sekban_position_id ? await positionHolders(db, settings.officials.sekban_position_id, asOf) : [],
+        sekban_deputy: settings.officials.sekban_deputy_position_id ? await positionHolders(db, settings.officials.sekban_deputy_position_id, asOf) : [],
         kaban: settings.officials.kaban_position_id ? await positionHolders(db, settings.officials.kaban_position_id, asOf) : []
       }
     };
@@ -2395,7 +2449,7 @@ async function purchasingRoutes(c) {
       const next = await settingsValues(db, b.settings, settings);
       await run(db, "INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", SETTINGS_KEY, JSON.stringify(next));
       await audit(db, user, "SETTINGS_CHANGED", "app_settings", SETTINGS_KEY, {
-        keys: Object.keys(b.settings || {})
+        keys: Object.keys(b.settings || ({}))
       }, optional(b.reason, 1e3) || "");
       return {
         settings: next
@@ -2445,7 +2499,7 @@ async function purchasingRoutes(c) {
     const yr = Number(url.searchParams.get("year")) || year(asOf), rows = await reportRows(db, acc, yr);
     const by = {};
     for (const r of rows) by[r.status] = (by[r.status] || 0) + 1;
-    const ids = rows.map((r) => r.id);
+    const ids = rows.map(r => r.id);
     const orders = ids.length ? await all(db, `SELECT o.request_id,o.status,o.due_on,o.total,r.invoice_total FROM vendor_orders o LEFT JOIN order_receipts r ON r.order_id=o.id WHERE o.request_id IN (${ids.map(() => "?").join(",")}) AND o.status<>'cancelled'`, ...ids) : [];
     return {
       year: yr,
@@ -2455,30 +2509,31 @@ async function purchasingRoutes(c) {
         label: STATUS_LABELS[status],
         count
       })),
-      approved_value: rule(() => sum(rows.filter((r) => r.approved_total !== null && !["rejected", "cancelled"].includes(r.status)).map((r) => r.approved_total))),
-      realized_value: rule(() => sum(orders.filter((o) => o.status === "received").map((o) => o.invoice_total || 0))),
-      late_orders: orders.filter((o) => isLate(o, asOf)).length,
+      approved_value: rule(() => sum(rows.filter(r => r.approved_total !== null && !["rejected", "cancelled"].includes(r.status)).map(r => r.approved_total))),
+      realized_value: rule(() => sum(orders.filter(o => o.status === "received").map(o => o.invoice_total || 0))),
+      late_orders: orders.filter(o => isLate(o, asOf)).length,
       budget: acc.has("purchasing.budget.read") ? await budgetLines(db, yr) : []
     };
   }
   if (section === "export" && m === "GET") {
     assert(acc.has("purchasing.reports.export"), "Akses ekspor ditolak.", 403);
     const yr = Number(url.searchParams.get("year")) || year(asOf), rows = await reportRows(db, acc, yr);
-    const cell = (v) => '"' + String(v ?? "").replace(/^[=+\-@\t\r]/, "'$&").replaceAll('"', '""') + '"';
-    const table = [["Kode pengajuan", "Nomor PR", "Tanggal PR", "Pemohon", "Unit", "Status", "Total estimasi", "Total disetujui", "Penyetuju akhir", "Jalur"], ...rows.map((r) => [r.request_code, r.pr_number, r.request_date, r.requester_name, r.unit_name, STATUS_LABELS[r.status], r.estimated_total, r.approved_total, r.final_approver_kind, r.procurement_path])];
+    const cell = v => '"' + String(v ?? "").replace(/^[=+\-@\t\r]/, "'$&").replaceAll('"', '""') + '"';
+    const table = [["Kode pengajuan", "Nomor PR", "Tanggal PR", "Pemohon", "Unit", "Status", "Total estimasi", "Total disetujui", "Penyetuju akhir", "Jalur"], ...rows.map(r => [r.request_code, r.pr_number, r.request_date, r.requester_name, r.unit_name, STATUS_LABELS[r.status], r.estimated_total, r.approved_total, r.final_approver_kind, r.procurement_path])];
     await audit(db, user, "EXPORT", "purchase_requests", String(yr), {
       row_count: rows.length
     });
     return {
       filename: `pengadaan-${yr}.csv`,
-      csv: table.map((row) => row.map(cell).join(",")).join("\r\n")
+      csv: table.map(row => row.map(cell).join(",")).join("\r\n")
     };
   }
   return void 0;
 }
 async function purchasingPendingCount(db, user) {
+  if (await isSuperAdmin(db, user)) return Number((user.employee_id ? await one(db, "SELECT count(*) n FROM purchase_approval_steps s JOIN purchase_requests r ON r.id=s.request_id WHERE s.status='PENDING' AND r.requester_employee_id<>?", user.employee_id) : await one(db, "SELECT count(*) n FROM purchase_approval_steps WHERE status='PENDING'")).n);
   if (!user.employee_id) return 0;
-  const asOf = today(), ids = [user.employee_id, ...await delegatorsOf(db, user.employee_id, asOf)];
+  const asOf = today(), ids = [user.employee_id, ...await sekbanPeers(db, await purchasingSettings(db), user.employee_id, asOf), ...await delegatorsOf(db, user.employee_id, asOf)];
   return Number((await one(db, `SELECT count(*) n FROM purchase_approval_steps s JOIN purchase_requests r ON r.id=s.request_id WHERE s.status='PENDING' AND s.target_kind='EMPLOYEE' AND r.requester_employee_id<>? AND s.target_employee_id IN (${ids.map(() => "?").join(",")})`, user.employee_id, ...ids)).n);
 }
 
@@ -2488,7 +2543,24 @@ async function claimFile(db, user, id) {
   const f = await get(db, "files", id);
   assert(f.status === "AVAILABLE" && f.uploaded_by === user.id, "Berkas tidak tersedia untuk dilampirkan.", 403);
   assert(!await asyncSome(attachments, async ([t]) => await one(db, `SELECT id FROM ${t} WHERE file_id=?`, id)), "Berkas sudah terhubung. Unggah berkas baru untuk objek ini.");
+  db.storage?.claim?.(f.storage_key);
   return f;
+}
+async function fileStorageModule(db, id) {
+  const modules = {
+    website: 'website',
+    employee: 'pegawai',
+    contract: 'pegawai',
+    document: 'sop',
+    material: 'pelatihan',
+    certificate: 'pelatihan',
+    logbook: 'patroli',
+    incident: 'kejadian',
+    announcement: 'informasi',
+    purchase: 'pengadaan'
+  };
+  for (const [table, , type] of attachments) if (await one(db, `SELECT id FROM ${table} WHERE file_id=?`, id)) return modules[type];
+  return null;
 }
 async function linkedFiles(db, type, id) {
   const entry = attachments.find((x) => x[2] === type);
@@ -2568,7 +2640,7 @@ async function download(db, user, id, dataDir) {
   await audit(db, user, "DOWNLOAD", "files", id);
   return {
     file,
-    data: await db.storage.get(file.storage_key)
+    data: await db.storage.get(file.storage_key, await fileStorageModule(db, file.id))
   };
 }
 async function attach(db, user, type, id, b) {
@@ -2659,7 +2731,7 @@ async function placement(db, user, employeeId, b, permission = "hr.employees.upd
   return row;
 }
 async function hrRoutes(c) {
-  const { db, user, p, method: m, body: b, url } = c;
+  const {db, user, p, method: m, body: b, url} = c;
   const id = p[1], action = p[2];
   if (p[0] === "employees") {
     if (m === "GET" && !id) {
@@ -2667,7 +2739,7 @@ async function hrRoutes(c) {
       date(asOf);
       let rows = await readList(db, user, "hr.employees.read", await employees(db, asOf));
       const q = (url.searchParams.get("q") || "").toLowerCase(), unit = url.searchParams.get("unit"), status = url.searchParams.get("status");
-      rows = rows.filter((e) => (!q || `${e.full_name} ${e.employee_no}`.toLowerCase().includes(q)) && (!unit || e.org_unit_id === unit) && (!status || e.employment_status === status));
+      rows = rows.filter(e => (!q || `${e.full_name} ${e.employee_no}`.toLowerCase().includes(q)) && (!unit || e.org_unit_id === unit) && (!status || e.employment_status === status));
       return {
         items: rows
       };
@@ -2705,7 +2777,7 @@ async function hrRoutes(c) {
           placements: await all(db, "SELECT ep.*,p.name position_name,o.name unit_name FROM employee_placements ep JOIN positions p ON p.id=ep.position_id JOIN org_units o ON o.id=p.org_unit_id WHERE ep.employee_id=? ORDER BY ep.valid_from DESC", id),
           contracts: await can(db, user, "hr.employee_files.read", ctx) ? await all(db, "SELECT * FROM employee_contracts WHERE employee_id=? ORDER BY starts_on DESC", id) : [],
           files: await can(db, user, "hr.employee_files.read", ctx) ? await linkedFiles(db, "employee", id) : [],
-          training: await asyncFilter(await all(db, "SELECT t.*,p.attendance_status FROM training_participants p JOIN training_events t ON t.id=p.training_event_id WHERE p.employee_id=?", id), async (t) => await trainingAllowed(db, user, "read", t))
+          training: await asyncFilter(await all(db, "SELECT t.*,p.attendance_status FROM training_participants p JOIN training_events t ON t.id=p.training_event_id WHERE p.employee_id=?", id), async t => await trainingAllowed(db, user, "read", t))
         };
       }
       if (m === "PATCH" && !action) return await tx(db, async () => {
@@ -2725,7 +2797,7 @@ async function hrRoutes(c) {
         await assertAdminRemains(db);
         if (!row.is_active) await run(db, "UPDATE public.app_users SET row_version=row_version+1 WHERE employee_id=?", id);
         await audit(db, user, "UPDATE", "employees", id, {
-          fields: Object.keys(b).filter((x) => x !== "row_version")
+          fields: Object.keys(b).filter(x => x !== "row_version")
         });
         return row;
       });
@@ -2758,7 +2830,7 @@ async function hrRoutes(c) {
   if (["units", "positions"].includes(p[0])) {
     const table = p[0] === "units" ? "org_units" : "positions";
     if (m === "GET" && !id) return {
-      items: await readList(db, user, "hr.organization.read", (await all(db, `SELECT * FROM ${table} ORDER BY name`)).map((r) => ({
+      items: await readList(db, user, "hr.organization.read", (await all(db, `SELECT * FROM ${table} ORDER BY name`)).map(r => ({
         ...r,
         org_unit_id: table === "org_units" ? r.id : r.org_unit_id
       })))
@@ -2802,7 +2874,7 @@ async function hrRoutes(c) {
     if (m === "GET" && !id) {
       assert(await has(db, user, "hr.documents.read"), "Akses ditolak.", 403);
       return {
-        items: await asyncFilter(await all(db, `SELECT d.*,o.name unit_name,(SELECT version_label FROM document_versions WHERE document_id=d.id AND state='ACTIVE') active_version,(SELECT effective_on FROM document_versions WHERE document_id=d.id AND state='ACTIVE') effective_on FROM documents d JOIN org_units o ON o.id=d.owner_org_unit_id WHERE d.is_archived=0 ORDER BY d.title`), async (d) => await documentAllowed(db, user, "read", d))
+        items: await asyncFilter(await all(db, `SELECT d.*,o.name unit_name,(SELECT version_label FROM document_versions WHERE document_id=d.id AND state='ACTIVE') active_version,(SELECT effective_on FROM document_versions WHERE document_id=d.id AND state='ACTIVE') effective_on FROM documents d JOIN org_units o ON o.id=d.owner_org_unit_id WHERE d.is_archived=0 ORDER BY d.title`), async d => await documentAllowed(db, user, "read", d))
       };
     }
     if (m === "POST" && !id) return await tx(db, async () => {
@@ -2829,15 +2901,25 @@ async function hrRoutes(c) {
     });
     if (id) {
       const doc = await get(db, "documents", id);
+      assert(!doc.is_archived, "Dokumen tidak ditemukan.", 404);
       if (m === "GET" && !action) {
         assert(await documentAllowed(db, user, "read", doc), "Akses ditolak.", 403);
         const manage = await documentAllowed(db, user, "manage", doc);
         return {
           ...doc,
-          versions: (await all(db, "SELECT v.*,f.original_name FROM document_versions v JOIN files f ON f.id=v.file_id WHERE v.document_id=? ORDER BY v.created_at DESC", id)).filter((v) => manage || v.state === "ACTIVE"),
+          can_manage: manage,
+          can_delete: manage,
+          can_publish: await documentAllowed(db, user, "publish", doc),
+          versions: (await all(db, "SELECT v.*,f.original_name FROM document_versions v JOIN files f ON f.id=v.file_id WHERE v.document_id=? ORDER BY v.created_at DESC", id)).filter(v => manage || v.state === "ACTIVE"),
           targets: await all(db, "SELECT org_unit_id FROM document_target_units WHERE document_id=?", id)
         };
       }
+      if (m === "DELETE" && !action) return await tx(db, async () => {
+        assert(await documentAllowed(db, user, "manage", doc), "Anda tidak memiliki akses untuk menghapus dokumen unit ini.", 403);
+        await update(db, "documents", id, b.row_version, {is_archived: 1});
+        await audit(db, user, "DELETE", "documents", id, {document_code: doc.document_code, title: doc.title});
+        return {deleted: true};
+      });
       if (m === "POST" && action === "versions") return await tx(db, async () => {
         assert(await documentAllowed(db, user, "manage", doc), "Akses ditolak.", 403);
         await claimFile(db, user, b.file_id);
@@ -2877,7 +2959,7 @@ async function hrRoutes(c) {
     if (m === "GET" && !id) {
       assert(await has(db, user, "hr.training.read"), "Akses ditolak.", 403);
       return {
-        items: await asyncFilter(await all(db, "SELECT t.*,(SELECT count(*) FROM training_participants WHERE training_event_id=t.id) participant_count FROM training_events t WHERE t.deleted_at IS NULL ORDER BY starts_at DESC"), async (t) => await trainingAllowed(db, user, "read", t))
+        items: await asyncFilter(await all(db, "SELECT t.*,(SELECT count(*) FROM training_participants WHERE training_event_id=t.id) participant_count FROM training_events t WHERE t.deleted_at IS NULL ORDER BY starts_at DESC"), async t => await trainingAllowed(db, user, "read", t))
       };
     }
     if (m === "POST" && !id) return await tx(db, async () => {
@@ -2910,20 +2992,20 @@ async function hrRoutes(c) {
         const manage = await trainingAllowed(db, user, "participants", event);
         return {
           ...event,
-          can_delete: user.username === "itadmin",
+          can_delete: await isSuperAdmin(db, user),
           can_upload_documentation: await trainingAllowed(db, user, "manage", event),
           can_view_documentation: await trainingAllowed(db, user, "download", event),
-          participants: await asyncFilter(await all(db, "SELECT tp.*,e.full_name,e.employee_no FROM training_participants tp JOIN employees e ON e.id=tp.employee_id WHERE tp.training_event_id=? ORDER BY e.full_name", id), async (tp) => manage || await can(db, user, "hr.training.read", {
+          participants: await asyncFilter(await all(db, "SELECT tp.*,e.full_name,e.employee_no FROM training_participants tp JOIN employees e ON e.id=tp.employee_id WHERE tp.training_event_id=? ORDER BY e.full_name", id), async tp => manage || await can(db, user, "hr.training.read", {
             org_unit_id: event.organizer_org_unit_id,
             employee_id: tp.employee_id
           })),
           materials: await all(db, "SELECT tm.*,dv.file_id document_file_id FROM training_materials tm LEFT JOIN document_versions dv ON dv.id=tm.document_version_id WHERE tm.training_event_id=? AND tm.usage_kind='MATERIAL'", id),
           documentation: await all(db, "SELECT f.id,f.original_name,f.mime_type,f.size_bytes,tm.title caption,tm.created_at FROM training_materials tm JOIN files f ON f.id=tm.file_id WHERE tm.training_event_id=? AND tm.usage_kind='DOCUMENTATION' AND f.status='AVAILABLE' ORDER BY tm.created_at,tm.id", id),
-          certificates: (await all(db, "SELECT pc.*,tp.employee_id FROM participant_certificates pc JOIN training_participants tp ON tp.id=pc.training_participant_id WHERE tp.training_event_id=?", id)).filter((pc) => manage || pc.employee_id === user.employee_id)
+          certificates: (await all(db, "SELECT pc.*,tp.employee_id FROM participant_certificates pc JOIN training_participants tp ON tp.id=pc.training_participant_id WHERE tp.training_event_id=?", id)).filter(pc => manage || pc.employee_id === user.employee_id)
         };
       }
       if (m === "DELETE" && !action) return await tx(db, async () => {
-        assert(user.username === "itadmin", "Hanya itadmin yang boleh menghapus kegiatan.", 403);
+        assert(await isSuperAdmin(db, user), "Hanya Superadmin yang boleh menghapus kegiatan.", 403);
         assert(await trainingAllowed(db, user, "read", event), "Akses ditolak.", 403);
         await update(db, "training_events", id, b.row_version, {
           deleted_at: now(),
@@ -2996,8 +3078,7 @@ async function hrRoutes(c) {
       if (m === "POST" && action === "materials") return await tx(db, async () => {
         assert(await trainingAllowed(db, user, "manage", event), "Akses ditolak.", 403);
         assert(Boolean(b.file_id) !== Boolean(b.document_version_id), "Pilih satu berkas atau versi dokumen.");
-        if (b.file_id) await claimFile(db, user, b.file_id);
-        else {
+        if (b.file_id) await claimFile(db, user, b.file_id); else {
           const v = await get(db, "document_versions", b.document_version_id);
           assert(v.state !== "DRAFT" && await documentAllowed(db, user, "read", await get(db, "documents", v.document_id)), "Versi dokumen tidak tersedia.", 403);
         }
@@ -3032,7 +3113,7 @@ async function hrRoutes(c) {
     if (m === "GET" && !id) {
       assert(await has(db, user, "hr.coaching.read") || await has(db, user, "hr.coaching.manage"), "Akses ditolak.", 403);
       return {
-        items: await asyncFilter(await all(db, `SELECT s.*,e.full_name employee_name,c.full_name coach_name,(SELECT count(*) FROM coaching_actions WHERE coaching_session_id=s.id AND status<>'DONE') open_actions FROM coaching_sessions s JOIN employees e ON e.id=s.employee_id JOIN employees c ON c.id=s.coach_employee_id ORDER BY held_at DESC`), async (s) => await coachingAllowed(db, user, "read", s))
+        items: await asyncFilter(await all(db, `SELECT s.*,e.full_name employee_name,c.full_name coach_name,(SELECT count(*) FROM coaching_actions WHERE coaching_session_id=s.id AND status<>'DONE') open_actions FROM coaching_sessions s JOIN employees e ON e.id=s.employee_id JOIN employees c ON c.id=s.coach_employee_id ORDER BY held_at DESC`), async s => await coachingAllowed(db, user, "read", s))
       };
     }
     if (m === "POST" && !id) return await tx(db, async () => {
@@ -4076,17 +4157,17 @@ async function rosterRoutes(c) {
 // supabase/functions/_shared/portal/admin.mjs
 import { randomBytes as randomBytes2 } from "node:crypto";
 async function adminRoutes(c) {
-  const { db, user, p, method: m, body: b } = c, id = p[1], action = p[2];
+  const {db, user, p, method: m, body: b} = c, id = p[1], action = p[2];
   if (p[0] === "users") {
     if (m === "GET" && !id) {
       await requireAccess(db, user, "admin.users.read");
       return {
-        items: await asyncMap(await all(db, "SELECT id,username,employee_id,status,must_change_password,last_login_at,row_version FROM users ORDER BY username"), async (u) => ({
+        items: await asyncMap(await all(db, "SELECT id,username,employee_id,status,must_change_password,last_login_at,row_version FROM users ORDER BY username"), async u => ({
           ...u,
-          grants: await asyncMap(await all(db, "SELECT ur.*,r.name role_name FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE user_id=?", u.id), async (g) => ({
+          grants: await asyncMap(await all(db, "SELECT ur.*,r.name role_name FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE user_id=?", u.id), async g => ({
             ...g,
             units: await all(db, "SELECT * FROM user_role_units WHERE user_role_id=?", g.id),
-            posts: (await all(db, "SELECT post_id FROM user_role_posts WHERE user_role_id=?", g.id)).map((p2) => p2.post_id)
+            posts: (await all(db, "SELECT post_id FROM user_role_posts WHERE user_role_id=?", g.id)).map(p2 => p2.post_id)
           }))
         }))
       };
@@ -4095,7 +4176,7 @@ async function adminRoutes(c) {
       await requireAccess(db, user, "admin.users.manage");
       assert(typeof b.password === "string" && b.password.length >= 6 && b.password.length <= 128, "Password harus 6\u2013128 karakter.");
       const username = text(b.username, "Username", 64).toLowerCase();
-      assert(/^[a-z0-9._-]{1,64}$/.test(username), "Username hanya berisi huruf kecil, angka, titik, garis bawah atau tanda hubung.");
+      assert((/^[a-z0-9._-]{1,64}$/).test(username), "Username hanya berisi huruf kecil, angka, titik, garis bawah atau tanda hubung.");
       assert(!await one(db, "SELECT id FROM users WHERE username=?", username), "Username sudah digunakan.", 409);
       const identity = await db.identity.create(b.password);
       return await tx(db, async () => {
@@ -4116,6 +4197,7 @@ async function adminRoutes(c) {
     }
     if (id && m === "PATCH" && !action) return await tx(db, async () => {
       await requireAccess(db, user, "admin.users.manage");
+      await protectAdminAccount(db, user, id);
       await get(db, "users", id);
       const status = enumValue(b.status, ["ACTIVE", "INACTIVE"]);
       const saved = await update(db, "users", id, b.row_version, {
@@ -4133,12 +4215,16 @@ async function adminRoutes(c) {
       const account = await get(db, "users", id);
       assert(account.row_version === b.row_version, "Data akun berubah. Muat ulang.", 409);
       assert(Array.isArray(b.grants) && b.grants.length <= 30, "Pemberian role tidak valid.");
+      await protectAdminAccount(db, user, id);
+      const superadmin = await isSuperAdmin(db, user);
+      assert(superadmin || id !== user.id, "IT-admin tidak boleh mengubah role atau cakupan akunnya sendiri.", 403);
+      if (!superadmin) for (const g of b.grants) assert((await get(db, "roles", g.role_id)).code !== "SUPER_ADMIN", "Hanya Superadmin yang boleh memberikan role Superadmin.", 403);
       await run(db, "DELETE FROM user_roles WHERE user_id=?", id);
       for (const g of b.grants) {
         const role = await get(db, "roles", g.role_id);
         assert(role.is_active, "Role tidak aktif.");
         const kind = enumValue(g.scope_kind, ["SELF", "ASSIGNED_UNITS", "ASSIGNED_POSTS", "ALL"]);
-        if (role.code === "SUPER_ADMIN") assert(kind === "ALL", "Super Admin memerlukan cakupan seluruh organisasi.");
+        if (["SUPER_ADMIN", "IT_ADMIN"].includes(role.code)) assert(kind === "ALL", "Role admin memerlukan cakupan seluruh organisasi.");
         const grant = await insert(db, "user_roles", {
           user_id: id,
           role_id: g.role_id,
@@ -4164,6 +4250,7 @@ async function adminRoutes(c) {
     });
     if (id && m === "POST" && action === "reset") return await tx(db, async () => {
       await requireAccess(db, user, "admin.users.reset");
+      await protectAdminAccount(db, user, id);
       await get(db, "users", id);
       const token = randomBytes2(24).toString("hex");
       await run(db, "UPDATE password_reset_tokens SET revoked_at=? WHERE user_id=? AND consumed_at IS NULL", now(), id);
@@ -4186,9 +4273,9 @@ async function adminRoutes(c) {
     if (m === "GET" && !id) {
       await requireAccess(db, user, "admin.roles.read");
       return {
-        items: await asyncMap(await all(db, "SELECT * FROM roles ORDER BY name"), async (r) => ({
+        items: await asyncMap(await all(db, "SELECT * FROM roles ORDER BY name"), async r => ({
           ...r,
-          permissions: (await all(db, "SELECT p.code FROM permissions p JOIN role_permissions rp ON rp.permission_id=p.id WHERE rp.role_id=?", r.id)).map((p2) => p2.code)
+          permissions: (r.code === "SUPER_ADMIN" ? await all(db, "SELECT code FROM permissions") : await all(db, "SELECT p.code FROM permissions p JOIN role_permissions rp ON rp.permission_id=p.id WHERE rp.role_id=?", r.id)).map(p2 => p2.code)
         })),
         permissions: await all(db, "SELECT * FROM permissions ORDER BY code")
       };
@@ -4198,6 +4285,14 @@ async function adminRoutes(c) {
       const old = id ? await get(db, "roles", id) : null;
       assert(Array.isArray(b.permissions), "Daftar izin wajib diisi.");
       const code = text(b.code === void 0 ? old?.code : b.code, "Kode role", 64).toUpperCase();
+      const superadmin = await isSuperAdmin(db, user);
+      assert(superadmin || !old?.is_system, "Hanya Superadmin yang boleh mengubah role sistem.", 403);
+      assert(superadmin || !old || !await one(db, "SELECT 1 FROM user_roles WHERE role_id=? AND user_id=?", old.id, user.id), "IT-admin tidak boleh mengubah izin role yang dipakainya sendiri.", 403);
+      if (["SUPER_ADMIN", "IT_ADMIN"].includes(code)) {
+        assert(old && old.code === code, "Role admin sistem tidak dapat dibuat ulang.", 403);
+        const expected = code === "SUPER_ADMIN" ? (await all(db, "SELECT code FROM permissions")).map(p2 => p2.code) : IT_ADMIN_PERMISSIONS;
+        assert(b.is_active !== false && b.is_active !== 0 && new Set(b.permissions).size === expected.length && expected.every(p2 => b.permissions.includes(p2)), "Izin role admin sistem mengikuti tipe admin dan tidak dapat dikurangi atau diperluas.", 409);
+      }
       assert(!old?.is_system || code === old.code, "Kode role sistem tidak dapat diubah. Izin role tetap dapat disesuaikan.");
       const values = {
         code,
@@ -4231,7 +4326,7 @@ async function adminRoutes(c) {
   }
   if (p[0] === "settings") {
     await requireAccess(db, user, "admin.roles.manage");
-    if (m === "GET") return Object.fromEntries((await all(db, "SELECT key,value FROM app_settings")).map((r) => [r.key, r.value]));
+    if (m === "GET") return Object.fromEntries((await asyncFilter(await all(db, "SELECT key,value FROM app_settings"), async r => await isSuperAdmin(db, user) || ["allow_gap_publication", "demo_mode"].includes(r.key))).map(r => [r.key, r.value]));
     if (m === "PATCH") return await tx(db, async () => {
       assert(typeof b.allow_gap_publication === "boolean", "Pilihan kebijakan tidak valid.");
       await run(db, "UPDATE app_settings SET value=? WHERE key='allow_gap_publication'", String(b.allow_gap_publication));
@@ -4656,7 +4751,7 @@ var index_default = {
       assert(req.method === "POST", "Metode tidak diizinkan.", 405);
       const b = await readBody(req), env = Deno.env.toObject();
       identity = createIdentity(env);
-      storage = createDriveStorage(env);
+      storage = createDriveStorage(env, undefined, {module: driveModuleForOperation(b.path, b.body)});
       const client = database(env);
       if (b.action === "health") {
         const ready = await transaction(client, identity, storage, async (db) => {
@@ -4683,9 +4778,10 @@ var index_default = {
         assert(!user.employee_id || (await one(db, "SELECT is_active FROM employees WHERE id=?", user.employee_id))?.is_active === 1, "Profil pegawai tidak aktif.", 401);
         assert(typeof b.query === "string" && b.query.length <= 2048 && b.body && typeof b.body === "object" && !Array.isArray(b.body), "Permintaan tidak valid.", 400);
         const result2 = await routeOperation({ db, user, path: b.path, method: b.method, body: b.body, query: b.query });
+        await storage.finalize();
         workCompleted = true;
         return result2;
-      }, b.method !== "GET");
+      }, b.method !== "GET" || b.path?.startsWith("files/"));
       return Response.json({ ok: true, result }, { headers: { "Cache-Control": "no-store", "X-SPH-Modules-Revision": "20261016.1" } });
     } catch (error) {
       if (!workCompleted) {

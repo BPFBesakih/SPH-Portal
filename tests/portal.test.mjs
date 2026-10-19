@@ -147,6 +147,55 @@ test('dokumen masa depan tidak diaktifkan; publikasi baru mengarsipkan versi lam
   const v=await call(hrRoutes,f,`documents/${doc.id}/versions`,'POST',{file_id:file().id,version_label:'1',effective_on:'2099-01-01'});await assert.rejects(call(hrRoutes,f,`documents/${doc.id}/activate`,'POST',{version_id:v.id,row_version:v.row_version}),/belum tiba/);
   const a=await call(hrRoutes,f,`documents/${doc.id}/versions`,'POST',{file_id:file().id,version_label:'2',effective_on:today()});await call(hrRoutes,f,`documents/${doc.id}/activate`,'POST',{version_id:a.id,row_version:a.row_version});const b=await call(hrRoutes,f,`documents/${doc.id}/versions`,'POST',{file_id:file().id,version_label:'3',effective_on:today()});await call(hrRoutes,f,`documents/${doc.id}/activate`,'POST',{version_id:b.id,row_version:b.row_version});assert.equal(get(f.db,'document_versions',a.id).state,'ARCHIVED');
 });
+test('hapus dokumen dibatasi ke pengelola unit pemilik dan Superadmin',async t=>{
+  const f=fixture(t),manager=f.account('doc-manager',f.employees[0].id),reader=f.account('doc-reader',f.employees[1].id),otherManager=f.account('other-doc-manager',f.employees[2].id);
+  f.role(manager,['hr.documents.read']);f.role(manager,['hr.documents.manage'],'ASSIGNED_UNITS',f.unit.id);
+  f.role(reader,['hr.documents.read','hr.documents.download']);
+  f.role(otherManager,['hr.documents.read']);f.role(otherManager,['hr.documents.manage'],'ASSIGNED_UNITS',f.otherUnit.id);
+  const create=code=>call(hrRoutes,f,'documents','POST',{document_code:code,title:'SOP unit A',category:'SOP_SECURITY',owner_org_unit_id:f.unit.id,audience_kind:'SELECTED_UNITS',target_units:[f.otherUnit.id]});
+  const doc=await create('DELETE-SCOPE');
+  for(const [user,allowed] of [[f.user,true],[manager,true],[reader,false],[otherManager,false]]){
+    const detail=await call(hrRoutes,{...f,user},`documents/${doc.id}`);assert.equal(detail.can_delete,allowed);assert.equal(detail.can_manage,allowed);
+    if(!allowed)await assert.rejects(call(hrRoutes,{...f,user},`documents/${doc.id}`,'DELETE',{row_version:doc.row_version}),e=>e.status===403);
+  }
+  assert.equal(get(f.db,'documents',doc.id).is_archived,0);
+  await assert.rejects(call(hrRoutes,{...f,user:manager},`documents/${doc.id}`,'DELETE',{}),e=>e.status===409);
+  await assert.rejects(call(hrRoutes,{...f,user:manager},`documents/${doc.id}`,'DELETE',{row_version:doc.row_version+1}),e=>e.status===409);
+  assert.equal(one(f.db,"SELECT count(*) n FROM audit_events WHERE action='DELETE' AND object_key=?",doc.id).n,0);
+  assert.deepEqual(await call(hrRoutes,{...f,user:manager},`documents/${doc.id}`,'DELETE',{row_version:doc.row_version}),{deleted:true});
+  const second=await create('DELETE-SUPERADMIN');await call(hrRoutes,f,`documents/${second.id}`,'DELETE',{row_version:second.row_version});
+  assert.equal(get(f.db,'documents',second.id).is_archived,1);
+});
+
+test('dokumen terhapus menutup detail, versi, unduhan dan referensi materi tanpa merusak riwayat',async t=>{
+  const f=fixture(t),doc=await call(hrRoutes,f,'documents','POST',{document_code:'DELETE-HISTORY',title:'SOP terhapus',category:'SOP',owner_org_unit_id:f.unit.id});
+  const file=insert(f.db,'files',{storage_key:crypto.randomUUID(),original_name:'sop.pdf',mime_type:'application/pdf',size_bytes:1,checksum:'h',status:'AVAILABLE',uploaded_by:f.user.id});
+  const version=await call(hrRoutes,f,`documents/${doc.id}/versions`,'POST',{file_id:file.id,version_label:'1',effective_on:today()});
+  await call(hrRoutes,f,`documents/${doc.id}/activate`,'POST',{version_id:version.id,row_version:version.row_version});
+  const event=await call(hrRoutes,f,'training','POST',{title:'Pelatihan SOP',topic:'SOP',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T00:00:00Z',ends_at:'2099-01-01T01:00:00Z'});
+  const material=await call(hrRoutes,f,`training/${event.id}/materials`,'POST',{title:'SOP',document_version_id:version.id});
+  assert.equal(fileAllowed(f.db,f.user,file.id),true);
+  await call(hrRoutes,f,`documents/${doc.id}`,'DELETE',{row_version:doc.row_version});
+  assert.equal((await call(hrRoutes,f,'documents')).items.some(d=>d.id===doc.id),false);
+  assert.equal(dashboard(f.db,f.user,'hr').documents.some(d=>d.id===doc.id),false);
+  assert.equal(fileAllowed(f.db,f.user,file.id),false);
+  for(const [path,method,body] of [[`documents/${doc.id}`,'GET',{}],[`documents/${doc.id}`,'DELETE',{row_version:2}],[`documents/${doc.id}/versions`,'POST',{}],[`documents/${doc.id}/activate`,'POST',{}]])await assert.rejects(call(hrRoutes,f,path,method,body),e=>e.status===404);
+  await assert.rejects(call(hrRoutes,f,`training/${event.id}/materials`,'POST',{title:'SOP lama',document_version_id:version.id}),e=>e.status===403);
+  assert.equal(get(f.db,'document_versions',version.id).document_id,doc.id);assert.equal(get(f.db,'training_materials',material.id).document_version_id,version.id);
+  const audit=one(f.db,"SELECT * FROM audit_events WHERE action='DELETE' AND object_type='documents' AND object_key=?",doc.id);
+  assert.equal(audit.actor_user_id,f.user.id);assert.equal(JSON.parse(audit.change_summary).document_code,doc.document_code);
+});
+
+test('sasaran dokumen mewajibkan unit terpilih dan mengabaikan pilihan untuk seluruh unit',async t=>{
+  const f=fixture(t),base={document_code:'TARGETS',title:'SOP sasaran',category:'SOP',owner_org_unit_id:f.unit.id,audience_kind:'SELECTED_UNITS'};
+  for(const target_units of [undefined,[],['unknown-unit']])await assert.rejects(call(hrRoutes,f,'documents','POST',{...base,target_units}));
+  assert.equal(one(f.db,"SELECT count(*) n FROM documents WHERE document_code='TARGETS'").n,0);
+  const selected=await call(hrRoutes,f,'documents','POST',{...base,target_units:[f.unit.id,f.otherUnit.id,f.unit.id]});
+  assert.equal((await call(hrRoutes,f,`documents/${selected.id}`)).targets.length,2);
+  const allUnits=await call(hrRoutes,f,'documents','POST',{...base,document_code:'TARGETS-ALL',audience_kind:'ALL_UNITS',target_units:[f.unit.id]});
+  assert.deepEqual((await call(hrRoutes,f,`documents/${allUnits.id}`)).targets,[]);
+});
+
 test('kejadian idempoten, riwayat penyelesaian dan pembukaan kembali tersimpan',async t=>{
   const f=scheduling(t);f.user.employee_id=f.employees[0].id;run(f.db,'UPDATE users SET employee_id=? WHERE id=?',f.user.employee_id,f.user.id);const photo=insert(f.db,'files',{storage_key:'camera-test',original_name:'bukti.jpg',mime_type:'image/jpeg',size_bytes:10,checksum:'test',status:'AVAILABLE',uploaded_by:f.user.id});const payload={occurred_at:now(),incident_type:'Temuan',chronology:'Kronologi',idempotency_key:'same-request',location:{latitude:-8.37,longitude:115.45,accuracy:10,captured_at:now()},photos:[{file_id:photo.id,captured_at:now(),source:'CAMERA'}]};
   const a=await call(securityRoutes,f,'incidents','POST',payload),b=await call(securityRoutes,f,'incidents','POST',payload);assert.equal(a.id,b.id);assert.equal(one(f.db,'SELECT count(*) n FROM incidents').n,1);await assert.rejects(call(securityRoutes,f,'incidents','POST',{...payload,chronology:'Berbeda'}),/laporan berbeda/);

@@ -230,15 +230,32 @@ export async function hrRoutes(c) {
     });
     if (id) {
       const doc = await get(db, 'documents', id);
+      assert(!doc.is_archived, 'Dokumen tidak ditemukan.', 404);
       if (m === 'GET' && !action) {
         assert(await documentAllowed(db, user, 'read', doc), 'Akses ditolak.', 403);
         const manage = await documentAllowed(db, user, 'manage', doc);
         return {
           ...doc,
+          can_manage: manage,
+          can_delete: manage,
+          can_publish: await documentAllowed(db, user, 'publish', doc),
           versions: (await all(db, 'SELECT v.*,f.original_name FROM document_versions v JOIN files f ON f.id=v.file_id WHERE v.document_id=? ORDER BY v.created_at DESC', id)).filter(v => manage || v.state === 'ACTIVE'),
           targets: await all(db, 'SELECT org_unit_id FROM document_target_units WHERE document_id=?', id)
         };
       }
+      if (m === 'DELETE' && !action) return await tx(db, async () => {
+        assert(await documentAllowed(db, user, 'manage', doc), 'Anda tidak memiliki akses untuk menghapus dokumen unit ini.', 403);
+        await update(db, 'documents', id, b.row_version, {
+          is_archived: 1
+        });
+        await audit(db, user, 'DELETE', 'documents', id, {
+          document_code: doc.document_code,
+          title: doc.title
+        });
+        return {
+          deleted: true
+        };
+      });
       if (m === 'POST' && action === 'versions') return await tx(db, async () => {
         assert(await documentAllowed(db, user, 'manage', doc), 'Akses ditolak.', 403);
         await claimFile(db, user, b.file_id);

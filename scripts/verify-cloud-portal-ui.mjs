@@ -19,11 +19,14 @@ const check=async(name,fn)=>{await fn();console.log(`PASS ${name}`);checks++;};
 const permissions=['admin.users.read','admin.users.manage','admin.users.reset','admin.roles.read','admin.roles.manage','admin.audit.read'];
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
-async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960},delays={},failures={},purchasingAccess=false,initialHash=''}={}){
+async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960},delays={},failures={},purchasingAccess=false,documentsAccess=false,documentManager=true,initialHash=''}={}){
  const context=await browser.newContext({viewport,baseURL:origin,reducedMotion});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
  if(clock)await page.clock.install({time:new Date('2026-10-18T00:00:00Z')});
  let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
  if(purchasingAccess)currentPermissions.push('purchasing.requests.read_all');
+ if(documentsAccess)currentPermissions.push('hr.documents.read','hr.documents.manage','hr.documents.publish','hr.documents.download');
+ const units=['Badan Pengelola Besakih','Bisnis & Pengembangan Usaha','Operasional & Pelayanan','Pengelolaan Lingkungan & Keamanan Kawasan Besakih','Satuan Pengawas Internal & Manajemen Risiko','Sekretariat'].map((name,index)=>({id:`document-unit-${index}`,name}));
+ const documents=[{id:'fixture-document',document_code:'SOP-001',title:'SOP Keamanan Kawasan',category:'SOP_SECURITY',unit_name:units[3].name,row_version:1,active_version:'1.0',effective_on:'2026-10-19',versions:[],targets:[]}];
  const systemRole={id:'fixture-system-role',code:'SUPER_ADMIN',name:'Super Admin',is_system:1,is_active:1,row_version:1,permissions:[...permissions]};
  const grantRole={id:'fixture-employee-role',code:'EMPLOYEE',name:'Pegawai',is_active:1,is_system:0,permissions:['hr.employees.read']};
  const users=[{...me.user,grants:accountGrants}];
@@ -41,7 +44,15 @@ async function fixture({signedIn=true,required=false,roleEditor=false,grantEdito
    else if(url.pathname==='/api/users'&&req.method()==='POST'){const sent=req.postDataJSON();const user={...me.user,id:`fixture-created-${users.length}`,username:sent.username,employee_id:sent.employee_id||null,must_change_password:true,grants:[]};users.push(user);body=user;}
    else if(grantEditor&&url.pathname===`/api/users/${me.user.id}/grants`&&req.method()==='POST'){const sent=req.postDataJSON();users[0].grants=sent.grants.map((g,index)=>({...g,id:`fixture-grant-${index}`,role_name:g.role_id===grantRole.id?grantRole.name:'Petugas Keamanan'}));users[0].row_version++;body={ok:true};}
    else if(url.pathname==='/api/users')body={items:users};
-   else if(url.pathname==='/api/lookups')body={employees,units:grantEditor?[{id:'fixture-unit',name:'Sekretariat'}]:[],posts:grantEditor?[{id:'fixture-post',name:'Pos Fiktif'}]:[]};
+   else if(url.pathname==='/api/lookups')body={employees,units:documentsAccess?units:grantEditor?[{id:'fixture-unit',name:'Sekretariat'}]:[],posts:grantEditor?[{id:'fixture-post',name:'Pos Fiktif'}]:[]};
+   else if(documentsAccess&&url.pathname==='/api/documents'){
+    if(req.method()==='POST'){const sent=req.postDataJSON();body={...sent,id:`fixture-document-${documents.length}`,row_version:1,versions:[],targets:[],unit_name:units.find(u=>u.id===sent.owner_org_unit_id)?.name};documents.push(body);}else body={items:documents};
+   }
+   else if(documentsAccess&&url.pathname.startsWith('/api/documents/')){
+    const id=url.pathname.split('/').at(-1),doc=documents.find(d=>d.id===id);assert(doc);
+    if(req.method()==='DELETE'){assert.deepEqual(req.postDataJSON(),{row_version:doc.row_version});assert.equal(req.headers()['x-csrf-token'],'fixture-csrf');if(!failures[url.pathname])documents.splice(documents.indexOf(doc),1);body={deleted:true};}
+    else body={...doc,can_manage:documentManager,can_delete:documentManager,can_publish:documentManager};
+   }
    else if(url.pathname==='/api/announcements')body={items:[],can_manage:true};
    else if(url.pathname==='/api/purchasing/overview')body={capabilities:{home:true},counts:{approvals:1}};
    else if(url.pathname==='/api/roles')body={items:grantEditor?[grantRole]:roleEditor?[systemRole]:[],permissions:roleEditor?catalog:[]};
@@ -231,6 +242,62 @@ try{
   await f.page.getByRole('link',{name:'Role & Izin',exact:true}).click();await f.page.getByRole('button',{name:/Super Admin/}).click();
   await f.page.getByRole('dialog',{name:'Super Admin',exact:true}).waitFor();
   assert.equal(await f.page.locator('dialog input[name="permissions[]"]:enabled').count(),0);assert.equal(await f.page.getByRole('button',{name:'Simpan',exact:true}).count(),0);
+ });
+ const documentForm=async(viewport)=>{
+  const f=await fixture({documentsAccess:true,initialHash:'documents',...(viewport?{viewport}:{})});
+  await f.page.getByRole('button',{name:'Tambah dokumen',exact:true}).click();
+  const form=f.page.getByRole('dialog',{name:'Tambah dokumen',exact:true});await form.waitFor();
+  await form.getByLabel('Kode dokumen',{exact:true}).fill('SOP-TEST');await form.getByLabel('Judul',{exact:true}).fill('SOP pengujian');
+  await form.getByLabel('Kategori',{exact:true}).selectOption('SOP_SECURITY');await form.getByLabel('Unit pengelola',{exact:true}).selectOption('document-unit-3');
+  return {...f,form};
+ };
+ await check('document target units are explicit checkboxes with wrapping labels, validation and a multi-unit payload',async()=>{
+  const f=await documentForm(),group=f.form.getByRole('group',{name:'Unit sasaran',exact:true});
+  assert.equal(await group.isVisible(),false);assert.equal(await f.form.locator('select[multiple]').count(),0);
+  await f.form.getByLabel('Sasaran',{exact:true}).selectOption('SELECTED_UNITS');await group.waitFor();
+  await f.form.getByRole('button',{name:'Simpan',exact:true}).click();await f.form.getByRole('alert').filter({hasText:'Pilih minimal satu unit sasaran.'}).waitFor();
+  assert.equal(f.calls.some(c=>c.path==='/api/documents'&&c.method==='POST'),false);
+  await group.getByLabel('Pengelolaan Lingkungan & Keamanan Kawasan Besakih',{exact:true}).check();await group.getByLabel('Satuan Pengawas Internal & Manajemen Risiko',{exact:true}).check();
+  assert.match(await group.locator('[data-target-count]').textContent(),/2 unit dipilih/);
+  assert.equal(await f.form.getByRole('alert').textContent(),'');
+  assert.equal(await group.evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await f.page.screenshot({path:resolve(output,'document-targets-desktop.png'),fullPage:true});
+  await f.form.getByRole('button',{name:'Simpan',exact:true}).click();await f.form.waitFor({state:'hidden'});
+  const sent=f.calls.find(c=>c.path==='/api/documents'&&c.method==='POST').body;
+  assert.deepEqual(sent.target_units,['document-unit-3','document-unit-4']);assert.equal('target_units[]' in sent,false);
+ });
+ await check('mobile document targets remain readable and switching to all units clears the submitted targets',async()=>{
+  const f=await documentForm({width:390,height:844});await f.form.getByLabel('Sasaran',{exact:true}).selectOption('SELECTED_UNITS');
+  const group=f.form.getByRole('group',{name:'Unit sasaran',exact:true});await group.getByLabel('Pengelolaan Lingkungan & Keamanan Kawasan Besakih',{exact:true}).check();
+  assert.equal(await f.form.evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  assert.equal(await group.evaluate(el=>[...el.querySelectorAll('label')].every(label=>label.scrollWidth<=label.clientWidth)),true);
+  await f.page.screenshot({path:resolve(output,'document-targets-mobile.png'),fullPage:true});
+  await f.form.getByLabel('Sasaran',{exact:true}).selectOption('ALL_UNITS');assert.equal(await group.isVisible(),false);
+  await f.form.getByRole('button',{name:'Simpan',exact:true}).click();await f.form.waitFor({state:'hidden'});
+  assert.deepEqual(f.calls.find(c=>c.path==='/api/documents'&&c.method==='POST').body.target_units,[]);
+ });
+ await check('document deletion requires confirmation, supports cancel and refreshes the list',async()=>{
+  const f=await fixture({documentsAccess:true,initialHash:'documents'});await f.page.getByRole('button',{name:/SOP Keamanan Kawasan/}).click();
+  await f.page.getByRole('button',{name:'Hapus dokumen',exact:true}).click();
+  let confirmation=f.page.getByRole('dialog',{name:'Hapus dokumen?',exact:true});await confirmation.waitFor();
+  await confirmation.getByRole('button',{name:'Batal',exact:true}).click();assert.equal(f.calls.some(c=>c.method==='DELETE'),false);
+  await f.page.getByRole('button',{name:'Hapus dokumen',exact:true}).click();confirmation=f.page.getByRole('dialog',{name:'Hapus dokumen?',exact:true});
+  await confirmation.getByRole('button',{name:'Hapus dokumen',exact:true}).click();await confirmation.waitFor({state:'hidden'});
+  await f.page.getByText('Dokumen berhasil dihapus.',{exact:true}).waitFor();await f.page.getByText('Belum ada dokumen',{exact:true}).waitFor();
+  assert.equal(f.calls.filter(c=>c.method==='DELETE'&&c.path==='/api/documents/fixture-document').length,1);
+ });
+ await check('document actions follow server scope even with a management permission on another unit',async()=>{
+  const f=await fixture({documentsAccess:true,documentManager:false,initialHash:'documents'});await f.page.getByRole('button',{name:/SOP Keamanan Kawasan/}).click();
+  const detail=f.page.getByRole('dialog',{name:'SOP Keamanan Kawasan',exact:true});await detail.waitFor();
+  assert.equal(await detail.getByRole('button',{name:'Hapus dokumen',exact:true}).count(),0);assert.equal(await detail.getByRole('button',{name:'Tambah versi',exact:true}).count(),0);
+ });
+ await check('a rejected document deletion keeps its confirmation and list available',async()=>{
+  const f=await fixture({documentsAccess:true,initialHash:'documents',failures:{'/api/documents/fixture-document':409}});
+  // Fail only the mutation so the detail can load normally.
+  await f.page.route(`${origin}/api/documents/fixture-document`,async route=>{if(route.request().method()==='GET')await route.fulfill({json:{id:'fixture-document',document_code:'SOP-001',title:'SOP Keamanan Kawasan',category:'SOP_SECURITY',row_version:1,can_manage:true,can_delete:true,can_publish:true,versions:[],targets:[]}});else await route.fallback();});
+  await f.page.getByRole('button',{name:/SOP Keamanan Kawasan/}).click();await f.page.getByRole('button',{name:'Hapus dokumen',exact:true}).click();
+  const confirmation=f.page.getByRole('dialog',{name:'Hapus dokumen?',exact:true});await confirmation.getByRole('button',{name:'Hapus dokumen',exact:true}).click();
+  await confirmation.getByRole('alert').filter({hasText:'Layanan sementara tidak tersedia.'}).waitFor();assert.equal(await confirmation.getByRole('button',{name:'Hapus dokumen',exact:true}).isEnabled(),true);
  });
  assert.deepEqual(errors,[]);console.log(`${checks} isolated portal browser checks passed.`);
 }finally{for(const context of contexts)await context.close();await browser.close();await new Promise(done=>server.close(done));}

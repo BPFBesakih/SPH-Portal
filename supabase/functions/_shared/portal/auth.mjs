@@ -85,6 +85,7 @@ export async function coachingAllowed(db, user, action, session) {
   });
 }
 export async function documentAllowed(db, user, action, doc) {
+  if(doc.is_archived)return false;
   const permission = `hr.documents.${action}`;
   if (!['read', 'download'].includes(action)) return await can(db, user, permission, {
     org_unit_id: doc.owner_org_unit_id
