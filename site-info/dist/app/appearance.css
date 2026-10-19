@@ -27,11 +27,13 @@ h1, h2, h3, .page-heading h1, .hero h1 { font-weight: 700; }
 .brand { padding-inline: 12px; gap: 10px; }
 .brand-name { font-size: 1.5rem; font-weight: 700; }
 .brand-subtitle { font-size: .6875rem; letter-spacing: .8px; }
-.sidebar-bottom { padding-top: 16px; }
-.help-box { padding: 14px 10px; gap: 8px; }
-.help-box small { font-size: .8125rem; }
-.sidebar-footnote { padding-inline: 12px; }
-.sidebar-footnote span { font-size: .75rem; }
+.sidebar-bottom { padding-top: 8px; flex-shrink: 0; }
+.help-box { margin-bottom: 10px; padding: 8px 10px; gap: 8px; min-height: 44px; border-radius: 12px; }
+.help-box strong { font-size: .8125rem; line-height: 1.4; }
+.help-box small { font-size: .6875rem; line-height: 1.4; }
+.help-box > .icon:first-child { width: 18px; height: 18px; flex-shrink: 0; }
+.sidebar-footnote { padding-inline: 12px; font-size: .6875rem; line-height: 1.5; }
+.sidebar-footnote span { font-size: .625rem; }
 .workspace-switch { margin-inline: 0; }
 .workspace-switch button { padding: 10px 6px; min-height: 44px; gap: 6px; font-size: .875rem; }
 .nav-group { letter-spacing: .8px; font-size: .75rem; }
