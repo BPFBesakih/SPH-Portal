@@ -3,12 +3,15 @@
 import {state,api,post,patch,uploadFile,refresh} from './api.js';
 import {esc,icon,button,dialog,formDialog,toast,formatDate,formatTime,empty,number,options,localToday} from './ui.js';
 import {encodeQR} from './vendor/qr.js';
+import {createSummaryResource} from './summary-resource.js';
 
 export const purchasingTitles={purchasing:'Beranda Pengadaan','pr-mine':'Pengajuan Saya','pr-approvals':'Persetujuan PR','pr-queue':'Antrean Purchasing','pr-all':'Semua PR',vendors:'Daftar Vendor',budget:'Pos RKA','purchasing-reports':'Laporan Pengadaan','purchasing-settings':'Pengaturan Pengadaan','pr-verify':'Verifikasi Dokumen'};
 export const purchasingRoutes=Object.keys(purchasingTitles);
 export const purchasingNav=[['purchasing','Beranda','dashboard','purchasing:home'],['pr-mine','Pengajuan Saya','document','purchasing:submit'],['pr-approvals','Persetujuan','check','purchasing:home'],['pr-queue','Antrean Purchasing','folder','purchasing:procurement'],['pr-all','Semua PR','log','purchasing:read_all'],['vendors','Vendor','building','purchasing:vendors'],['budget','Pos RKA','audit','purchasing:budget'],['purchasing-reports','Laporan','filter','purchasing:reports'],['purchasing-settings','Pengaturan','settings','purchasing:settings']];
 export const purchasingAllowed=key=>key==='home'||Boolean(state.purchasing?.capabilities?.[key]);
-export async function loadPurchasingOverview(){state.purchasing=await api('purchasing/overview');state.purchasingAt=Date.now();return state.purchasing;}
+const overviewSummary=createSummaryResource('purchasing/overview',result=>{state.purchasing=result;});
+export const loadPurchasingOverview=options=>overviewSummary.load(options);
+export const invalidatePurchasingOverview=()=>overviewSummary.invalidate();
 // Butir lonceng notifikasi dari ringkasan Pengadaan.
 export function purchasingNotices(){
   const c=state.purchasing?.counts;if(!c)return [];
@@ -18,7 +21,7 @@ export function purchasingNotices(){
     c.completeness&&{route:'pr-queue',count:c.completeness,title:'PR menunggu pemeriksaan Purchasing',note:'Beri nomor PR dan PIC pembelian',ico:'folder'}
   ].filter(Boolean);
 }
-export function resetPurchasingState(){Object.assign(P,{items:[],detail:null,lookups:null,view:'',year:null,status:'',budget:null,vendors:null,settings:null,delegations:[],report:null});}
+export function resetPurchasingState(){overviewSummary.reset();state.purchasing=null;Object.assign(P,{items:[],detail:null,lookups:null,view:'',year:null,status:'',budget:null,vendors:null,settings:null,delegations:[],report:null});}
 
 const P={items:[],detail:null,lookups:null,view:'',year:null,status:'',budget:null,vendors:null,settings:null,delegations:[]};
 const rp=v=>v===null||v===undefined?'—':`Rp${number(v)}`;

@@ -19,10 +19,11 @@ const check=async(name,fn)=>{await fn();console.log(`PASS ${name}`);checks++;};
 const permissions=['admin.users.read','admin.users.manage','admin.users.reset','admin.roles.read','admin.roles.manage','admin.audit.read'];
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
-async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960}}={}){
+async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960},delays={},failures={},purchasingAccess=false,initialHash=''}={}){
  const context=await browser.newContext({viewport,baseURL:origin,reducedMotion});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
  if(clock)await page.clock.install({time:new Date('2026-10-18T00:00:00Z')});
  let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
+ if(purchasingAccess)currentPermissions.push('purchasing.requests.read_all');
  const systemRole={id:'fixture-system-role',code:'SUPER_ADMIN',name:'Super Admin',is_system:1,is_active:1,row_version:1,permissions:[...permissions]};
  const grantRole={id:'fixture-employee-role',code:'EMPLOYEE',name:'Pegawai',is_active:1,is_system:0,permissions:['hr.employees.read']};
  const users=[{...me.user,grants:accountGrants}];
@@ -30,8 +31,8 @@ async function fixture({signedIn=true,required=false,roleEditor=false,grantEdito
  page.on('pageerror',e=>errors.push(e.message));page.on('console',msg=>{if(msg.type()==='error'&&!msg.text().includes('Failed to load resource'))errors.push(msg.text());});
  await page.route(`${origin}/**`,async route=>{
   const req=route.request(),url=new URL(req.url());if(!url.pathname.startsWith('/api/')){const r=await fetch(base+url.pathname);await route.fulfill({status:r.status,headers:Object.fromEntries(r.headers),body:Buffer.from(await r.arrayBuffer())});return;}
-  active++;maximum=Math.max(maximum,active);calls.push({path:url.pathname,method:req.method(),body:req.postDataJSON()});let body,status=200;
-  await new Promise(r=>setTimeout(r,15));
+  active++;maximum=Math.max(maximum,active);const call={path:url.pathname,method:req.method(),body:req.postDataJSON(),startedAt:Date.now()};calls.push(call);let body,status=200;
+  await new Promise(r=>setTimeout(r,delays[url.pathname]??15));
   try{
    if(url.pathname==='/api/auth/login'){const sent=req.postDataJSON();assert.equal(sent.username,'itadmin');authenticated=true;body={ok:true};}
    else if(url.pathname==='/api/auth/logout'){assert.equal(req.headers()['x-csrf-token'],'fixture-csrf');authenticated=false;body={ok:true};}
@@ -42,15 +43,17 @@ async function fixture({signedIn=true,required=false,roleEditor=false,grantEdito
    else if(url.pathname==='/api/users')body={items:users};
    else if(url.pathname==='/api/lookups')body={employees,units:grantEditor?[{id:'fixture-unit',name:'Sekretariat'}]:[],posts:grantEditor?[{id:'fixture-post',name:'Pos Fiktif'}]:[]};
    else if(url.pathname==='/api/announcements')body={items:[],can_manage:true};
+   else if(url.pathname==='/api/purchasing/overview')body={capabilities:{home:true},counts:{approvals:1}};
    else if(url.pathname==='/api/roles')body={items:grantEditor?[grantRole]:roleEditor?[systemRole]:[],permissions:roleEditor?catalog:[]};
    else if(roleEditor&&url.pathname===`/api/roles/${systemRole.id}`&&req.method()==='PATCH'){const change=req.postDataJSON();assert(mayManage);systemRole.permissions=change.permissions;systemRole.row_version++;currentPermissions=[...change.permissions];body={...systemRole};}
    else if(url.pathname==='/api/settings')body={allow_gap_publication:'false'};
    else if(url.pathname==='/api/audit')body={items:[]};
    else throw new Error(`Unexpected fixture request ${url.pathname}`);
+   if(failures[url.pathname]){status=failures[url.pathname];body={error:'Layanan sementara tidak tersedia.'};}
    await route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
-  }finally{active--;}
+  }finally{call.completedAt=Date.now();active--;}
  });
- await page.goto('/app/');return {page,calls,get maximum(){return maximum;}};
+ await page.goto(`/app/${initialHash?'#'+initialHash:''}`);return {page,calls,get maximum(){return maximum;},async idle(){while(active)await new Promise(r=>setTimeout(r,10));}};
 }
 try{
  await check('full app boots with the six existing admin permissions and serializes session-bound API calls',async()=>{
@@ -60,6 +63,46 @@ try{
   await f.page.screenshot({path:resolve(output,'admin-desktop.png'),fullPage:true});
   await f.page.getByRole('link',{name:'Role & Izin',exact:true}).click();await f.page.getByRole('heading',{name:'Role & Izin',exact:true}).waitFor();
   await f.page.getByRole('link',{name:'Riwayat Aktivitas',exact:true}).click();await f.page.getByRole('heading',{name:'Riwayat Aktivitas',exact:true}).waitFor();
+ });
+ await check('menu data renders before slow notifications and notifications are reused across menu changes',async()=>{
+  const f=await fixture({delays:{'/api/announcements':750}});
+  await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();
+  const users=f.calls.find(c=>c.path==='/api/users'),announcements=f.calls.find(c=>c.path==='/api/announcements');
+  assert(users.completedAt);assert(announcements&&!announcements.completedAt,'the menu must be visible while notifications are still loading');
+  const visibleAt=Date.now();await f.idle();
+  console.log(`TIMING fixture menu visible ${visibleAt-users.startedAt} ms after its request; notifications finished ${announcements.completedAt-users.startedAt} ms after it (750 ms simulated delay).`);
+  await f.page.getByRole('link',{name:'Role & Izin',exact:true}).click();await f.page.getByRole('heading',{name:'Role & Izin',exact:true}).waitFor();
+  await f.page.getByRole('link',{name:'Riwayat Aktivitas',exact:true}).click();await f.page.getByRole('heading',{name:'Riwayat Aktivitas',exact:true}).waitFor();await f.idle();
+  assert.equal(f.calls.filter(c=>c.path==='/api/announcements').length,1);assert.equal(f.maximum,1);
+ });
+ await check('slow purchasing notifications do not delay unrelated menus and queued refreshes yield to menu requests',async()=>{
+  const f=await fixture({purchasingAccess:true,initialHash:'accounts',delays:{'/api/announcements':500}});
+  await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();
+  assert.equal(await f.page.locator('.workspace-switch [data-action="switch-purchasing"]').count(),1);
+  assert.equal(f.calls.some(c=>c.path==='/api/purchasing/overview'),false);
+  await f.page.getByRole('link',{name:'Role & Izin',exact:true}).click();await f.page.getByRole('heading',{name:'Role & Izin',exact:true}).waitFor();await f.idle();
+  const paths=f.calls.map(c=>c.path);assert(paths.indexOf('/api/roles')<paths.indexOf('/api/purchasing/overview'));
+  assert(paths.indexOf('/api/settings')<paths.indexOf('/api/purchasing/overview'));
+  await f.page.locator('.nav-link[href="#pr-approvals"] .badge-count').waitFor();assert.equal(f.maximum,1);
+ });
+ await check('notification failures leave the selected menu usable and background retries are bounded',async()=>{
+  const f=await fixture({failures:{'/api/announcements':503}});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();await f.idle();
+  await f.page.getByRole('link',{name:'Riwayat Aktivitas',exact:true}).click();await f.page.getByRole('heading',{name:'Riwayat Aktivitas',exact:true}).waitFor();await f.idle();
+  assert.equal(await f.page.getByText('Halaman belum dapat ditampilkan',{exact:true}).count(),0);
+  assert.equal(f.calls.filter(c=>c.path==='/api/announcements').length,1);
+ });
+ await check('rapid menu changes render the last menu and skip intermediate loads',async()=>{
+  const f=await fixture({delays:{'/api/roles':350}});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();await f.idle();
+  await Promise.all([f.page.waitForRequest('**/api/roles'),f.page.getByRole('link',{name:'Role & Izin',exact:true}).click()]);
+  await f.page.evaluate(()=>{location.hash='accounts';location.hash='audit';});
+  await f.page.getByRole('heading',{name:'Riwayat Aktivitas',exact:true}).waitFor();await f.idle();
+  assert.equal(f.calls.filter(c=>c.path==='/api/users').length,1);assert.equal(await f.page.locator('.nav-link[aria-current="page"]').getAttribute('href'),'#audit');
+ });
+ await check('an explicit refresh reloads the menu and invalidates notification summaries',async()=>{
+  const f=await fixture();await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();await f.idle();
+  await f.page.evaluate(()=>document.dispatchEvent(new Event('refresh-app')));
+  await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();await f.idle();
+  assert.equal(f.calls.filter(c=>c.path==='/api/users').length,2);assert.equal(f.calls.filter(c=>c.path==='/api/announcements').length,2);
  });
  await check('the mobile shell fits 320 px and opens its navigation',async()=>{
   const f=await fixture({viewport:{width:320,height:800}});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();
