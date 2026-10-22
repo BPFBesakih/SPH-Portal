@@ -382,18 +382,28 @@ export async function hrRoutes(c) {
       });
       if (m === 'POST' && action === 'participants') return await tx(db, async () => {
         assert(await trainingAllowed(db, user, 'participants', event), 'Akses ditolak.', 403);
-        const ec = await employeeContext(db, (await get(db, 'employees', b.employee_id)).id);
-        await requireAccess(db, user, 'hr.training.participants', ec);
-        const row = await insert(db, 'training_participants', {
-          training_event_id: id,
-          employee_id: b.employee_id,
-          attendance_status: 'NOT_RECORDED',
-          created_by: user.id
-        });
-        await audit(db, user, 'ADD_PARTICIPANT', 'training_events', id, {
-          participant_id: row.id
-        });
-        return row;
+        const bulk = b.employee_ids !== undefined, employeeIds = bulk ? b.employee_ids : [b.employee_id];
+        assert(Array.isArray(employeeIds) && employeeIds.length > 0 && employeeIds.every(employeeId => typeof employeeId === 'string' && employeeId.trim().length > 0), 'Pilih minimal satu peserta.');
+        assert(new Set(employeeIds).size === employeeIds.length, 'Daftar peserta tidak boleh berulang.');
+        const items = [];
+        for (const employeeId of employeeIds) {
+          const ec = await employeeContext(db, (await get(db, 'employees', employeeId)).id);
+          await requireAccess(db, user, 'hr.training.participants', ec);
+          if (bulk) assert(!await one(db, 'SELECT id FROM training_participants WHERE training_event_id=? AND employee_id=?', id, employeeId), 'Salah satu pegawai sudah terdaftar. Muat ulang kegiatan sebelum memilih peserta.', 409);
+          const row = await insert(db, 'training_participants', {
+            training_event_id: id,
+            employee_id: employeeId,
+            attendance_status: 'NOT_RECORDED',
+            created_by: user.id
+          });
+          await audit(db, user, 'ADD_PARTICIPANT', 'training_events', id, {
+            participant_id: row.id
+          });
+          items.push(row);
+        }
+        return bulk ? {
+          items
+        } : items[0];
       });
       if (m === 'PATCH' && action === 'participants') return await tx(db, async () => {
         assert(await trainingAllowed(db, user, 'participants', event), 'Akses ditolak.', 403);

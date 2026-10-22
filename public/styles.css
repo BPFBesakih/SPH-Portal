@@ -77,3 +77,19 @@
 .document-target-option span{min-width:0;overflow-wrap:anywhere;line-height:1.5}
 .document-target-option:hover,.document-target-option:focus-within{background:var(--md-sys-color-surface-container-low)}
 .document-target-option:has(input:checked){background:var(--md-sys-color-secondary-container)}
+.training-participants{min-width:0;margin:0;padding:16px;border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-small)}
+.training-participants legend{padding:0 6px;font-size:var(--md-sys-typescale-body-small-size);font-weight:600}
+.training-participants>p{margin-top:12px;line-height:1.6}
+.training-participant-results{max-height:264px;overflow-y:auto;overscroll-behavior:contain;margin-top:12px}
+.training-participant-option{min-height:48px;padding:10px 8px;border-radius:var(--md-sys-shape-corner-small);cursor:pointer}
+.training-participant-option[hidden]{display:none}
+.training-participant-option input{flex-shrink:0}
+.training-participant-option span{min-width:0;overflow-wrap:anywhere;line-height:1.5}
+.training-participant-option strong,.training-participant-option small{display:block}
+.training-participant-option small{color:var(--md-sys-color-on-surface-variant)}
+.training-participant-option:hover,.training-participant-option:focus-within{background:var(--md-sys-color-surface-container-low)}
+.training-participant-option:has(input:checked){background:var(--md-sys-color-secondary-container)}
+.training-participant-selection{display:flex;flex-wrap:wrap;gap:8px;max-height:144px;overflow-y:auto;margin-top:8px}
+.training-participant-chip{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-height:40px;padding:8px 12px;border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-small);background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);font-size:var(--md-sys-typescale-body-small-size);text-align:left}
+.training-participant-chip span{min-width:0;overflow-wrap:anywhere}
+.training-participant-chip .icon{width:16px;height:16px;flex-shrink:0}

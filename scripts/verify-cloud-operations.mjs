@@ -207,8 +207,32 @@ try{
   assert.equal((await call(admin,'users')).items.some(u=>u.id===account.id),true);
   assert((await call(admin,'audit')).items.length>0);
  });
+ await check('training participant batches preserve per-employee scope and roll back participants and audit on PostgreSQL',async()=>{
+  const event=await call(sdm,'training','POST',{title:'Peserta bersama',topic:'Topik',organizer_org_unit_id:unit.id,starts_at:'2099-01-01T00:00:00Z',ends_at:'2099-01-01T01:00:00Z'}),path=`training/${event.id}/participants`;
+  const empty=async()=>{
+   assert.equal((await one(db,'SELECT count(*)::int n FROM training_participants WHERE training_event_id=?',event.id)).n,0);
+   assert.equal((await one(db,"SELECT count(*)::int n FROM audit_events WHERE object_key=? AND action='ADD_PARTICIPANT'",event.id)).n,0);
+  };
+  for(const employee_ids of [[],null,[employee.id,employee.id]])await assert.rejects(call(sdm,path,'POST',{employee_ids}),e=>e.status===422);
+  await assert.rejects(call(sdm,path,'POST',{employee_ids:[employee.id,randomUUID()]}),e=>e.status===404);await empty();
+  const scoped=await account('training_scoped',null),role=await insert(db,'roles',{code:'TRAINING_SCOPED',name:'Pengelola peserta terbatas',is_active:1,is_system:0});
+  await run(db,'INSERT INTO role_permissions(role_id,permission_id) SELECT ?,id FROM permissions WHERE code IN (?,?)',role.id,'hr.training.read','hr.training.participants');
+  const grant=await insert(db,'user_roles',{user_id:scoped.id,role_id:role.id,scope_kind:'ASSIGNED_UNITS'});
+  await run(db,'INSERT INTO user_role_units(user_role_id,org_unit_id,include_descendants) VALUES(?,?,?)',grant.id,unit.id,0);
+  const otherPosition=await insert(db,'positions',{code:'TRAINING_OTHER',name:'Posisi unit lain',org_unit_id:otherUnit.id,is_active:1});
+  const outside=await insert(db,'employees',{employee_no:'TRAINING-OUTSIDE',full_name:'Peserta unit lain',employment_status:'Tetap',joined_on:'2020-01-01',is_active:1});
+  await insert(db,'employee_placements',{employee_id:outside.id,position_id:otherPosition.id,valid_from:'2020-01-01',is_primary:1});
+  await assert.rejects(call(scoped,path,'POST',{employee_ids:[employee.id,outside.id]}),e=>e.status===403);await empty();
+  await assert.rejects(call(officer,path,'POST',{employee_ids:[employee.id]}),e=>e.status===403);await empty();
+  const result=await call(scoped,path,'POST',{employee_ids:[employee.id,otherEmployee.id]});
+  assert.deepEqual(result.items.map(p=>p.employee_id),[employee.id,otherEmployee.id]);assert(result.items.every(p=>p.attendance_status==='NOT_RECORDED'));
+  assert.equal((await call(sdm,`training/${event.id}`)).participants.length,2);
+  assert.equal((await one(db,"SELECT count(*)::int n FROM audit_events WHERE object_key=? AND action='ADD_PARTICIPANT'",event.id)).n,2);
+  await assert.rejects(call(sdm,path,'POST',{employee_ids:[outside.id,employee.id]}),e=>e.status===409);
+  assert.equal((await one(db,'SELECT count(*)::int n FROM training_participants WHERE training_event_id=?',event.id)).n,2);
+ });
  await check('dashboards, CSV and self-profile have the expected web contract',async()=>{
-  assert.equal((await call(sdm,'dashboard')).total,2);
+  assert.equal((await call(sdm,'dashboard')).total,3);
   assert((await call(sdm,'exports/employees')).csv.includes('Pegawai Fiktif'));
   const me=await call(officer,'portal/me');assert.equal(me.user.username,'officer');assert.equal(me.demo,false);assert(!JSON.stringify(me).includes('access_token'));
  });
@@ -300,6 +324,22 @@ try{
    verifiedId=admin.id;response=await invoke(operation);assert.equal(response.status,401);verifiedId=officer.id;
    response=await invoke({...operation,path:'users'});assert.equal(response.status,403);
    response=await invoke({action:'health'});assert.equal(response.status,200);assert.equal((await response.json()).healthy,true);
+  });
+  await check('packaged training batches persist all participants atomically and reject ungranted mutations',async()=>{
+   const role=await insert(db,'roles',{code:'PACKAGED_TRAINING',name:'Pengelola peserta paket uji',is_active:1,is_system:0});
+   await run(db,'INSERT INTO role_permissions(role_id,permission_id) SELECT ?,id FROM permissions WHERE code=?',role.id,'hr.training.participants');
+   const grant=await insert(db,'user_roles',{user_id:officer.id,role_id:role.id,scope_kind:'ALL'});
+   const event=await call(sdm,'training','POST',{title:'Peserta paket rilis',topic:'Topik',organizer_org_unit_id:unit.id,starts_at:'2099-03-01T00:00:00Z',ends_at:'2099-03-01T01:00:00Z'}),path=`training/${event.id}/participants`;
+   let response=await invoke({...operation,path,method:'POST',body:{employee_ids:[employee.id,randomUUID()]}});assert.equal(response.status,404);
+   assert.equal((await one(db,'SELECT count(*)::int n FROM training_participants WHERE training_event_id=?',event.id)).n,0);
+   assert.equal((await one(db,"SELECT count(*)::int n FROM audit_events WHERE object_key=? AND action='ADD_PARTICIPANT'",event.id)).n,0);
+   response=await invoke({...operation,path,method:'POST',body:{employee_ids:[employee.id,otherEmployee.id]}});assert.equal(response.status,200,await response.clone().text());
+   const result=(await response.json()).result;assert.deepEqual(result.items.map(p=>p.employee_id),[employee.id,otherEmployee.id]);assert(result.items.every(p=>p.attendance_status==='NOT_RECORDED'));
+   response=await invoke({...operation,path,method:'POST',body:{employee_ids:[employee.id]}});assert.equal(response.status,409);
+   assert.equal((await one(db,'SELECT count(*)::int n FROM training_participants WHERE training_event_id=?',event.id)).n,2);
+   assert.equal((await one(db,"SELECT count(*)::int n FROM audit_events WHERE object_key=? AND action='ADD_PARTICIPANT'",event.id)).n,2);
+   await run(db,'DELETE FROM user_roles WHERE id=?',grant.id);
+   response=await invoke({...operation,path,method:'POST',body:{employee_ids:[employee.id]}});assert.equal(response.status,403);
   });
   await check('packaged recovery consumes once, keeps failed-attempt counters and revokes sessions',async()=>{
    const recoveryToken='b'.repeat(48);

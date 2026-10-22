@@ -335,3 +335,41 @@ test('materi dari versi SOP lama tetap mengikuti hak unduh dokumen pusat',t=>{
 test('migrasi tabel penghubung mempertahankan seluruh pemberian izin lama',t=>{
   const directory=mkdtempSync(resolve(tmpdir(),'besakih-migration-'));t.after(()=>cleanup(directory));const path=resolve(directory,'portal.sqlite');let db=openDb(path);seedPermissions(db);const before=one(db,'SELECT count(*) n FROM role_permissions').n;db.exec('ALTER TABLE role_permissions DROP COLUMN created_at; DELETE FROM schema_migrations WHERE version=2;');db.close();db=openDb(path);try{assert.equal(one(db,'SELECT count(*) n FROM role_permissions').n,before);assert.equal(one(db,'SELECT count(*) n FROM role_permissions WHERE created_at IS NULL').n,0);assert.equal(one(db,'SELECT max(version) n FROM schema_migrations').n,4);const role=insert(db,'roles',{code:'MIGRATION_TEST',name:'Role migrasi',is_system:0,is_active:1});run(db,'INSERT INTO role_permissions (role_id,permission_id) VALUES(?,?)',role.id,one(db,'SELECT id FROM permissions LIMIT 1').id);assert(one(db,'SELECT created_at FROM role_permissions WHERE role_id=?',role.id).created_at);}finally{db.close();}
 });
+
+test('beberapa peserta disimpan sekaligus dengan status awal dan audit masing-masing',async t=>{
+  const f=fixture(t),event=await call(hrRoutes,f,'training','POST',{title:'Pelatihan bersama',topic:'Layanan',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z'});
+  const employeeIds=f.employees.slice(0,3).map(e=>e.id);
+  const result=await call(hrRoutes,f,`training/${event.id}/participants`,'POST',{employee_ids:employeeIds});
+  assert.deepEqual(result.items.map(p=>p.employee_id),employeeIds);
+  assert(result.items.every(p=>p.attendance_status==='NOT_RECORDED'&&p.attendance_recorded_at===null));
+  assert.equal((await call(hrRoutes,f,`training/${event.id}`)).participants.length,3);
+  const audits=all(f.db,"SELECT * FROM audit_events WHERE object_key=? AND action='ADD_PARTICIPANT'",event.id);
+  assert.deepEqual(audits.map(a=>JSON.parse(a.change_summary).participant_id).sort(),result.items.map(p=>p.id).sort());
+});
+
+test('daftar peserta invalid, peserta ganda, serta pegawai tidak ditemukan membatalkan seluruh batch',async t=>{
+  const f=fixture(t),event=await call(hrRoutes,f,'training','POST',{title:'Pelatihan bersama',topic:'Layanan',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z'}),path=`training/${event.id}/participants`;
+  for(const employeeIds of [[],null,f.employees[0].id,[null],[''],[{}],[f.employees[0].id,f.employees[0].id]]){
+    await assert.rejects(call(hrRoutes,f,path,'POST',{employee_ids:employeeIds}),e=>e.status===422);
+  }
+  await assert.rejects(call(hrRoutes,f,path,'POST',{employee_ids:[f.employees[0].id,'missing-employee']}),e=>e.status===404);
+  assert.equal(one(f.db,'SELECT count(*) n FROM training_participants WHERE training_event_id=?',event.id).n,0);
+  assert.equal(one(f.db,"SELECT count(*) n FROM audit_events WHERE object_key=? AND action='ADD_PARTICIPANT'",event.id).n,0);
+  await call(hrRoutes,f,path,'POST',{employee_id:f.employees[1].id});
+  await assert.rejects(call(hrRoutes,f,path,'POST',{employee_ids:[f.employees[0].id,f.employees[1].id]}),e=>e.status===409);
+  assert.equal(one(f.db,'SELECT count(*) n FROM training_participants WHERE training_event_id=?',event.id).n,1);
+  assert.equal(one(f.db,"SELECT count(*) n FROM audit_events WHERE object_key=? AND action='ADD_PARTICIPANT'",event.id).n,1);
+});
+
+test('izin kegiatan dan scope setiap pegawai diperiksa untuk seluruh batch peserta',async t=>{
+  const f=fixture(t),event=await call(hrRoutes,f,'training','POST',{title:'Pelatihan bersama',topic:'Layanan',organizer_org_unit_id:f.unit.id,starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z'}),manager=f.account('participant-manager',null);
+  f.role(manager,['hr.training.read','hr.training.participants'],'ASSIGNED_UNITS',f.unit.id);
+  await assert.rejects(call(hrRoutes,{...f,user:manager},`training/${event.id}/participants`,'POST',{employee_ids:[f.employees[0].id,f.employees[7].id]}),e=>e.status===403);
+  assert.equal(one(f.db,'SELECT count(*) n FROM training_participants WHERE training_event_id=?',event.id).n,0);
+  assert.equal(one(f.db,"SELECT count(*) n FROM audit_events WHERE object_key=? AND action='ADD_PARTICIPANT'",event.id).n,0);
+  const reader=f.account('participant-reader',null);f.role(reader,['hr.training.read']);
+  await assert.rejects(call(hrRoutes,{...f,user:reader},`training/${event.id}/participants`,'POST',{employee_ids:[f.employees[0].id]}),e=>e.status===403);
+  const otherEvent=await call(hrRoutes,f,'training','POST',{title:'Pelatihan unit lain',topic:'Layanan',organizer_org_unit_id:f.otherUnit.id,starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z'});
+  await assert.rejects(call(hrRoutes,{...f,user:manager},`training/${otherEvent.id}/participants`,'POST',{employee_ids:[f.employees[0].id]}),e=>e.status===403);
+  const result=await call(hrRoutes,{...f,user:manager},`training/${event.id}/participants`,'POST',{employee_ids:[f.employees[0].id,f.employees[1].id]});assert.equal(result.items.length,2);
+});

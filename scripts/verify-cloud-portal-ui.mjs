@@ -19,14 +19,16 @@ const check=async(name,fn)=>{await fn();console.log(`PASS ${name}`);checks++;};
 const permissions=['admin.users.read','admin.users.manage','admin.users.reset','admin.roles.read','admin.roles.manage','admin.audit.read'];
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
-async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960},delays={},failures={},purchasingAccess=false,documentsAccess=false,documentManager=true,initialHash=''}={}){
+async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960},delays={},failures={},purchasingAccess=false,documentsAccess=false,documentManager=true,trainingAccess=false,initialHash=''}={}){
  const context=await browser.newContext({viewport,baseURL:origin,reducedMotion});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
  if(clock)await page.clock.install({time:new Date('2026-10-18T00:00:00Z')});
  let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
  if(purchasingAccess)currentPermissions.push('purchasing.requests.read_all');
  if(documentsAccess)currentPermissions.push('hr.documents.read','hr.documents.manage','hr.documents.publish','hr.documents.download');
+ if(trainingAccess)currentPermissions.push('hr.training.read','hr.training.participants');
  const units=['Badan Pengelola Besakih','Bisnis & Pengembangan Usaha','Operasional & Pelayanan','Pengelolaan Lingkungan & Keamanan Kawasan Besakih','Satuan Pengawas Internal & Manajemen Risiko','Sekretariat'].map((name,index)=>({id:`document-unit-${index}`,name}));
  const documents=[{id:'fixture-document',document_code:'SOP-001',title:'SOP Keamanan Kawasan',category:'SOP_SECURITY',unit_name:units[3].name,row_version:1,active_version:'1.0',effective_on:'2026-10-19',versions:[],targets:[]}];
+ const training={id:'fixture-training',title:'Pelatihan Layanan',topic:'Layanan',organizer_org_unit_id:'fixture-unit',organizer_name:'Sekretariat',status:'PLANNED',starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z',location:'Besakih',row_version:1,participants:employees.slice(0,1).map(e=>({...e,id:`participant-${e.id}`,employee_id:e.id,attendance_status:'NOT_RECORDED'})),materials:[],documentation:[],certificates:[]};
  const systemRole={id:'fixture-system-role',code:'SUPER_ADMIN',name:'Super Admin',is_system:1,is_active:1,row_version:1,permissions:[...permissions]};
  const grantRole={id:'fixture-employee-role',code:'EMPLOYEE',name:'Pegawai',is_active:1,is_system:0,permissions:['hr.employees.read']};
  const users=[{...me.user,grants:accountGrants}];
@@ -45,6 +47,13 @@ async function fixture({signedIn=true,required=false,roleEditor=false,grantEdito
    else if(grantEditor&&url.pathname===`/api/users/${me.user.id}/grants`&&req.method()==='POST'){const sent=req.postDataJSON();users[0].grants=sent.grants.map((g,index)=>({...g,id:`fixture-grant-${index}`,role_name:g.role_id===grantRole.id?grantRole.name:'Petugas Keamanan'}));users[0].row_version++;body={ok:true};}
    else if(url.pathname==='/api/users')body={items:users};
    else if(url.pathname==='/api/lookups')body={employees,units:documentsAccess?units:grantEditor?[{id:'fixture-unit',name:'Sekretariat'}]:[],posts:grantEditor?[{id:'fixture-post',name:'Pos Fiktif'}]:[]};
+   else if(trainingAccess&&url.pathname==='/api/training')body={items:[{...training,participant_count:training.participants.length}]};
+   else if(trainingAccess&&url.pathname===`/api/training/${training.id}`)body=training;
+   else if(trainingAccess&&url.pathname===`/api/training/${training.id}/participants`&&req.method()==='POST'){
+    const sent=req.postDataJSON();assert.equal(req.headers()['x-csrf-token'],'fixture-csrf');assert(Array.isArray(sent.employee_ids));assert(sent.employee_ids.length);
+    const items=sent.employee_ids.map(id=>{assert(!training.participants.some(p=>p.employee_id===id));const employee=employees.find(e=>e.id===id);assert(employee);return {...employee,id:`participant-${id}`,employee_id:id,attendance_status:'NOT_RECORDED'};});
+    if(!failures[url.pathname])training.participants.push(...items);body={items};
+   }
    else if(documentsAccess&&url.pathname==='/api/documents'){
     if(req.method()==='POST'){const sent=req.postDataJSON();body={...sent,id:`fixture-document-${documents.length}`,row_version:1,versions:[],targets:[],unit_name:units.find(u=>u.id===sent.owner_org_unit_id)?.name};documents.push(body);}else body={items:documents};
    }
@@ -298,6 +307,75 @@ try{
   await f.page.getByRole('button',{name:/SOP Keamanan Kawasan/}).click();await f.page.getByRole('button',{name:'Hapus dokumen',exact:true}).click();
   const confirmation=f.page.getByRole('dialog',{name:'Hapus dokumen?',exact:true});await confirmation.getByRole('button',{name:'Hapus dokumen',exact:true}).click();
   await confirmation.getByRole('alert').filter({hasText:'Layanan sementara tidak tersedia.'}).waitFor();assert.equal(await confirmation.getByRole('button',{name:'Hapus dokumen',exact:true}).isEnabled(),true);
+ });
+ const trainingEmployees=[
+  {id:'registered',full_name:'Peserta Terdaftar',employee_no:'P-001'},
+  {id:'adi',full_name:'I Wayan Adi Putra',employee_no:'P-002'},
+  {id:'ayu-1',full_name:'Ni Made Ayu Pradnyaswari Kusumaningrum',employee_no:'P-003'},
+  {id:'ayu-2',full_name:'Ni Made Ayu Pradnyaswari Kusumaningrum',employee_no:'P-004'}
+ ];
+ const participantForm=async(options={})=>{
+  const f=await fixture({trainingAccess:true,employees:trainingEmployees,initialHash:'training',...options});
+  await f.page.getByRole('button',{name:/Pelatihan Layanan/}).click();
+  await f.page.getByRole('button',{name:'Tambah peserta',exact:true}).click();
+  const form=f.page.getByRole('dialog',{name:'Tambah peserta',exact:true});await form.waitFor();
+  return {...f,form,search:form.getByRole('searchbox',{name:'Cari nama atau nomor pegawai',exact:true})};
+ };
+ await check('participant search preserves choices across queries, supports removal and submits one batch',async()=>{
+  const f=await participantForm();assert.equal(await f.form.getByRole('checkbox').count(),3);
+  assert.equal(await f.form.getByText('Peserta Terdaftar',{exact:true}).count(),0);
+  await f.form.getByRole('button',{name:'Tambah peserta',exact:true}).click();
+  await f.form.getByRole('alert').filter({hasText:'Pilih minimal satu peserta.'}).waitFor();
+  assert.equal(f.calls.some(c=>c.method==='POST'&&c.path.endsWith('/participants')),false);
+  await f.search.fill('  aDI   PUTRA ');await f.form.getByRole('checkbox',{name:'I Wayan Adi Putra P-002',exact:true}).check();
+  assert.equal(await f.form.getByRole('alert').textContent(),'');
+  await f.search.fill('P-003');const ayu=f.form.getByRole('checkbox',{name:'Ni Made Ayu Pradnyaswari Kusumaningrum P-003',exact:true});
+  await ayu.focus();await f.page.keyboard.press('Space');assert.equal(await ayu.isChecked(),true);
+  await f.search.fill('tidak ditemukan');await f.form.getByText('Pegawai tidak ditemukan. Coba nama atau nomor pegawai lain.',{exact:true}).waitFor();
+  await f.form.getByText('2 peserta dipilih',{exact:true}).waitFor();
+  await f.form.getByRole('button',{name:'Batalkan pilihan I Wayan Adi Putra (P-002)',exact:true}).click();
+  await f.form.getByText('1 peserta dipilih',{exact:true}).waitFor();
+  await f.search.fill('P-002');await f.form.getByRole('checkbox',{name:'I Wayan Adi Putra P-002',exact:true}).check();
+  await f.search.fill('P-004');await f.search.press('Enter');assert.equal(f.calls.some(c=>c.method==='POST'&&c.path.endsWith('/participants')),false);
+  await f.search.fill('');await f.page.screenshot({path:resolve(output,'training-participants-desktop.png'),fullPage:true});
+  await f.search.fill('P-004');await f.form.getByRole('button',{name:'Tambah peserta',exact:true}).click();await f.form.waitFor({state:'hidden'});
+  const sent=f.calls.filter(c=>c.method==='POST'&&c.path.endsWith('/participants'));assert.equal(sent.length,1);assert.deepEqual(sent[0].body,{employee_ids:['adi','ayu-1']});
+  await f.page.getByText('2 peserta berhasil ditambahkan.',{exact:true}).waitFor();
+  const detail=f.page.getByRole('dialog',{name:'Pelatihan Layanan',exact:true});await detail.getByText('I Wayan Adi Putra',{exact:true}).waitFor();
+  await detail.getByRole('button',{name:'Tambah peserta',exact:true}).click();
+  const reopened=f.page.getByRole('dialog',{name:'Tambah peserta',exact:true});await reopened.waitFor();
+  assert.equal(await reopened.getByRole('checkbox').count(),1);
+ });
+ await check('mobile participant names wrap and same-name employees remain distinguishable by number',async()=>{
+  const f=await participantForm({viewport:{width:390,height:844}});await f.search.fill('ayu');
+  assert.equal(await f.form.getByRole('checkbox').count(),2);
+  await f.form.getByRole('checkbox',{name:'Ni Made Ayu Pradnyaswari Kusumaningrum P-003',exact:true}).check();
+  await f.form.getByRole('checkbox',{name:'Ni Made Ayu Pradnyaswari Kusumaningrum P-004',exact:true}).check();
+  await f.form.getByText('2 peserta dipilih',{exact:true}).waitFor();
+  assert.equal(await f.form.evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  assert.equal(await f.form.locator('.training-participant-option').evaluateAll(rows=>rows.every(row=>row.scrollWidth<=row.clientWidth)),true);
+  await f.page.screenshot({path:resolve(output,'training-participants-mobile.png'),fullPage:true});
+  await f.form.getByRole('button',{name:'Tambah peserta',exact:true}).click();await f.form.waitFor({state:'hidden'});
+  assert.deepEqual(f.calls.find(c=>c.method==='POST'&&c.path.endsWith('/participants')).body,{employee_ids:['ayu-1','ayu-2']});
+ });
+ await check('a failed batch keeps choices for retry and blocks changes during save',async()=>{
+  const f=await participantForm({delays:{'/api/training/fixture-training/participants':300}});
+  await f.form.getByRole('checkbox',{name:'I Wayan Adi Putra P-002',exact:true}).check();await f.search.fill('P-003');
+  await f.form.getByRole('checkbox',{name:'Ni Made Ayu Pradnyaswari Kusumaningrum P-003',exact:true}).check();
+  const path=`${origin}/api/training/fixture-training/participants`;
+  await f.page.route(path,async route=>route.fulfill({status:503,json:{error:'Layanan sementara tidak tersedia.'}}));
+  await f.form.getByRole('button',{name:'Tambah peserta',exact:true}).click();
+  await f.form.getByRole('alert').filter({hasText:'Layanan sementara tidak tersedia.'}).waitFor();
+  assert.equal(await f.form.locator('input[type=checkbox]:checked').count(),2);assert.equal(await f.search.isEnabled(),true);
+  await f.page.unroute(path);await f.form.getByRole('button',{name:'Tambah peserta',exact:true}).click();
+  await f.form.getByRole('button',{name:'Menyimpan…',exact:true}).waitFor();assert.equal(await f.search.isDisabled(),true);
+  assert.equal(await f.form.getByRole('button',{name:'Batalkan pilihan I Wayan Adi Putra (P-002)',exact:true}).isDisabled(),true);
+  await f.form.waitFor({state:'hidden'});assert.equal(f.calls.filter(c=>c.method==='POST'&&c.path.endsWith('/participants')).length,1);
+ });
+ await check('participant picker explains when no employees remain available',async()=>{
+  const f=await participantForm({employees:trainingEmployees.slice(0,1)});
+  await f.form.getByText('Semua pegawai yang tersedia sudah menjadi peserta atau belum ada pegawai yang dapat dipilih.',{exact:true}).waitFor();
+  assert.equal(await f.form.getByRole('button',{name:'Tambah peserta',exact:true}).isDisabled(),true);
  });
  assert.deepEqual(errors,[]);console.log(`${checks} isolated portal browser checks passed.`);
 }finally{for(const context of contexts)await context.close();await browser.close();await new Promise(done=>server.close(done));}

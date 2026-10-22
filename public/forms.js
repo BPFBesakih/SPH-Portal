@@ -3,6 +3,7 @@ import {state,api,post,patch,refresh,permitted,uploadFile} from './api.js';
 import {esc,icon,options,choices,field,formDialog,dialog,toast,localToday,localNow,toUTC,formatDate,labels} from './ui.js';
 import {openDetail,closeDetails} from './details.js';
 import {employeePickerField,setupEmployeePicker} from './employee-picker.js';
+import {trainingParticipantPickerField,setupTrainingParticipantPicker} from './training-participant-picker.js';
 const nameOptions=(l,key,selected='',placeholder)=>options(l[key]||[],'id',key==='employees'?'full_name':'name',selected,placeholder);
 const optional='optional';
 const fileField=(required=true)=>field('Berkas (maksimal 10 MB)','file','file','',`accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx" ${required?'':'optional'}`);
@@ -60,7 +61,14 @@ export async function handleFormAction(action,el) {
     const photo=d.documentation?.find(f=>f.id===el.dataset.id);if(!photo||!d.can_view_documentation)return true;
     dialog('Dokumentasi kegiatan',`<img class="image-expanded" src="/api/files/${encodeURIComponent(photo.id)}?inline=1" alt="${esc(photo.caption)}"><p class="detail-prose">${esc(photo.caption)}</p>`,{wide:true});return true;
   }
-  if(action==='new-participant'){const l=await lookups('training');formDialog('Tambah peserta',field('Pegawai','employee_id','select',nameOptions({...l,employees:l.employees.filter(e=>!d.participants.some(p=>p.employee_id===e.id))},'employees')),async b=>{await post(`training/${d.id}/participants`,b);await saved('training',d.id);});return true;}
+  if(action==='new-participant'){
+    const l=await lookups('training'),registered=new Set(d.participants.map(p=>p.employee_id)),employees=l.employees.filter(e=>!registered.has(e.id));
+    const el=formDialog('Tambah peserta',trainingParticipantPickerField(employees),async b=>{
+      const employeeIds=b.employee_ids||[];if(!employeeIds.length)throw new Error('Pilih minimal satu peserta.');
+      await post(`training/${d.id}/participants`,{employee_ids:employeeIds});await saved('training',d.id,`${employeeIds.length} peserta berhasil ditambahkan.`);
+    },{submit:'Tambah peserta',note:'Anda dapat memilih beberapa peserta sekaligus. Pilihan tetap tersimpan saat mencari nama lain.'});
+    setupTrainingParticipantPicker(el,employees);return true;
+  }
   if(action==='attendance'){const participant=d.participants.find(p=>p.id===el.dataset.id);formDialog(`Kehadiran ${participant.full_name}`,field('Kehadiran','attendance_status','select',choices(['NOT_RECORDED','PRESENT','ABSENT'],participant.attendance_status))+field('Catatan','attendance_notes','textarea',participant.attendance_notes||'',optional),async b=>{await patch(`training/${d.id}/participants/${participant.id}`,{...b,row_version:participant.row_version});await saved('training',d.id);});return true;}
   if(action==='new-material') {
     const docs=permitted('hr.documents.read')?(await api('documents')).items:[];
