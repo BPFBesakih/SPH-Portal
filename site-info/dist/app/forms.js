@@ -1,3 +1,4 @@
+import {openQuickReportSettings} from './quick-report-management.js';
 import {openFieldReport} from './field-reports.js';
 import {state,api,post,patch,refresh,permitted,uploadFile} from './api.js';
 import {esc,icon,options,choices,field,formDialog,dialog,toast,localToday,localNow,toUTC,formatDate,labels} from './ui.js';
@@ -14,6 +15,7 @@ const fieldTime=(label,name,value=localNow())=>field(`${label} (WITA)`,name,'dat
 function accountGrantPayload(grants){return grants.map(g=>({role_id:g.role_id,scope_kind:g.scope_kind,units:g.units,posts:g.posts}));}
 export async function handleFormAction(action,el) {
   const d=detail();
+  if(action==='quick-report-settings'){await openQuickReportSettings();return true;}
   if(['new-employee','edit-employee','review-import'].includes(action)) {
     const l=await lookups('employees'),edit=action==='edit-employee',candidate=action==='review-import'?state.items.find(i=>i.id===el.dataset.id):null,e=edit?d:{};
     const fields=field('Nomor pegawai','employee_no','text',e.employee_no||'','maxlength="60"')+field('Nama lengkap','full_name','text',e.full_name||candidate?.full_name||'','maxlength="200"')+field('Status kepegawaian','employment_status','text',e.employment_status||'','placeholder="Sesuai status resmi pegawai" maxlength="80"')+field('Tanggal mulai kerja','joined_on','date',e.joined_on||'')+field('Telepon kerja','phone','tel',e.phone||'',optional)+field('Email kerja','email','email',e.email||'',optional)+(edit?field('Tanggal akhir (bila berlaku)','ended_on','date',e.ended_on||'',optional)+field('Pegawai aktif','is_active','checkbox',e.is_active):field('Posisi utama','position_id','select',options(l.positions.map(p=>({...p,label:`${p.name} — ${p.unit_name}`})),'id','label'))+field('Atasan (bila ada)','supervisor_employee_id','select',nameOptions(l,'employees'),optional));

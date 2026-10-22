@@ -1,3 +1,4 @@
+import {publicQuickReport,takeQuickReportSlot} from '../_shared/portal/quick-reports.mjs';
 import {withSupabase} from 'npm:@supabase/server@1';
 import postgres from 'npm:postgres@3.4.7';
 import {createHash,randomUUID} from 'node:crypto';
@@ -65,12 +66,19 @@ export default {
   const requestId=randomUUID();let identity,storage,workCompleted=false;
   try{
    assert(req.method==='POST','Metode tidak diizinkan.',405);
-   const b=await readBody(req),env=Deno.env.toObject();identity=createIdentity(env);storage=createDriveStorage(env);
+   const b=await readBody(req),env=Deno.env.toObject();identity=createIdentity(env);storage=createDriveStorage(env,undefined,{module:b.action==='quick-report'?'patroli':undefined});
    const client=database(env);
+   if(b.action==='quick-report'){
+    assert(['context','submit'].includes(b.operation)&&b.body&&typeof b.body==='object'&&!Array.isArray(b.body),'Permintaan tidak valid.',400);
+    const allowed=await transaction(client,identity,storage,db=>takeQuickReportSlot(db,b.client_ip,b.operation));
+    assert(allowed,'Terlalu banyak percobaan. Coba lagi beberapa menit kemudian.',429);
+    const result=await transaction(client,identity,storage,async db=>{const result=await publicQuickReport(db,b.operation,b.body,undefined,requestId);await storage.finalize();workCompleted=true;return result;});
+    return Response.json({ok:true,result},{headers:{'Cache-Control':'no-store'}});
+   }
    if(b.action==='health'){
     const ready=await transaction(client,identity,storage,async db=>{
      const r=await one(db,"SELECT count(*)::integer total,count(*) FILTER(WHERE rowsecurity)::integer protected FROM pg_catalog.pg_tables WHERE schemaname='portal'");
-     return r.total===65&&r.protected===65;
+     return r.total>=65&&r.protected===r.total;
     },false);
     assert(ready,'Modul portal belum siap.',503);return Response.json({ok:true,healthy:true,revision:'20261016.1'},{headers:{'Cache-Control':'no-store'}});
    }

@@ -1,3 +1,4 @@
+import {randomBytes as quickReportRandomBytes} from 'node:crypto';
 // supabase/functions/portal-api/index.ts
 import { withSupabase } from "npm:@supabase/server@1";
 import postgres from "npm:postgres@3.4.7";
@@ -2599,6 +2600,9 @@ async function fileAllowed(db, user, id) {
 }
 async function upload(db, user, b, dataDir) {
   assert(await announcementsManager(db, user) || await asyncSome(["hr.documents.manage", "hr.employee_files.manage", "hr.training.manage", "hr.training.participants", "security.logbook.create", "security.incidents.create", "security.incidents.update", "purchasing.requests.create", "purchasing.procurement.manage"], async (p) => await has(db, user, p)), "Akses unggah ditolak.", 403);
+  return await storeUpload(db, user, b, dataDir);
+}
+async function storeUpload(db, user, b, dataDir) {
   const name = basename(text(b.name, "Nama berkas", 180)).replace(/[\r\n"]/g, "_");
   assert(typeof b.data === "string" && /^[A-Za-z0-9+/]*={0,2}$/.test(b.data), "Isi berkas tidak valid.");
   const data = Buffer2.from(b.data, "base64"), max = 10 * 1024 * 1024;
@@ -3244,6 +3248,9 @@ async function fieldReportPayload(db, user, b, incident = false) {
     ...ctx,
     reporter_employee_id: employee.id
   });
+  return fieldReportDetails(b, employee.id, ctx.org_unit_id, incident);
+}
+function fieldReportDetails(b, employeeId, orgUnitId, incident = false) {
   const location = b.location;
   assert(location && typeof location === "object", "Lokasi perangkat wajib berhasil didapatkan sebelum laporan dikirim.");
   const numeric = (value, min, max) => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
@@ -3260,7 +3267,7 @@ async function fieldReportPayload(db, user, b, incident = false) {
   assert(new Set(photos.map((p) => p.file_id)).size === photos.length, "Foto yang sama tidak dapat digunakan berulang.");
   const payload = {
     post_id: null,
-    reporting_org_unit_id: ctx.org_unit_id || null,
+    reporting_org_unit_id: orgUnitId || null,
     latitude: location.latitude,
     longitude: location.longitude,
     location_accuracy: location.accuracy,
@@ -3268,14 +3275,14 @@ async function fieldReportPayload(db, user, b, incident = false) {
     occurred_at: instant(b.occurred_at)
   };
   if (incident) Object.assign(payload, {
-    reporter_employee_id: employee.id,
+    reporter_employee_id: employeeId,
     incident_type: text(b.incident_type, "Kategori kejadian", 200),
     chronology: text(b.chronology, "Kronologi", 2e4),
     initial_action: null,
     source_logbook_entry_id: b.source_logbook_entry_id || null
   });
   else Object.assign(payload, {
-    employee_id: employee.id,
+    employee_id: employeeId,
     activity_type: b.activity_type,
     activity_notes: text(b.activity_notes, "Uraian kegiatan", 1e4),
     findings: null,
@@ -4612,6 +4619,223 @@ async function lookups(db, user, purpose = "employees", sessionId) {
 }
 
 // supabase/functions/_shared/portal/router.mjs
+const quickReport_tokenPattern = /^[a-f0-9]{64}$/;
+const quickReport_securityPosition = (name) => /\b(keamanan|ketertiban|bankamda|linmas|satpam|security)\b/i.test(name);
+const quickReport_invalidLink = "Tautan laporan tidak aktif. Minta tautan terbaru kepada koordinator.";
+function quickReport_positionIds(link) {
+  try {
+    const ids = JSON.parse(link.position_ids);
+    assert(Array.isArray(ids) && ids.length > 0, "Konfigurasi tautan tidak valid.", 403);
+    return ids;
+  } catch {
+    assert(false, quickReport_invalidLink, 403);
+  }
+}
+async function quickReport_manageable(db, user, link) {
+  return await asyncEvery(quickReport_positionIds(link), async (id) => {
+    const position = await one(db, "SELECT * FROM positions WHERE id=?", id);
+    return position && await can(db, user, "security.config.manage", {
+      org_unit_id: position.org_unit_id
+    });
+  });
+}
+async function quickReport_securityPositions(db, user) {
+  return await asyncFilter(await all(db, "SELECT p.id,p.name,p.org_unit_id,u.name unit_name FROM positions p JOIN org_units u ON u.id=p.org_unit_id WHERE p.is_active=1 AND u.is_active=1 ORDER BY p.name"), async (p) => quickReport_securityPosition(p.name) && await can(db, user, "security.config.manage", {
+    org_unit_id: p.org_unit_id
+  }));
+}
+async function quickReport_eligibleEmployees(db, ids) {
+  return (await all(db, `SELECT e.id,e.full_name,p.name position_name,p.id position_id,p.org_unit_id FROM employees e JOIN employee_placements ep ON ep.employee_id=e.id JOIN positions p ON p.id=ep.position_id JOIN org_units u ON u.id=p.org_unit_id WHERE e.is_active=1 AND p.is_active=1 AND u.is_active=1 AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?) ORDER BY e.full_name,e.id`, today(), today())).filter((e) => ids.includes(e.position_id) && quickReport_securityPosition(e.position_name));
+}
+async function quickReport_validLink(db, token) {
+  assert(typeof token === "string" && quickReport_tokenPattern.test(token), quickReport_invalidLink, 404);
+  const link = await one(db, "SELECT * FROM quick_report_links WHERE token_hash=? AND is_active=1", digest(token));
+  assert(link, quickReport_invalidLink, 404);
+  const owner = await one(db, "SELECT * FROM users WHERE id=? AND status='ACTIVE'", link.created_by);
+  assert(owner && !owner.must_change_password && (!owner.employee_id || (await get(db, "employees", owner.employee_id)).is_active) && await quickReport_manageable(db, owner, link), quickReport_invalidLink, 403);
+  return link;
+}
+async function quickReportManagement(c) {
+  const { db, user, p, method, body: b } = c;
+  if (p[0] !== "report-links") return;
+  assert(await has(db, user, "security.config.manage"), "Akses pengelolaan tautan ditolak.", 403);
+  if (method === "GET" && p.length === 1) {
+    const active = await one(db, "SELECT * FROM quick_report_links WHERE is_active=1");
+    return {
+      positions: await quickReport_securityPositions(db, user),
+      link: active && await quickReport_manageable(db, user, active) ? {
+        id: active.id,
+        label: active.label,
+        position_ids: quickReport_positionIds(active),
+        created_at: active.created_at,
+        row_version: active.row_version
+      } : null,
+      can_manage_active: !active || await quickReport_manageable(db, user, active)
+    };
+  }
+  if (method === "POST" && p.length === 1) return await tx(db, async () => {
+    const active = await one(db, "SELECT * FROM quick_report_links WHERE is_active=1");
+    assert(!active || await quickReport_manageable(db, user, active), "Tautan aktif berada di luar cakupan pengelolaan Anda.", 403);
+    assert((active?.id || null) === (b.active_link_id || null), "Tautan sudah berubah. Buka kembali pengaturan tautan.", 409);
+    if (active) assert(active.row_version === b.row_version, "Tautan sudah berubah. Buka kembali pengaturan tautan.", 409);
+    const ids = b.position_ids, allowed = await quickReport_securityPositions(db, user);
+    assert(Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === "string" && allowed.some((p2) => p2.id === id)) && new Set(ids).size === ids.length, "Pilih posisi pegawai Keamanan yang termasuk cakupan Anda.");
+    assert((await quickReport_eligibleEmployees(db, ids)).length > 0, "Belum ada pegawai Keamanan aktif untuk posisi yang dipilih.");
+    if (active) {
+      await update(db, "quick_report_links", active.id, active.row_version, {
+        is_active: 0,
+        revoked_at: now()
+      });
+      await audit(db, user, "REVOKE", "quick_report_links", active.id);
+    }
+    const token = quickReportRandomBytes(32).toString("hex"), row = await insert(db, "quick_report_links", {
+      token_hash: digest(token),
+      label: text(b.label || "Laporan Keamanan", "Nama tautan", 120),
+      position_ids: JSON.stringify(ids),
+      is_active: 1,
+      created_by: user.id
+    });
+    await audit(db, user, "CREATE", "quick_report_links", row.id, {
+      position_ids: ids
+    });
+    return {
+      id: row.id,
+      label: row.label,
+      token,
+      row_version: row.row_version
+    };
+  });
+  if (method === "POST" && p.length === 3 && p[2] === "revoke") return await tx(db, async () => {
+    const link = await get(db, "quick_report_links", p[1]);
+    assert(await quickReport_manageable(db, user, link), "Akses pengelolaan tautan ditolak.", 403);
+    assert(link.is_active, "Tautan sudah dinonaktifkan.", 409);
+    await update(db, "quick_report_links", link.id, b.row_version, {
+      is_active: 0,
+      revoked_at: now()
+    });
+    await audit(db, user, "REVOKE", "quick_report_links", link.id);
+    return {
+      revoked: true
+    };
+  });
+  assert(false, "Alamat tidak ditemukan.", 404);
+}
+async function takeQuickReportSlot(db, clientIp, action) {
+  assert(typeof clientIp === "string" && clientIp.length <= 45 && /^[a-f0-9:.]+$/i.test(clientIp), "Permintaan tidak valid.", 400);
+  assert(["context", "submit"].includes(action), "Alamat tidak ditemukan.", 404);
+  const stamp = now(), cutoff = new Date(Date.now() - 10 * 6e4).toISOString(), key = digest(`quick-report\0${action}\0${clientIp}`);
+  await run(db, "DELETE FROM quick_report_rate_limits WHERE window_start<?", new Date(Date.now() - 24 * 36e5).toISOString());
+  const slot = await one(db, "SELECT * FROM quick_report_rate_limits WHERE id=?", key);
+  if (!slot) await insert(db, "quick_report_rate_limits", {
+    id: key,
+    window_start: stamp,
+    hits: 1
+  });
+  else if (slot.window_start < cutoff) await update(db, "quick_report_rate_limits", key, slot.row_version, {
+    window_start: stamp,
+    hits: 1
+  });
+  else await update(db, "quick_report_rate_limits", key, slot.row_version, {
+    hits: slot.hits + 1
+  });
+  return !slot || slot.window_start < cutoff || slot.hits < (action === "context" ? 120 : 30);
+}
+const quickReport_receipt = (row) => ({
+  reference: `LB-${row.id.slice(0, 8).toUpperCase()}`,
+  received_at: row.created_at
+});
+async function publicQuickReport(db, action, b, dataDir, requestId) {
+  const link = await quickReport_validLink(db, b.token), people = await quickReport_eligibleEmployees(db, quickReport_positionIds(link));
+  if (action === "context") return {
+    label: link.label,
+    employees: people.map((e) => ({
+      id: e.id,
+      full_name: e.full_name,
+      position_name: e.position_name
+    }))
+  };
+  assert(action === "submit", "Alamat tidak ditemukan.", 404);
+  assert(!b.website, "Permintaan tidak valid.");
+  const employee = people.find((e) => e.id === b.employee_id);
+  assert(employee, "Pilih pegawai Keamanan aktif dari daftar.");
+  assert(typeof b.idempotency_key === "string" && /^[a-f0-9-]{36}$/i.test(b.idempotency_key), "Kunci laporan tidak valid.");
+  const notes = text(b.activity_notes, "Uraian kegiatan", 1e4), type = enumValue(b.activity_type, ["JAGA", "PATROLI", "LAINNYA"]);
+  assert(Array.isArray(b.photos) && b.photos.length >= 1 && b.photos.length <= 5, "Ambil minimal satu dan maksimal lima foto.");
+  let bytes = 0;
+  const photos = b.photos.map((photo) => {
+    assert(photo && photo.source === "CAMERA" && ["image/jpeg", "image/png"].includes(photo.mime_type) && typeof photo.data === "string" && photo.data.length <= 21e5 && /^[A-Za-z0-9+/]+={0,2}$/.test(photo.data), "Foto tidak valid atau terlalu besar. Ambil foto kembali.");
+    const decoded = Buffer2.from(photo.data, "base64");
+    assert(decoded.length > 0 && decoded.toString("base64") === photo.data, "Isi foto tidak valid.");
+    assert(photo.mime_type === "image/png" ? decoded.subarray(0, 8).equals(Buffer2.from([137, 80, 78, 71, 13, 10, 26, 10])) : decoded[0] === 255 && decoded[1] === 216 && decoded[2] === 255, "Isi foto tidak cocok dengan jenisnya.");
+    bytes += photo.data.length;
+    return {
+      mime_type: photo.mime_type,
+      data: photo.data,
+      captured_at: photo.captured_at,
+      source: "CAMERA"
+    };
+  });
+  assert(bytes <= 84e5, "Jumlah ukuran foto terlalu besar. Kurangi foto.");
+  assert(new Set(photos.map((p) => digest(p.data))).size === photos.length, "Foto yang sama tidak dapat digunakan berulang.");
+  const fingerprint = digest(JSON.stringify({
+    link: link.id,
+    employee: employee.id,
+    type,
+    notes,
+    location: b.location,
+    photos
+  }));
+  const previous = await one(db, "SELECT * FROM logbook_entries WHERE idempotency_key=?", b.idempotency_key);
+  if (previous) {
+    assert(previous.report_source === "PUBLIC_LINK" && previous.report_link_id === link.id && previous.request_fingerprint === fingerprint, "Kunci laporan sudah digunakan. Periksa hasil pengiriman sebelumnya.", 409);
+    return quickReport_receipt(previous);
+  }
+  const input = {
+    occurred_at: now(),
+    activity_type: type,
+    activity_notes: notes,
+    location: b.location,
+    idempotency_key: b.idempotency_key,
+    photos: photos.map((p, i) => ({
+      file_id: `pending-${i}`,
+      source: p.source,
+      captured_at: p.captured_at
+    }))
+  };
+  const details = fieldReportDetails(input, employee.id, employee.org_unit_id);
+  const actor = {
+    id: null,
+    request_id: requestId
+  };
+  const uploaded = await asyncMap(photos, async (photo, i) => {
+    const file = await storeUpload(db, actor, {
+      name: `laporan-${i + 1}.${photo.mime_type === "image/png" ? "png" : "jpg"}`,
+      mime_type: photo.mime_type,
+      data: photo.data
+    }, dataDir);
+    return {
+      file_id: file.id,
+      captured_at: photo.captured_at,
+      capture_source: "CAMERA"
+    };
+  });
+  const row = await insert(db, "logbook_entries", {
+    ...details.payload,
+    idempotency_key: b.idempotency_key,
+    request_fingerprint: fingerprint,
+    report_source: "PUBLIC_LINK",
+    report_link_id: link.id,
+    created_by: null
+  });
+  await attachEvidence(db, actor, "logbook", row.id, uploaded);
+  await audit(db, actor, "PUBLIC_SUBMISSION", "logbook_entries", row.id, {
+    employee_id: employee.id,
+    report_link_id: link.id,
+    identity: "SELF_REPORTED"
+  });
+  return quickReport_receipt(row);
+}
+
 async function routeOperation({ db, user, path, method, body = {}, query = "" }) {
   assert(typeof path === "string" && /^[a-z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path) && path.length <= 512, "Alamat API tidak valid.", 404);
   assert(["GET", "POST", "PATCH", "DELETE"].includes(method), "Metode tidak diizinkan.", 405);
@@ -4647,7 +4871,7 @@ async function routeOperation({ db, user, path, method, body = {}, query = "" })
     return { binary: true, data: Buffer3.from(data).toString("base64"), mime_type: file.mime_type, name: file.original_name, inline: url.searchParams.get("inline") === "1" && ["image/png", "image/jpeg"].includes(file.mime_type) };
   }
   const ctx = { db, user, p, method, body, url };
-  for (const handler of [announcementRoutes, hrRoutes, securityRoutes, rosterRoutes, adminRoutes, purchasingRoutes]) {
+  for (const handler of [quickReportManagement, announcementRoutes, hrRoutes, securityRoutes, rosterRoutes, adminRoutes, purchasingRoutes]) {
     const result = await handler(ctx);
     if (result !== void 0) return result;
   }
@@ -4761,12 +4985,24 @@ var index_default = {
       assert(req.method === "POST", "Metode tidak diizinkan.", 405);
       const b = await readBody(req), env = Deno.env.toObject();
       identity = createIdentity(env);
-      storage = createDriveStorage(env, undefined, {module: driveModuleForOperation(b.path, b.body)});
+      storage = createDriveStorage(env, undefined, {module: b.action === "quick-report" ? "patroli" : driveModuleForOperation(b.path, b.body)});
       const client = database(env);
+      if (b.action === "quick-report") {
+        assert(["context", "submit"].includes(b.operation) && b.body && typeof b.body === "object" && !Array.isArray(b.body), "Permintaan tidak valid.", 400);
+        const allowed = await transaction(client, identity, storage, db => takeQuickReportSlot(db, b.client_ip, b.operation));
+        assert(allowed, "Terlalu banyak percobaan. Coba lagi beberapa menit kemudian.", 429);
+        const result = await transaction(client, identity, storage, async db => {
+          const result = await publicQuickReport(db, b.operation, b.body, undefined, requestId);
+          await storage.finalize();
+          workCompleted = true;
+          return result;
+        });
+        return Response.json({ok: true, result}, {headers: {"Cache-Control": "no-store"}});
+      }
       if (b.action === "health") {
         const ready = await transaction(client, identity, storage, async (db) => {
           const r = await one(db, "SELECT count(*)::integer total,count(*) FILTER(WHERE rowsecurity)::integer protected FROM pg_catalog.pg_tables WHERE schemaname='portal'");
-          return r.total === 65 && r.protected === 65;
+          return r.total >= 65 && r.protected === r.total;
         }, false);
         assert(ready, "Modul portal belum siap.", 503);
         return Response.json({ ok: true, healthy: true, revision: "20261016.1" }, { headers: { "Cache-Control": "no-store" } });

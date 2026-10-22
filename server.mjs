@@ -1,3 +1,4 @@
+import {quickReportManagement,publicQuickReport,takeQuickReportSlot} from './lib/quick-reports.mjs';
 import {createServer} from 'node:http';
 import {readFileSync,existsSync,statSync} from 'node:fs';
 import {resolve,extname} from 'node:path';
@@ -37,7 +38,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       const url=new URL(req.url,'http://internal'),p=url.pathname.split('/').filter(Boolean).map(decodeURIComponent);const method=req.method;
       if(p[0]!=='api'){
         assert(['GET','HEAD'].includes(method),'Metode tidak diizinkan.',405);
-        const pathname=url.pathname==='/'?'/index.html':url.pathname;
+        const pathname=url.pathname==='/'?'/index.html':['/laporan-cepat','/laporan-cepat/'].includes(url.pathname)?'/quick-report.html':url.pathname;
         assert(/^\/[a-zA-Z0-9/_-]+\.(html|js|css|svg|png|webp|ico|woff2)$/.test(pathname),'Halaman tidak ditemukan.',404);
         const path=resolve(root,'public',`.${pathname}`);assert(path.startsWith(resolve(root,'public')+String.fromCharCode(process.platform==='win32'?92:47))&&existsSync(path)&&statSync(path).isFile(),'Halaman tidak ditemukan.',404);
         const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.woff2':'font/woff2'};res.writeHead(200,{'Content-Type':types[extname(path)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(method==='HEAD'?undefined:readFileSync(path));return;
@@ -48,6 +49,12 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(mutating&&req.headers.origin)assert(req.headers.origin===origin,'Asal permintaan tidak diizinkan.',403);
       if(mutating&&req.headers['sec-fetch-site'])assert(req.headers['sec-fetch-site']!=='cross-site','Permintaan lintas situs ditolak.',403);
       const body=mutating?await jsonBody(req):{};
+      if(p[0]==='quick-report'){
+        assert(method==='POST'&&p.length===2,'Metode tidak diizinkan.',405);
+        assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Asal permintaan tidak diizinkan.',403);
+        const allowed=tx(db,()=>takeQuickReportSlot(db,req.socket.remoteAddress,p[1]));assert(allowed,'Terlalu banyak percobaan. Coba lagi beberapa menit kemudian.',429);
+        const result=tx(db,()=>publicQuickReport(db,p[1],body,dataDir,requestId));send(result);return;
+      }
       if(p[0]==='auth'&&p[1]==='login'&&method==='POST') {
         rateLimit(req,'login');const result=await login(db,body,req);res.setHeader('Set-Cookie',[cookie('besakih_session',result.token,true,result.hours*3600),cookie('besakih_csrf',result.csrfToken,false,result.hours*3600)]);send({user:result.user,csrfToken:result.csrfToken});return;
       }
@@ -76,7 +83,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(p[0]==='attachments'&&method==='POST'){send(attach(db,user,body.type,body.owner_id,body),201);return;}
       if(p[0]==='files'&&p[1]&&method==='GET') {const {file,data}=download(db,user,p[1],dataDir);res.writeHead(200,{'Content-Type':file.mime_type,'Content-Disposition':`${url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.original_name)}`,'Content-Length':data.length,'Cache-Control':'private, no-store'});res.end(data);return;}
       const ctx={db,user,p,method,body,url};
-      for(const handler of [announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
+      for(const handler of [quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
       throw new AppError(404,'Alamat API tidak ditemukan.');
     } catch(error) {
       const conflict=/UNIQUE constraint/.test(error.message),invalid=/FOREIGN KEY constraint|CHECK constraint|NOT NULL constraint/.test(error.message);

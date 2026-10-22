@@ -43,7 +43,7 @@ try{
  await pg.exec('SET search_path=portal,pg_catalog');
  await check('operational schema has RLS and no direct client or service-role grants',async()=>{
   const tables=await pg.query("SELECT tablename,rowsecurity FROM pg_tables WHERE schemaname='portal'");
-  assert.equal(tables.rows.length,65);assert(tables.rows.every(t=>t.rowsecurity));
+  assert.equal(tables.rows.length,67);assert(tables.rows.every(t=>t.rowsecurity));
   for(const role of ['anon','authenticated','service_role']){
    assert.equal((await pg.query('SELECT has_schema_privilege($1,\'portal\',\'USAGE\') ok',[role])).rows[0].ok,false);
    assert.equal((await pg.query("SELECT count(*)::int n FROM pg_tables WHERE schemaname='portal' AND has_table_privilege($1,schemaname||'.'||tablename,'SELECT,INSERT,UPDATE,DELETE')",[role])).rows[0].n,0);

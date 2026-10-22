@@ -129,9 +129,15 @@ CREATE INDEX IF NOT EXISTS employee_roster_time ON roster_assignments(employee_i
 CREATE TABLE IF NOT EXISTS roster_gaps (
  id TEXT PRIMARY KEY, roster_revision_id TEXT NOT NULL REFERENCES roster_revisions(id), post_id TEXT NOT NULL REFERENCES security_posts(id), shift_id TEXT NOT NULL REFERENCES shift_definitions(id), service_date TEXT NOT NULL, required_count INTEGER NOT NULL, assigned_count INTEGER NOT NULL, acknowledged_by TEXT REFERENCES users(id), acknowledged_at TEXT, acknowledgment_reason TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(roster_revision_id,post_id,shift_id,service_date), CHECK(required_count>assigned_count AND assigned_count>=0));
+CREATE TABLE IF NOT EXISTS quick_report_links (
+ id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL, position_ids TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)), revoked_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id));
+CREATE UNIQUE INDEX IF NOT EXISTS quick_report_one_active ON quick_report_links(is_active) WHERE is_active=1;
+CREATE TABLE IF NOT EXISTS quick_report_rate_limits (
+ id TEXT PRIMARY KEY, window_start TEXT NOT NULL, hits INTEGER NOT NULL CHECK(hits>0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS logbook_entries (
  id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id), post_id TEXT REFERENCES security_posts(id), occurred_at TEXT NOT NULL, activity_type TEXT NOT NULL CHECK(activity_type IN('JAGA','PATROLI','LAINNYA')), activity_notes TEXT NOT NULL, findings TEXT, roster_assignment_id TEXT REFERENCES roster_assignments(id),
- reporting_org_unit_id TEXT REFERENCES org_units(id), latitude REAL, longitude REAL, location_accuracy REAL, location_captured_at TEXT, idempotency_key TEXT UNIQUE, request_fingerprint TEXT,
+ reporting_org_unit_id TEXT REFERENCES org_units(id), latitude REAL, longitude REAL, location_accuracy REAL, location_captured_at TEXT, idempotency_key TEXT UNIQUE, request_fingerprint TEXT, report_source TEXT NOT NULL DEFAULT 'PORTAL' CHECK(report_source IN('PORTAL','PUBLIC_LINK')), report_link_id TEXT REFERENCES quick_report_links(id),
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS logbook_files (
  id TEXT PRIMARY KEY, logbook_entry_id TEXT NOT NULL REFERENCES logbook_entries(id), file_id TEXT NOT NULL REFERENCES files(id), caption TEXT, captured_at TEXT, capture_source TEXT,

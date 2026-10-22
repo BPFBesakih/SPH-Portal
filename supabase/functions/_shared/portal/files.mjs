@@ -50,6 +50,9 @@ export async function fileAllowed(db, user, id) {
 }
 export async function upload(db, user, b, dataDir) {
   assert(await announcementsManager(db, user) || await asyncSome(['hr.documents.manage', 'hr.employee_files.manage', 'hr.training.manage', 'hr.training.participants', 'security.logbook.create', 'security.incidents.create', 'security.incidents.update', 'purchasing.requests.create', 'purchasing.procurement.manage'], async p => await has(db, user, p)), 'Akses unggah ditolak.', 403);
+  return await storeUpload(db,user,b,dataDir);
+}
+export async function storeUpload(db,user,b,dataDir) {
   const name = basename(text(b.name, 'Nama berkas', 180)).replace(/[\r\n"]/g, '_');
   assert(typeof b.data === 'string' && (/^[A-Za-z0-9+/]*={0,2}$/).test(b.data), 'Isi berkas tidak valid.');
   const data = Buffer.from(b.data, 'base64'), max = 10 * 1024 * 1024;

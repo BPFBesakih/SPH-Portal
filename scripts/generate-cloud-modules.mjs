@@ -7,7 +7,7 @@ import {generate} from './cloud-tools/node_modules/astring/dist/astring.mjs';
 // Generated output is committed and checked on PostgreSQL before deployment.
 const destination=new URL('../supabase/functions/_shared/portal/',import.meta.url);
 mkdirSync(destination,{recursive:true});
-const names=['auth','files','hr','security','field-reports','roster','announcements','read-models','admin','purchasing-rules','purchasing'];
+const names=['auth','files','hr','security','field-reports','quick-reports','roster','announcements','read-models','admin','purchasing-rules','purchasing'];
 const modules=[];
 for(const name of names){
  let source=readFileSync(new URL(`../lib/${name}.mjs`,import.meta.url),'utf8');
@@ -24,7 +24,7 @@ for(const name of names){
    .replace("const key=randomUUID();mkdirSync(resolve(dataDir,'files'),{recursive:true});writeFileSync(resolve(dataDir,'files',key),data,{flag:'wx',mode:0o600});", "const key=await db.storage.put(data,types[extension],name);")
    .replace("readFileSync(resolve(dataDir,'files',file.storage_key))",'await db.storage.get(file.storage_key)');
   // acorn needs the existing await to be in an async function on the first parse.
-  source=source.replace('export function upload(', 'export async function upload(').replace('export function download(', 'export async function download(');
+  source=source.replace('export function storeUpload(', 'export async function storeUpload(').replace('export function download(', 'export async function download(');
  }
  if(name==='admin'){
   source=source.replace('postContext,hashPassword,digest','postContext,digest')

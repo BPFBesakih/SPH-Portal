@@ -19,6 +19,9 @@ export async function fieldReportPayload(db, user, b, incident = false) {
     ...ctx,
     reporter_employee_id: employee.id
   });
+  return fieldReportDetails(b, employee.id, ctx.org_unit_id, incident);
+}
+export function fieldReportDetails(b, employeeId, orgUnitId, incident = false) {
   const location = b.location;
   assert(location && typeof location === 'object', 'Lokasi perangkat wajib berhasil didapatkan sebelum laporan dikirim.');
   const numeric = (value, min, max) => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
@@ -35,7 +38,7 @@ export async function fieldReportPayload(db, user, b, incident = false) {
   assert(new Set(photos.map(p => p.file_id)).size === photos.length, 'Foto yang sama tidak dapat digunakan berulang.');
   const payload = {
     post_id: null,
-    reporting_org_unit_id: ctx.org_unit_id || null,
+    reporting_org_unit_id: orgUnitId || null,
     latitude: location.latitude,
     longitude: location.longitude,
     location_accuracy: location.accuracy,
@@ -43,13 +46,13 @@ export async function fieldReportPayload(db, user, b, incident = false) {
     occurred_at: instant(b.occurred_at)
   };
   if (incident) Object.assign(payload, {
-    reporter_employee_id: employee.id,
+    reporter_employee_id: employeeId,
     incident_type: text(b.incident_type, 'Kategori kejadian', 200),
     chronology: text(b.chronology, 'Kronologi', 20000),
     initial_action: null,
     source_logbook_entry_id: b.source_logbook_entry_id || null
   }); else Object.assign(payload, {
-    employee_id: employee.id,
+    employee_id: employeeId,
     activity_type: b.activity_type,
     activity_notes: text(b.activity_notes, 'Uraian kegiatan', 10000),
     findings: null,

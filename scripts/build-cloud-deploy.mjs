@@ -16,4 +16,7 @@ function visit(dir){for(const name of readdirSync(dir)){const path=new URL(name,
  writeFileSync(path,text);
 }}
 visit(app);
+const quickReportPage=new URL('site-info/dist/laporan-cepat/',root);mkdirSync(quickReportPage,{recursive:true});
+writeFileSync(new URL('index.html',quickReportPage),readFileSync(new URL('public/quick-report.html',root),'utf8').replaceAll('/assets/','/app/assets/').replace('href="/quick-report.css"','href="/app/quick-report.css"').replace('src="/quick-report.js"','src="/app/quick-report.js"'));
+
 console.log('Prepared Cloudflare /app/ assets and one-file Supabase portal-api deployment. No production data or credentials included.');
