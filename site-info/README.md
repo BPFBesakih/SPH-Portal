@@ -39,7 +39,8 @@ Migrasi Supabase 001–008 sudah dikonfirmasi diterapkan. Pada 16 Oktober 2026, 
 
 | Nama | Jenis | Nilai/purpose |
 |---|---|---|
-| `PORTAL_ORIGIN` | Text | `https://sph-portal.pages.dev` |
+| `PORTAL_ORIGIN` | Text | `https://bpbesakih.com` |
+| `PORTAL_LEGACY_ORIGIN` | Text, opsional | `https://sph-portal.pages.dev`; hapus sesudah masa transisi domain selesai |
 | `SUPABASE_URL` | Text | `https://mcblosxtuhgxbgyrhfhm.supabase.co` |
 | `SUPABASE_SECRET_KEY` | Secret | Key `sb_secret_…` yang mengizinkan pemanggilan backend/Edge Function; isi langsung dari dashboard Supabase. |
 | `SUPABASE_PUBLISHABLE_KEY` | Text atau Secret | Key `sb_publishable_…` untuk Auth dan RPC dengan JWT pengguna; tetap konfigurasi backend. |
@@ -101,3 +102,7 @@ Bukti ini mengonfirmasi login nyata, keadaan akun sesudah langkah ganti password
 ## Status verifikasi 16 Oktober 2026
 
 Google Search Console sudah mengonfirmasi kepemilikan properti URL-prefix `https://sph-portal.pages.dev/` melalui berkas HTML di atas. Google Auth Platform menampilkan status OAuth **In production**. Verifikasi Branding belum selesai: pesan Google meminta jeda 24 jam setelah verifikasi kepemilikan sebelum mencoba ulang. Status produksi OAuth tidak berarti portal operasional atau Branding sudah disetujui.
+
+## Transisi domain
+
+`PORTAL_LEGACY_ORIGIN` menerima satu origin HTTPS tambahan secara eksplisit. Browser harus mengirim permintaan perubahan dari origin yang sama dengan URL permintaan, meskipun kedua domain terdaftar. Cookie tetap `__Host-`, tanpa atribut Domain, sehingga pengguna masuk terpisah di setiap domain. Setelah domain baru bisa dipakai seluruh jaringan, aktifkan pengalihan alamat lama dan hapus variabel legacy pada deployment berikutnya.

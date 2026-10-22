@@ -49,11 +49,17 @@ function equal(a, b) {
   let diff = 0; for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
-function configuration(env) {
-  const origin = new URL(env.PORTAL_ORIGIN);
-  const base = new URL(env.SUPABASE_URL);
+function portalOrigin(value) {
+  const origin = new URL(value);
   requireValue(origin.protocol === 'https:' && !origin.username && !origin.password && !origin.port
     && origin.pathname === '/' && !origin.search && !origin.hash);
+  return origin.origin;
+}
+function configuration(env) {
+  const origin = portalOrigin(env.PORTAL_ORIGIN);
+  const origins = new Set([origin]);
+  if (env.PORTAL_LEGACY_ORIGIN) origins.add(portalOrigin(env.PORTAL_LEGACY_ORIGIN));
+  const base = new URL(env.SUPABASE_URL);
   requireValue(base.protocol === 'https:' && /^[a-z0-9-]+\.supabase\.co$/.test(base.hostname)
     && !base.username && !base.password && !base.port && base.pathname === '/' && !base.search && !base.hash);
   const secret = env.SUPABASE_SECRET_KEY?.trim();
@@ -64,7 +70,7 @@ function configuration(env) {
   requireValue(keyBytes.length === 32);
   const lifetime = env.PORTAL_SESSION_SECONDS === undefined ? 28800 : Number(env.PORTAL_SESSION_SECONDS);
   requireValue(Number.isInteger(lifetime) && lifetime >= 900 && lifetime <= 86400);
-  return { origin: origin.origin, base: base.origin, secret, publishable, keyBytes, lifetime };
+  return { origin, origins, base: base.origin, secret, publishable, keyBytes, lifetime };
 }
 function cookie(name, value, seconds) {
   return `${name}=${value}; Path=/; Secure; SameSite=Strict; Max-Age=${seconds}${name === SESSION_COOKIE ? '; HttpOnly' : ''}`;
@@ -364,9 +370,9 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       if (request.method !== method) return response({ ok: false, error: 'METHOD_NOT_ALLOWED' }, 405);
       requireValue(operation ? url.search.length <= 2048 : !url.search, 'INVALID_REQUEST', 400);
       config = configuration(env);
-      requireValue(url.origin === config.origin, 'FORBIDDEN', 403);
+      requireValue(config.origins.has(url.origin), 'FORBIDDEN', 403);
       requireValue(!['cross-site', 'same-site'].includes(request.headers.get('sec-fetch-site')), 'FORBIDDEN', 403);
-      if (method !== 'GET') requireValue(request.headers.get('origin') === config.origin, 'FORBIDDEN', 403);
+      if (method !== 'GET') requireValue(request.headers.get('origin') === url.origin, 'FORBIDDEN', 403);
       key = await cryptoImpl.subtle.importKey('raw', config.keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
       if (health) {
         const result = await api('/functions/v1/portal-api', { admin: true, body: { action: 'health' } });

@@ -497,3 +497,56 @@ test('invalid password changes fail before acquiring a session', async () => {
   }
   assert.equal(f.called('portal_acquire_web_session').length, 0);
 });
+
+test('domain transition supports only explicitly configured hosts with host-only cookies', async () => {
+  const primary = 'https://portal.example.invalid';
+  for (const origin of [primary, env.PORTAL_ORIGIN]) {
+    const f = fixture();
+    f.env.PORTAL_ORIGIN = primary;
+    f.env.PORTAL_LEGACY_ORIGIN = env.PORTAL_ORIGIN;
+    const result = await f.handler(request('login', { body: credentials, origin }), f.env);
+    assert.equal(result.status, 200, await result.clone().text());
+    for (const cookie of result.headers.getSetCookie()) {
+      assert.match(cookie, /; Secure;/);
+      assert.match(cookie, /; SameSite=Strict;/);
+      assert.doesNotMatch(cookie, /; Domain=/i);
+    }
+    assertPrivate(await result.text());
+  }
+});
+
+test('domain transition rejects unknown hosts and cross-host mutation origins before contacting Auth', async () => {
+  const primary = 'https://portal.example.invalid';
+  const f = fixture();
+  f.env.PORTAL_ORIGIN = primary;
+  f.env.PORTAL_LEGACY_ORIGIN = env.PORTAL_ORIGIN;
+  for (const options of [
+    { origin: 'https://attacker.invalid' },
+    { origin: env.PORTAL_ORIGIN, headers: { origin: primary } },
+    { origin: primary, headers: { origin: env.PORTAL_ORIGIN } },
+    { origin: primary, headers: { 'sec-fetch-site': 'same-site' } },
+  ]) {
+    const result = await f.handler(request('login', { body: credentials, ...options }), f.env);
+    assert.equal(result.status, 403);
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test('legacy host access can be removed by unsetting its configuration', async () => {
+  const f = fixture();
+  f.env.PORTAL_ORIGIN = 'https://portal.example.invalid';
+  const result = await f.handler(request('login', { body: credentials }), f.env);
+  assert.equal(result.status, 403);
+  assert.equal(f.calls.length, 0);
+});
+
+test('invalid legacy origins fail closed before contacting Auth', async () => {
+  for (const legacy of ['http://legacy.example.invalid', 'https://user@legacy.example.invalid',
+    'https://legacy.example.invalid:444', 'https://legacy.example.invalid/path', 'https://legacy.example.invalid?x=1']) {
+    const f = fixture();
+    f.env.PORTAL_LEGACY_ORIGIN = legacy;
+    const result = await f.handler(request('login', { body: credentials }), f.env);
+    assert.equal(result.status, 503);
+    assert.equal(f.calls.length, 0);
+  }
+});
