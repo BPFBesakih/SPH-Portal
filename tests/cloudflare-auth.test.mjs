@@ -39,6 +39,7 @@ function fixture(options = {}) {
     calls.push({ path, body, headers, method: init.method, redirect: init.redirect, signal: init.signal });
     assert.equal(parsed.origin, env.SUPABASE_URL); assert.equal(init.redirect, 'manual');
     assert.equal(headers.get('user-agent'), 'SPH-Portal-Backend/1.0');
+    assert.equal(headers.get('x-region'), path.startsWith('/functions/v1/') ? 'ap-southeast-1' : null);
     assert.equal(headers.has('origin'), false);
     assert.equal(headers.has('cookie'), false);
     assert.ok(init.signal instanceof AbortSignal);

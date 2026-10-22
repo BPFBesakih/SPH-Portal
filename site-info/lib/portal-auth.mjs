@@ -180,6 +180,8 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
         method, redirect: 'manual', signal: AbortSignal.timeout(Math.ceil(remaining)),
         headers: { apikey: admin ? config.secret : config.publishable,
           'User-Agent': 'SPH-Portal-Backend/1.0',
+          // Run database-heavy functions beside this project's Singapore database.
+          ...(path.startsWith('/functions/v1/') ? { 'x-region': 'ap-southeast-1' } : {}),
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
           ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
