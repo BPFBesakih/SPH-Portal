@@ -114,7 +114,7 @@ export async function attach(db, user, type, id, b) {
     const config = type === 'logbook' ? ['logbook_entries', 'security.logbook', 'logbook_files', 'logbook_entry_id'] : type === 'incident' ? ['incidents', 'security.incidents', 'incident_files', 'incident_id'] : null;
     assert(config, 'Jenis lampiran tidak valid.');
     const row = await get(db, config[0], id);
-    assert(row.latitude == null, 'Foto laporan baru diambil melalui kamera saat pelaporan.');
+    assert(row.latitude==null&&row.report_source!=='PUBLIC_LINK', 'Foto laporan baru diambil melalui kamera saat pelaporan.');
     assert(await can(db, user, `${config[1]}.update`, await reportContext(db, row)) || row.created_by === user.id && await can(db, user, `${config[1]}.create`, await reportContext(db, row)), 'Akses lampiran ditolak.', 403);
     const result = await insert(db, config[2], {
       [config[3]]: id,

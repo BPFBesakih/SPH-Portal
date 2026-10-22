@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS quick_report_rate_limits (
  id TEXT PRIMARY KEY, window_start TEXT NOT NULL, hits INTEGER NOT NULL CHECK(hits>0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS logbook_entries (
  id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id), post_id TEXT REFERENCES security_posts(id), occurred_at TEXT NOT NULL, activity_type TEXT NOT NULL CHECK(activity_type IN('JAGA','PATROLI','LAINNYA')), activity_notes TEXT NOT NULL, findings TEXT, roster_assignment_id TEXT REFERENCES roster_assignments(id),
- reporting_org_unit_id TEXT REFERENCES org_units(id), latitude REAL, longitude REAL, location_accuracy REAL, location_captured_at TEXT, idempotency_key TEXT UNIQUE, request_fingerprint TEXT, report_source TEXT NOT NULL DEFAULT 'PORTAL' CHECK(report_source IN('PORTAL','PUBLIC_LINK')), report_link_id TEXT REFERENCES quick_report_links(id),
+ reporting_org_unit_id TEXT REFERENCES org_units(id), latitude REAL, longitude REAL, location_accuracy REAL, location_captured_at TEXT, idempotency_key TEXT UNIQUE, request_fingerprint TEXT, report_source TEXT NOT NULL DEFAULT 'PORTAL' CHECK(report_source IN('PORTAL','PUBLIC_LINK')), report_link_id TEXT REFERENCES quick_report_links(id), location_name TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS logbook_files (
  id TEXT PRIMARY KEY, logbook_entry_id TEXT NOT NULL REFERENCES logbook_entries(id), file_id TEXT NOT NULL REFERENCES files(id), caption TEXT, captured_at TEXT, capture_source TEXT,

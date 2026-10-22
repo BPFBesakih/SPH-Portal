@@ -8,7 +8,8 @@ import {openDb,insert,one,all,run,tx,now,get} from '../lib/db.mjs';
 import {seedPermissions,hashPasswordSync} from '../lib/auth.mjs';
 import {quickReportManagement,publicQuickReport,takeQuickReportSlot} from '../lib/quick-reports.mjs';
 import {securityRoutes} from '../lib/security.mjs';
-import {fileAllowed} from '../lib/files.mjs';
+import {fileAllowed,attach,upload} from '../lib/files.mjs';
+import {fieldReportDetails} from '../lib/field-reports.mjs';
 import {handleQuickReport} from '../site-info/lib/quick-report.mjs';
 import {createApp} from '../server.mjs';
 
@@ -107,10 +108,26 @@ test('legacy logbook migration preserves old reports and marks their source as p
  const directory=mkdtempSync(resolve(tmpdir(),'besakih-quick-migration-')),path=resolve(directory,'legacy.sqlite');
  t.after(()=>{assert(directory.startsWith(resolve(tmpdir())+sep)&&directory.split(sep).at(-1).startsWith('besakih-quick-'));rmSync(directory,{recursive:true,force:true});});
  let schema=readFileSync(new URL('../schema.sql',import.meta.url),'utf8');
- schema=schema.replace(/CREATE TABLE IF NOT EXISTS quick_report_links \([\s\S]*?;\r?\n/,'').replace(/CREATE UNIQUE INDEX IF NOT EXISTS quick_report_one_active[^;]+;\r?\n/,'').replace(/CREATE TABLE IF NOT EXISTS quick_report_rate_limits \([\s\S]*?;\r?\n/,'').replace(", report_source TEXT NOT NULL DEFAULT 'PORTAL' CHECK(report_source IN('PORTAL','PUBLIC_LINK')), report_link_id TEXT REFERENCES quick_report_links(id)",'');
+ schema=schema.replace(', location_name TEXT','').replace(/CREATE TABLE IF NOT EXISTS quick_report_links \([\s\S]*?;\r?\n/,'').replace(/CREATE UNIQUE INDEX IF NOT EXISTS quick_report_one_active[^;]+;\r?\n/,'').replace(/CREATE TABLE IF NOT EXISTS quick_report_rate_limits \([\s\S]*?;\r?\n/,'').replace(", report_source TEXT NOT NULL DEFAULT 'PORTAL' CHECK(report_source IN('PORTAL','PUBLIC_LINK')), report_link_id TEXT REFERENCES quick_report_links(id)",'');
  const legacy=new DatabaseSync(path);legacy.exec(schema);
  const employee=insert(legacy,'employees',{employee_no:'LEGACY',full_name:'Petugas lama',employment_status:'Tetap',joined_on:'2020-01-01',is_active:1});
  const report=insert(legacy,'logbook_entries',{employee_id:employee.id,activity_type:'PATROLI',activity_notes:'Catatan historis',occurred_at:now()});
  legacy.exec("INSERT OR IGNORE INTO schema_migrations VALUES(3,'2020-01-01');INSERT OR IGNORE INTO schema_migrations VALUES(4,'2020-01-01');");legacy.close();
- const db=openDb(path);try{assert.equal(get(db,'logbook_entries',report.id).activity_notes,'Catatan historis');assert.equal(get(db,'logbook_entries',report.id).report_source,'PORTAL');assert.equal(get(db,'logbook_entries',report.id).report_link_id,null);assert.equal(one(db,'SELECT count(*) n FROM quick_report_links').n,0);assert.equal(db.prepare('PRAGMA foreign_key_check').all().length,0);}finally{db.close();}
+ const db=openDb(path);try{assert.equal(get(db,'logbook_entries',report.id).activity_notes,'Catatan historis');assert.equal(get(db,'logbook_entries',report.id).report_source,'PORTAL');assert.equal(get(db,'logbook_entries',report.id).report_link_id,null);assert.equal(get(db,'logbook_entries',report.id).location_name,null);assert.equal(one(db,'SELECT count(*) n FROM quick_report_links').n,0);assert.equal(db.prepare('PRAGMA foreign_key_check').all().length,0);}finally{db.close();}
+});
+
+test('named locations persist without GPS, retain private evidence and distinguish retries from changed places',async t=>{
+ const f=fixture(t),created=link(f),body=payload(f,created.token,{location:null,location_name:'  Parkir Kedungdung  '}),first=submit(f,body),report=one(f.db,'SELECT * FROM logbook_entries');
+ assert.equal(report.location_name,'Parkir Kedungdung');for(const key of ['latitude','longitude','location_accuracy','location_captured_at'])assert.equal(report[key],null);
+ assert.deepEqual(submit(f,body),first);assert.throws(()=>submit(f,{...body,location_name:'Pintu masuk Manik Mas'}),e=>e.status===409);
+ const detail=await securityRoutes({db:f.db,user:f.officer,p:['logbook',report.id],method:'GET',body:{}});assert.equal(detail.location_name,'Parkir Kedungdung');assert.equal(detail.files.length,1);assert.equal(fileAllowed(f.db,f.officer,detail.files[0].id),true);
+ assert.throws(()=>fieldReportDetails({...body,occurred_at:now()},f.people[0].id,f.unit.id),e=>e.status===422);
+ const extra=upload(f.db,f.admin,{name:'extra.png',mime_type:'image/png',data:png},f.directory);assert.throws(()=>attach(f.db,f.admin,'logbook',report.id,{file_id:extra.id}),/Foto laporan baru/);
+ const gps=payload(f,created.token,{location_name:'Pintu masuk Manik Mas'});submit(f,gps);const row=one(f.db,'SELECT * FROM logbook_entries WHERE idempotency_key=?',gps.idempotency_key);assert.equal(row.location_name,gps.location_name);assert.equal(row.latitude,gps.location.latitude);
+});
+test('named locations validate text and supplied GPS before uploads while old GPS clients remain compatible',t=>{
+ const f=fixture(t),created=link(f),body=payload(f,created.token,{location_name:'Parkir Kedungdung'});
+ for(const changes of [{location_name:''},{location_name:'   '},{location_name:'x'.repeat(201)},{location_name:42},{location:null,location_name:undefined},{location:{latitude:999,longitude:115,accuracy:4,captured_at:now()}},{location:[]},{location:false}])assert.throws(()=>submit(f,{...body,...changes}),e=>e.status===422);
+ assert.equal(one(f.db,'SELECT count(*) n FROM files').n,0);
+ const legacy=payload(f,created.token);const receipt=submit(f,legacy);assert.deepEqual(submit(f,legacy),receipt);assert.equal(one(f.db,'SELECT location_name FROM logbook_entries').location_name,null);
 });

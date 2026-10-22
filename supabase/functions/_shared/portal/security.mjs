@@ -217,7 +217,7 @@ export async function securityRoutes(c) {
         const values = {
           activity_notes: text(b.activity_notes, 'Uraian', 10000)
         };
-        if (log.latitude == null && b.findings !== undefined) values.findings = opt(b.findings);
+        if (log.latitude == null && log.report_source !== 'PUBLIC_LINK' && b.findings !== undefined) values.findings = opt(b.findings);
         const row = await update(db, 'logbook_entries', id, b.row_version, values);
         await audit(db, user, 'UPDATE', 'logbook_entries', id);
         return row;

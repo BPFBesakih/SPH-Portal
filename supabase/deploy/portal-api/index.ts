@@ -2664,7 +2664,7 @@ async function attach(db, user, type, id, b) {
     const config = type === "logbook" ? ["logbook_entries", "security.logbook", "logbook_files", "logbook_entry_id"] : type === "incident" ? ["incidents", "security.incidents", "incident_files", "incident_id"] : null;
     assert(config, "Jenis lampiran tidak valid.");
     const row = await get(db, config[0], id);
-    assert(row.latitude == null, "Foto laporan baru diambil melalui kamera saat pelaporan.");
+    assert(row.latitude==null&&row.report_source!=='PUBLIC_LINK', "Foto laporan baru diambil melalui kamera saat pelaporan.");
     assert(await can(db, user, `${config[1]}.update`, await reportContext(db, row)) || row.created_by === user.id && await can(db, user, `${config[1]}.create`, await reportContext(db, row)), "Akses lampiran ditolak.", 403);
     const result = await insert(db, config[2], {
       [config[3]]: id,
@@ -3250,54 +3250,24 @@ async function fieldReportPayload(db, user, b, incident = false) {
   });
   return fieldReportDetails(b, employee.id, ctx.org_unit_id, incident);
 }
-function fieldReportDetails(b, employeeId, orgUnitId, incident = false) {
-  const location = b.location;
-  assert(location && typeof location === "object", "Lokasi perangkat wajib berhasil didapatkan sebelum laporan dikirim.");
+function fieldReportDetails(b, employeeId, orgUnitId, incident = false, allowNamedLocation = false) {
+  const location = b.location, locationName = allowNamedLocation && b.location_name !== void 0 ? text(b.location_name, "Nama tempat / lokasi patroli", 200) : null;
+  assert(location != null || locationName, allowNamedLocation ? "Isi nama tempat / lokasi patroli atau ambil lokasi perangkat sebelum laporan dikirim." : "Lokasi perangkat wajib berhasil didapatkan sebelum laporan dikirim.");
+  if (location != null) assert(typeof location === "object" && !Array.isArray(location), "Koordinat atau akurasi lokasi tidak valid.");
   const numeric = (value, min, max) => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
-  assert(numeric(location.latitude, -90, 90) && numeric(location.longitude, -180, 180) && numeric(location.accuracy, 0, 1e7), "Koordinat atau akurasi lokasi tidak valid.");
+  if (location != null) assert(numeric(location.latitude, -90, 90) && numeric(location.longitude, -180, 180) && numeric(location.accuracy, 0, 1e7), "Koordinat atau akurasi lokasi tidak valid.");
   assert(Array.isArray(b.photos) && b.photos.length >= 1 && b.photos.length <= 5, "Ambil minimal satu dan maksimal lima foto melalui kamera aplikasi.");
   const photos = b.photos.map((photo) => {
     assert(photo && photo.source === "CAMERA", "Foto wajib diambil melalui kamera aplikasi.");
-    return {
-      file_id: text(photo.file_id, "Berkas foto", 100),
-      captured_at: fresh(photo.captured_at),
-      capture_source: "CAMERA"
-    };
+    return { file_id: text(photo.file_id, "Berkas foto", 100), captured_at: fresh(photo.captured_at), capture_source: "CAMERA" };
   });
   assert(new Set(photos.map((p) => p.file_id)).size === photos.length, "Foto yang sama tidak dapat digunakan berulang.");
-  const payload = {
-    post_id: null,
-    reporting_org_unit_id: orgUnitId || null,
-    latitude: location.latitude,
-    longitude: location.longitude,
-    location_accuracy: location.accuracy,
-    location_captured_at: fresh(location.captured_at),
-    occurred_at: instant(b.occurred_at)
-  };
-  if (incident) Object.assign(payload, {
-    reporter_employee_id: employeeId,
-    incident_type: text(b.incident_type, "Kategori kejadian", 200),
-    chronology: text(b.chronology, "Kronologi", 2e4),
-    initial_action: null,
-    source_logbook_entry_id: b.source_logbook_entry_id || null
-  });
-  else Object.assign(payload, {
-    employee_id: employeeId,
-    activity_type: b.activity_type,
-    activity_notes: text(b.activity_notes, "Uraian kegiatan", 1e4),
-    findings: null,
-    roster_assignment_id: null
-  });
-  return {
-    payload,
-    photos,
-    key: text(b.idempotency_key, "Kunci permintaan", 100),
-    fingerprint: digest(JSON.stringify({
-      payload,
-      photos
-    }))
-  };
+  const payload = { post_id: null, reporting_org_unit_id: orgUnitId || null, latitude: location?.latitude ?? null, longitude: location?.longitude ?? null, location_accuracy: location?.accuracy ?? null, location_captured_at: location ? fresh(location.captured_at) : null, ...locationName ? { location_name: locationName } : {}, occurred_at: instant(b.occurred_at) };
+  if (incident) Object.assign(payload, { reporter_employee_id: employeeId, incident_type: text(b.incident_type, "Kategori kejadian", 200), chronology: text(b.chronology, "Kronologi", 2e4), initial_action: null, source_logbook_entry_id: b.source_logbook_entry_id || null });
+  else Object.assign(payload, { employee_id: employeeId, activity_type: b.activity_type, activity_notes: text(b.activity_notes, "Uraian kegiatan", 1e4), findings: null, roster_assignment_id: null });
+  return { payload, photos, key: text(b.idempotency_key, "Kunci permintaan", 100), fingerprint: digest(JSON.stringify({ payload, photos })) };
 }
+
 async function attachEvidence(db, user, kind, id, photos) {
   for (const photo of photos) {
     const file = await claimFile(db, user, photo.file_id);
@@ -3526,7 +3496,7 @@ async function securityRoutes(c) {
         const values = {
           activity_notes: text(b.activity_notes, "Uraian", 1e4)
         };
-        if (log.latitude == null && b.findings !== void 0) values.findings = opt(b.findings);
+        if (log.latitude == null && log.report_source !== 'PUBLIC_LINK' && b.findings !== void 0) values.findings = opt(b.findings);
         const row = await update(db, "logbook_entries", id, b.row_version, values);
         await audit(db, user, "UPDATE", "logbook_entries", id);
         return row;
@@ -4759,6 +4729,7 @@ async function publicQuickReport(db, action, b, dataDir, requestId) {
   const employee = people.find((e) => e.id === b.employee_id);
   assert(employee, "Pilih pegawai Keamanan aktif dari daftar.");
   assert(typeof b.idempotency_key === "string" && /^[a-f0-9-]{36}$/i.test(b.idempotency_key), "Kunci laporan tidak valid.");
+  const locationName = b.location_name === void 0 ? null : text(b.location_name, "Nama tempat / lokasi patroli", 200);
   const notes = text(b.activity_notes, "Uraian kegiatan", 1e4), type = enumValue(b.activity_type, ["JAGA", "PATROLI", "LAINNYA"]);
   assert(Array.isArray(b.photos) && b.photos.length >= 1 && b.photos.length <= 5, "Ambil minimal satu dan maksimal lima foto.");
   let bytes = 0;
@@ -4782,6 +4753,7 @@ async function publicQuickReport(db, action, b, dataDir, requestId) {
     employee: employee.id,
     type,
     notes,
+    ...(locationName ? {location_name: locationName} : {}),
     location: b.location,
     photos
   }));
@@ -4795,6 +4767,7 @@ async function publicQuickReport(db, action, b, dataDir, requestId) {
     activity_type: type,
     activity_notes: notes,
     location: b.location,
+    ...(locationName ? {location_name: locationName} : {}),
     idempotency_key: b.idempotency_key,
     photos: photos.map((p, i) => ({
       file_id: `pending-${i}`,
@@ -4802,7 +4775,7 @@ async function publicQuickReport(db, action, b, dataDir, requestId) {
       captured_at: p.captured_at
     }))
   };
-  const details = fieldReportDetails(input, employee.id, employee.org_unit_id);
+  const details = fieldReportDetails(input, employee.id, employee.org_unit_id, false, true);
   const actor = {
     id: null,
     request_id: requestId

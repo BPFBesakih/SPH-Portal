@@ -144,6 +144,7 @@ export async function publicQuickReport(db, action, b, dataDir, requestId) {
   const employee = people.find(e => e.id === b.employee_id);
   assert(employee, 'Pilih pegawai Keamanan aktif dari daftar.');
   assert(typeof b.idempotency_key === 'string' && (/^[a-f0-9-]{36}$/i).test(b.idempotency_key), 'Kunci laporan tidak valid.');
+  const locationName = b.location_name === undefined ? null : text(b.location_name, "Nama tempat / lokasi patroli", 200);
   const notes = text(b.activity_notes, 'Uraian kegiatan', 10000), type = enumValue(b.activity_type, ['JAGA', 'PATROLI', 'LAINNYA']);
   assert(Array.isArray(b.photos) && b.photos.length >= 1 && b.photos.length <= 5, 'Ambil minimal satu dan maksimal lima foto.');
   let bytes = 0;
@@ -167,6 +168,7 @@ export async function publicQuickReport(db, action, b, dataDir, requestId) {
     employee: employee.id,
     type,
     notes,
+    ...(locationName ? {location_name: locationName} : {}),
     location: b.location,
     photos
   }));
@@ -180,6 +182,7 @@ export async function publicQuickReport(db, action, b, dataDir, requestId) {
     activity_type: type,
     activity_notes: notes,
     location: b.location,
+    ...(locationName ? {location_name: locationName} : {}),
     idempotency_key: b.idempotency_key,
     photos: photos.map((p, i) => ({
       file_id: `pending-${i}`,
@@ -187,7 +190,7 @@ export async function publicQuickReport(db, action, b, dataDir, requestId) {
       captured_at: p.captured_at
     }))
   };
-  const details = fieldReportDetails(input, employee.id, employee.org_unit_id);
+  const details = fieldReportDetails(input, employee.id, employee.org_unit_id, false, true);
   const actor = {
     id: null,
     request_id: requestId
