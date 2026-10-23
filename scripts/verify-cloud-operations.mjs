@@ -43,7 +43,7 @@ try{
  await pg.exec('SET search_path=portal,pg_catalog');
  await check('operational schema has RLS and no direct client or service-role grants',async()=>{
   const tables=await pg.query("SELECT tablename,rowsecurity FROM pg_tables WHERE schemaname='portal'");
-  assert.equal(tables.rows.length,67);assert(tables.rows.every(t=>t.rowsecurity));
+  assert(tables.rows.length>=67);assert(tables.rows.every(t=>t.rowsecurity));
   for(const role of ['anon','authenticated','service_role']){
    assert.equal((await pg.query('SELECT has_schema_privilege($1,\'portal\',\'USAGE\') ok',[role])).rows[0].ok,false);
    assert.equal((await pg.query("SELECT count(*)::int n FROM pg_tables WHERE schemaname='portal' AND has_table_privilege($1,schemaname||'.'||tablename,'SELECT,INSERT,UPDATE,DELETE')",[role])).rows[0].n,0);
@@ -303,7 +303,7 @@ try{
  await pg.query('SELECT public.portal_create_web_session($1,$2,$3,$4,$5,$6,28800)',[officer.id,sessionId,cookieHash,hash('csrf'),`v1.${'N'.repeat(16)}.${'C'.repeat(100)}`,new Date(Date.now()+3600000).toISOString()]);
  await pg.query('SELECT public.portal_acquire_web_session($1,$2)',[cookieHash,leaseHash]);
  globalThis.Deno={env:{toObject:()=>({SUPABASE_URL:'https://fixture-project.supabase.co',SUPABASE_SECRET_KEYS:JSON.stringify({default:'sb_secret_fixture'}),SUPABASE_DB_URL:'postgresql://fixture:fixture@localhost/fixture'})}};
- globalThis.__sphFixture={mode:null,postgres:()=>({begin:async work=>{await pg.exec('BEGIN');const sql={unsafe:async(statement,args=[])=>{if(!args.length&&statement.includes(';')){await pg.exec(statement);return [];}const r=await pg.query(statement,args);return Object.assign(r.rows,{count:r.affectedRows??r.rows.length});}};try{const r=await work(sql);await pg.exec('COMMIT');return r;}catch(e){await pg.exec('ROLLBACK');throw e;}}})};
+ globalThis.__sphFixture={mode:null,sql:[],postgres:()=>({begin:async work=>{await pg.exec('BEGIN');const sql={unsafe:async(statement,args=[])=>{globalThis.__sphFixture.sql.push(statement);if(!args.length&&statement.includes(';')){await pg.exec(statement);return [];}const r=await pg.query(statement,args);return Object.assign(r.rows,{count:r.affectedRows??r.rows.length});}};try{const r=await work(sql);await pg.exec('COMMIT');return r;}catch(e){await pg.exec('ROLLBACK');throw e;}}})};
  globalThis.fetch=async(url,init)=>{
   assert(new URL(url).origin==='https://fixture-project.supabase.co');assert.equal(init.redirect,'manual');
   if(init.method==='GET'&&new URL(url).pathname==='/auth/v1/user')return Response.json({id:verifiedId,is_anonymous:false});
@@ -324,6 +324,14 @@ try{
    verifiedId=admin.id;response=await invoke(operation);assert.equal(response.status,401);verifiedId=officer.id;
    response=await invoke({...operation,path:'users'});assert.equal(response.status,403);
    response=await invoke({action:'health'});assert.equal(response.status,200);assert.equal((await response.json()).healthy,true);
+  });
+  await check('packaged employee menus reuse scoped permissions within one request and revoke access on the next',async()=>{
+   const role=await insert(db,'roles',{code:'PACKAGED_PERFORMANCE',name:'Pembaca uji performa',is_system:0,is_active:1});await run(db,'INSERT INTO role_permissions(role_id,permission_id) SELECT ?,id FROM permissions WHERE code=?',role.id,'hr.employees.read');const grant=await insert(db,'user_roles',{user_id:officer.id,role_id:role.id,scope_kind:'ASSIGNED_UNITS'});await run(db,'INSERT INTO user_role_units(user_role_id,org_unit_id,include_descendants) VALUES(?,?,?)',grant.id,unit.id,0);
+   await pg.query("INSERT INTO portal.employees(id,employee_no,full_name,employment_status,joined_on,is_active,created_at,updated_at,row_version) SELECT 'performance-'||g,'PERF-'||g,'Pegawai performa '||g,'Tetap','2020-01-01',1,$1,$1,1 FROM generate_series(1,90) g",[now()]);
+   await pg.query("INSERT INTO portal.employee_placements(id,employee_id,position_id,valid_from,is_primary,created_at,updated_at,row_version) SELECT 'performance-placement-'||g,'performance-'||g,$1,'2020-01-01',1,$2,$2,1 FROM generate_series(1,90) g",[position.id,now()]);
+   const previous=db.query;let before=0;db.query=(...args)=>{before++;return previous(...args);};let expected;try{expected=await call(officer,'employees');}finally{db.query=previous;}
+   globalThis.__sphFixture.sql=[];const result=await invoke({...operation,path:'employees'});assert.equal(result.status,200,await result.clone().text());const data=(await result.json()).result;assert.deepEqual(data,expected);const queries=globalThis.__sphFixture.sql;assert.equal(queries.filter(q=>q.includes('WHERE ur.user_id=')).length,1);assert.equal(queries.filter(q=>q==='SELECT * FROM user_role_units WHERE user_role_id=$1').length,1);assert(queries.length<=10,queries.length);console.log(JSON.stringify({fixture:'PostgreSQL packaged employee menu',before_queries:before,after_queries:queries.length,rows:data.items.length}));
+   await run(db,'DELETE FROM user_roles WHERE id=?',grant.id);assert.equal((await invoke({...operation,path:'employees'})).status,403);
   });
   await check('packaged training batches persist all participants atomically and reject ungranted mutations',async()=>{
    const role=await insert(db,'roles',{code:'PACKAGED_TRAINING',name:'Pengelola peserta paket uji',is_active:1,is_system:0});

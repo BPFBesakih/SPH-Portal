@@ -177,12 +177,12 @@ function storageError(stage,status,reason){
 const driveModuleFolders=Object.freeze({
  sop:'SPH-Portal-SOP',pelatihan:'SPH-Portal-Pelatihan',pegawai:'SPH-Portal-Pegawai',
  patroli:'SPH-Portal-Patroli',kejadian:'SPH-Portal-Kejadian',informasi:'SPH-Portal-Informasi',
- pengadaan:'SPH-Portal-Pengadaan',website:'SPH-Portal-Website',
+ pengadaan:'SPH-Portal-Pengadaan',website:'SPH-Portal-Website',coaching:'SPH-Portal-Coaching',
 });
 function driveModuleForOperation(path,body={}){
  const resource=typeof path==='string'?path.split('/')[0]:'';
  if(resource==='attachments')return {employee:'pegawai',logbook:'patroli',incident:'kejadian'}[body?.type]||null;
- const module={documents:'sop',training:'pelatihan',employees:'pegawai',logbook:'patroli',incidents:'kejadian',announcements:'informasi',purchasing:'pengadaan',website:'website'}[resource];
+ const module={documents:'sop',training:'pelatihan',employees:'pegawai',logbook:'patroli',incidents:'kejadian',announcements:'informasi',purchasing:'pengadaan',website:'website',coaching:'coaching'}[resource];
  return typeof module==='string'?module:null;
 }
 function createDriveStorage(env,fetchImpl=globalThis.fetch.bind(globalThis),options={}){
@@ -326,7 +326,10 @@ var purchasingRoleCodes = {
 };
 var purchasingRoles = Object.entries(purchasingRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
 async function grants(db, user) {
-  return await all(db, `SELECT DISTINCT ur.id,ur.scope_kind,r.code role_code,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN permissions p ON EXISTS(SELECT 1 FROM role_permissions rp WHERE rp.role_id=r.id AND rp.permission_id=p.id) OR (r.code='SUPER_ADMIN' AND ur.scope_kind='ALL') WHERE ur.user_id=?`, user.id);
+  const key=`grants:${user.id}`,cache=db.authorizationCache;
+  if(cache?.has(key))return cache.get(key);
+  const rows=await all(db, `SELECT DISTINCT ur.id,ur.scope_kind,r.code role_code,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN permissions p ON EXISTS(SELECT 1 FROM role_permissions rp WHERE rp.role_id=r.id AND rp.permission_id=p.id) OR (r.code='SUPER_ADMIN' AND ur.scope_kind='ALL') WHERE ur.user_id=?`, user.id);
+  cache?.set(key,rows);return rows;
 }
 var IT_ADMIN_PERMISSIONS = ["admin.users.read", "admin.users.manage", "admin.users.reset", "admin.roles.read", "admin.roles.manage", "admin.audit.read"];
 async function isSuperAdmin(db, user) {
@@ -343,19 +346,28 @@ async function employeeContext(db, id, asOf) {
     employee_id: id
   };
 }
+async function authorizationScopeRows(db, kind, id, target) {
+  const key = JSON.stringify(["scope", kind, id, target]), cache = db.authorizationCache;
+  if (cache?.has(key)) return cache.get(key);
+  const sql = kind === "units" ? "SELECT * FROM user_role_units WHERE user_role_id=?" : kind === "post" ? "SELECT 1 FROM user_role_posts WHERE user_role_id=? AND post_id=?" : "WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE parent_id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree WHERE id=?";
+  const rows = await all(db, sql, ...kind === "units" ? [id] : [id, target]);
+  cache?.set(key, rows);
+  return rows;
+}
 async function can(db, user, permission, context = {}) {
   const matches = (await grants(db, user)).filter((g) => g.code === permission);
   return await asyncSome(matches, async (g) => {
     if (g.scope_kind === "ALL") return true;
     if (g.scope_kind === "SELF") return Boolean(user.employee_id && [context.employee_id, context.reporter_employee_id, ...context.related_employees || []].includes(user.employee_id));
-    if (g.scope_kind === "ASSIGNED_POSTS") return permission.startsWith("security.") && Boolean(context.post_id && await one(db, "SELECT 1 FROM user_role_posts WHERE user_role_id=? AND post_id=?", g.id, context.post_id));
+    if (g.scope_kind === "ASSIGNED_POSTS") return permission.startsWith("security.") && Boolean(context.post_id && (await authorizationScopeRows(db, "post", g.id, context.post_id)).length);
     if (!context.org_unit_id) return false;
-    return await asyncSome(await all(db, "SELECT * FROM user_role_units WHERE user_role_id=?", g.id), async (u) => {
+    return await asyncSome(await authorizationScopeRows(db, "units", g.id), async (u) => {
       if (u.org_unit_id === context.org_unit_id) return true;
-      return u.include_descendants && Boolean(await one(db, "WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE parent_id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree WHERE id=?", u.org_unit_id, context.org_unit_id));
+      return u.include_descendants && Boolean((await authorizationScopeRows(db, "descendants", u.org_unit_id, context.org_unit_id)).length);
     });
   });
 }
+
 async function has(db, user, permission) {
   return (await grants(db, user)).some((g) => g.code === permission);
 }
@@ -2539,7 +2551,7 @@ async function purchasingPendingCount(db, user) {
 }
 
 // supabase/functions/_shared/portal/files.mjs
-var attachments = [["employee_files", "employee_id", "employee"], ["employee_contracts", "employee_id", "contract"], ["document_versions", "document_id", "document"], ["training_materials", "training_event_id", "material"], ["participant_certificates", "training_participant_id", "certificate"], ["logbook_files", "logbook_entry_id", "logbook"], ["incident_files", "incident_id", "incident"], ["announcement_files", "announcement_id", "announcement"], ["purchase_attachments", "request_id", "purchase"]];
+var attachments = [["employee_files", "employee_id", "employee"], ["employee_contracts", "employee_id", "contract"], ["document_versions", "document_id", "document"], ["training_materials", "training_event_id", "material"], ["participant_certificates", "training_participant_id", "certificate"], ["logbook_files", "logbook_entry_id", "logbook"], ["incident_files", "incident_id", "incident"], ["announcement_files", "announcement_id", "announcement"], ["purchase_attachments", "request_id", "purchase"], ["coaching_files", "coaching_session_id", "coaching"]];
 async function claimFile(db, user, id) {
   const f = await get(db, "files", id);
   assert(f.status === "AVAILABLE" && f.uploaded_by === user.id, "Berkas tidak tersedia untuk dilampirkan.", 403);
@@ -2558,7 +2570,8 @@ async function fileStorageModule(db, id) {
     logbook: 'patroli',
     incident: 'kejadian',
     announcement: 'informasi',
-    purchase: 'pengadaan'
+    purchase: 'pengadaan',
+    coaching: 'coaching'
   };
   for (const [table, , type] of attachments) if (await one(db, `SELECT id FROM ${table} WHERE file_id=?`, id)) return modules[type];
   return null;
@@ -2590,6 +2603,7 @@ async function fileAllowed(db, user, id) {
       const incident = await get(db, "incidents", link.incident_id);
       if (await can(db, user, "security.incidents.download", await reportContext(db, incident))) return true;
     }
+    if (type === "coaching" && await coachingAllowed(db, user, "read", await get(db, "coaching_sessions", link.coaching_session_id))) return true;
     if (type === "purchase" && await purchaseFileAllowed(db, user, link)) return true;
     if (type === "announcement") {
       const a = await get(db, "announcements", link.announcement_id);
@@ -3161,7 +3175,9 @@ async function hrRoutes(c) {
           ...session,
           employee_name: (await get(db, "employees", session.employee_id)).full_name,
           coach_name: (await get(db, "employees", session.coach_employee_id)).full_name,
-          actions: await all(db, "SELECT a.*,e.full_name responsible_name FROM coaching_actions a JOIN employees e ON e.id=a.responsible_employee_id WHERE coaching_session_id=? ORDER BY a.created_at", id)
+          actions: await all(db, "SELECT a.*,e.full_name responsible_name FROM coaching_actions a JOIN employees e ON e.id=a.responsible_employee_id WHERE coaching_session_id=? ORDER BY a.created_at", id),
+          files: await linkedFiles(db, "coaching", id),
+          held_date_only: Boolean(await one(db, "SELECT id FROM coaching_form_submissions WHERE coaching_session_id=?", id))
         };
       }
       if (m === "POST" && action === "actions") return await tx(db, async () => {
@@ -4908,14 +4924,14 @@ async function readBody(req) {
   assert(b && typeof b === "object" && !Array.isArray(b), "Permintaan tidak valid.", 400);
   return b;
 }
-function adapter(sql, identity, storage) {
-  return { inTransaction: true, query: (statement, values = []) => sql.unsafe(statement, values), identity, storage };
+function adapter(sql, identity, storage, readOnly=false) {
+  return { authorizationCache:readOnly?new Map():undefined, inTransaction: true, query: (statement, values = []) => sql.unsafe(statement, values), identity, storage };
 }
 async function transaction(client, identity, storage, work, mutating = true) {
   return client.begin(async (sql) => {
     await sql.unsafe("SET LOCAL search_path=portal,pg_catalog; SET LOCAL statement_timeout='15s'; SET LOCAL lock_timeout='5s'; SET LOCAL idle_in_transaction_session_timeout='40s';");
     if (mutating) await sql.unsafe("SELECT pg_advisory_xact_lock(734829610160009)");
-    return work(adapter(sql, identity, storage));
+    return work(adapter(sql, identity, storage, !mutating));
   });
 }
 async function recover(client, identity, storage, b, requestId) {

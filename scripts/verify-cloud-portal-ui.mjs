@@ -138,10 +138,11 @@ try{
   await f.page.clock.pauseAt(new Date('2026-10-18T00:00:05Z'));
   const slides=f.page.locator('.photo-slide');
   assert.equal(await slides.count(),4);
-  assert.equal(new Set(await slides.evaluateAll(images=>images.map(image=>image.src))).size,4);
-  assert.deepEqual(await slides.evaluateAll(images=>images.map(image=>new URL(image.src).pathname.split('/').at(-1))),['besakih-candi.webp','besakih-wantilan.webp','besakih-talent.webp','besakih-shuttle.webp']);
+  assert.equal(new Set(await slides.evaluateAll(images=>images.map(image=>image.getAttribute('src')||image.dataset.src))).size,4);
+  assert.equal(await slides.evaluateAll(images=>images.filter(image=>image.hasAttribute('src')).length),1);
+  assert.deepEqual(await slides.evaluateAll(images=>images.map(image=>new URL(image.getAttribute('src')||image.dataset.src).pathname.split('/').at(-1))),['besakih-candi.webp','besakih-wantilan.webp','besakih-talent.webp','besakih-shuttle.webp']);
   assert.equal(await f.page.locator('besakih-photo-slideshow button, .photo-controls, .photo-counter').count(),0);
-  assert(await slides.evaluateAll(async images=>{await Promise.all(images.map(image=>image.decode()));return images.every(image=>image.naturalWidth>0);}));
+  assert(await slides.first().evaluate(async image=>{await image.decode();return image.naturalWidth>0;}));
   await f.page.getByLabel('Username',{exact:true}).fill('pegawai.contoh');
   for(const index of [1,2,3,0]){
    await f.page.clock.runFor(7100);

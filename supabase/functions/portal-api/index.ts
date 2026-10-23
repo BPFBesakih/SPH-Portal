@@ -25,14 +25,14 @@ async function readBody(req){
  let b;try{b=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw new AppError(400,'JSON tidak valid.');}
  assert(b&&typeof b==='object'&&!Array.isArray(b),'Permintaan tidak valid.',400);return b;
 }
-function adapter(sql,identity,storage){return {inTransaction:true,query:(statement,values=[])=>sql.unsafe(statement,values),identity,storage};}
+function adapter(sql,identity,storage,readOnly=false){return {authorizationCache:readOnly?new Map():undefined,inTransaction:true,query:(statement,values=[])=>sql.unsafe(statement,values),identity,storage};}
 async function transaction(client,identity,storage,work,mutating=true){
  return client.begin(async sql=>{
   await sql.unsafe("SET LOCAL search_path=portal,pg_catalog; SET LOCAL statement_timeout='15s'; SET LOCAL lock_timeout='5s'; SET LOCAL idle_in_transaction_session_timeout='40s';");
   // Serialize writes before reading authorization or scheduling state. Every
   // domain mutation and its audit record commit on the same connection.
   if(mutating)await sql.unsafe('SELECT pg_advisory_xact_lock(734829610160009)');
-  return work(adapter(sql,identity,storage));
+  return work(adapter(sql,identity,storage,!mutating));
  });
 }
 async function recover(client,identity,storage,b,requestId){

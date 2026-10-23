@@ -1,0 +1,15 @@
+import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
+const {build,transform}=await import(process.argv[2]||new URL('./cloud-tools/node_modules/esbuild/lib/main.js',import.meta.url).href);
+const root=new URL('../',import.meta.url),app=new URL('site-info/dist/app/',root),out=new URL('site-info/dist/portal-static/',root);
+mkdirSync(out,{recursive:true});
+const result=await build({entryPoints:[fileURLToPath(new URL('app.js',app))],bundle:true,write:false,format:'esm',platform:'browser',target:'es2022',minify:true,legalComments:'none',plugins:[{name:'preserve-photo-path',setup(b){b.onLoad({filter:/photo-slideshow\.js$/},async args=>({contents:readFileSync(args.path,'utf8').replace('new URL(`assets/photos/${file}`, import.meta.url)','new URL(`/app/assets/photos/${file}`, location.href)'),loader:'js'}));}}]});
+const js=result.outputFiles[0].text,css=(await transform(['styles.css','mvp.css','appearance.css','photo-slideshow.css'].map(n=>readFileSync(new URL(n,app),'utf8')).join('\n'),{loader:'css',minify:true,target:'es2022',legalComments:'none'})).code;
+const asset=(code,ext)=>{const name=`portal-${createHash('sha256').update(code).digest('hex').slice(0,12)}.${ext}`;writeFileSync(new URL(name,out),code);return '/portal-static/'+name;};
+const javascript=asset(js,'js'),stylesheet=asset(css,'css');
+let html=readFileSync(new URL('index.html',app),'utf8');
+html=html.replace(/\s*<link rel="stylesheet" href="(?:\/app\/(?:styles|mvp|appearance|photo-slideshow)\.css|\/portal-static\/portal-[a-f0-9]+\.css)">/g,'').replace(/<script type="module" src="(?:\/app\/app\.js|\/portal-static\/portal-[a-f0-9]+\.js)"><\/script>/,`<link rel="stylesheet" href="${stylesheet}">\n  <script type="module" src="${javascript}"></script>`);
+writeFileSync(new URL('index.html',app),html);
+writeFileSync(new URL('manifest.json',out),JSON.stringify({javascript,stylesheet,javascript_bytes:Buffer.byteLength(js),stylesheet_bytes:Buffer.byteLength(css)},null,2)+'\n');
+console.log(JSON.stringify({javascript,stylesheet,javascript_bytes:Buffer.byteLength(js),stylesheet_bytes:Buffer.byteLength(css)}));

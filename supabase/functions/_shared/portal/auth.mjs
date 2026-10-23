@@ -33,7 +33,11 @@ export const purchasingRoleCodes = {
 };
 const purchasingRoles = Object.entries(purchasingRoleCodes).map(([code, [name, codes]]) => [code, name, c => codes.includes(c)]);
 export async function grants(db, user) {
-  return await all(db, `SELECT ur.id,ur.scope_kind,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=?`, user.id);
+  const key = `grants:${user.id}`, cache = db.authorizationCache;
+  if (cache?.has(key)) return cache.get(key);
+  const rows = await all(db, `SELECT ur.id,ur.scope_kind,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=?`, user.id);
+  cache?.set(key, rows);
+  return rows;
 }
 export async function employeeContext(db, id, asOf) {
   const e = await one(db, `SELECT e.id employee_id,p.org_unit_id FROM employees e LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?) LEFT JOIN positions p ON p.id=ep.position_id WHERE e.id=?`, asOf || today(), asOf || today(), id);
@@ -41,16 +45,24 @@ export async function employeeContext(db, id, asOf) {
     employee_id: id
   });
 }
+async function authorizationScopeRows(db, kind, id, target) {
+  const key = JSON.stringify(['scope', kind, id, target]), cache = db.authorizationCache;
+  if (cache?.has(key)) return cache.get(key);
+  const sql = kind === 'units' ? 'SELECT * FROM user_role_units WHERE user_role_id=?' : kind === 'post' ? 'SELECT 1 FROM user_role_posts WHERE user_role_id=? AND post_id=?' : 'WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE parent_id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree WHERE id=?';
+  const rows = await all(db, sql, ...kind === 'units' ? [id] : [id, target]);
+  cache?.set(key, rows);
+  return rows;
+}
 export async function can(db, user, permission, context = {}) {
   const matches = (await grants(db, user)).filter(g => g.code === permission);
   return await asyncSome(matches, async g => {
     if (g.scope_kind === 'ALL') return true;
     if (g.scope_kind === 'SELF') return Boolean(user.employee_id && [context.employee_id, context.reporter_employee_id, ...context.related_employees || []].includes(user.employee_id));
-    if (g.scope_kind === 'ASSIGNED_POSTS') return permission.startsWith('security.') && Boolean(context.post_id && await one(db, 'SELECT 1 FROM user_role_posts WHERE user_role_id=? AND post_id=?', g.id, context.post_id));
+    if (g.scope_kind === 'ASSIGNED_POSTS') return permission.startsWith('security.') && Boolean(context.post_id && (await authorizationScopeRows(db, 'post', g.id, context.post_id)).length);
     if (!context.org_unit_id) return false;
-    return await asyncSome(await all(db, 'SELECT * FROM user_role_units WHERE user_role_id=?', g.id), async u => {
+    return await asyncSome(await authorizationScopeRows(db, 'units', g.id), async u => {
       if (u.org_unit_id === context.org_unit_id) return true;
-      return u.include_descendants && Boolean(await one(db, 'WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE parent_id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree WHERE id=?', u.org_unit_id, context.org_unit_id));
+      return u.include_descendants && Boolean((await authorizationScopeRows(db, 'descendants', u.org_unit_id, context.org_unit_id)).length);
     });
   });
 }
@@ -85,7 +97,7 @@ export async function coachingAllowed(db, user, action, session) {
   });
 }
 export async function documentAllowed(db, user, action, doc) {
-  if(doc.is_archived)return false;
+  if (doc.is_archived) return false;
   const permission = `hr.documents.${action}`;
   if (!['read', 'download'].includes(action)) return await can(db, user, permission, {
     org_unit_id: doc.owner_org_unit_id

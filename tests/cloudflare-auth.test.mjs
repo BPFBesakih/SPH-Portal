@@ -37,6 +37,7 @@ function fixture(options = {}) {
     const body = init.body ? JSON.parse(init.body) : undefined;
     const headers = new Headers(init.headers);
     calls.push({ path, body, headers, method: init.method, redirect: init.redirect, signal: init.signal });
+    await options.onFetch?.(path);
     assert.equal(parsed.origin, env.SUPABASE_URL); assert.equal(init.redirect, 'manual');
     assert.equal(headers.get('user-agent'), 'SPH-Portal-Backend/1.0');
     assert.equal(headers.get('x-region'), path.startsWith('/functions/v1/') ? 'ap-southeast-1' : null);
@@ -550,4 +551,10 @@ test('invalid legacy origins fail closed before contacting Auth', async () => {
     assert.equal(result.status, 503);
     assert.equal(f.calls.length, 0);
   }
+});
+
+test('login and session checks start independent identity and account reads together but wait for both',async()=>{
+ let pending=[],arrived=new Set();const options={onFetch:async path=>{if(!['/auth/v1/user','/rest/v1/rpc/portal_current_account'].includes(path))return;arrived.add(path);if(arrived.size===2){pending.splice(0).forEach(resolve=>resolve());return;}await new Promise(resolve=>pending.push(resolve));}};
+ const f=fixture(options);let timeout;const guard=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('Identity and account reads were serialized')),2000);});
+ try{const session=await Promise.race([login(f),guard]);arrived.clear();assert.equal((await Promise.race([f.handler(request('me',session),f.env),guard])).status,200);}finally{clearTimeout(timeout);pending.forEach(resolve=>resolve());}
 });

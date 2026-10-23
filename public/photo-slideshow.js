@@ -16,7 +16,7 @@ class BesakihPhotoSlideshow extends HTMLElement {
     this._index ??= 0;
     this._reducedMotion = motion.matches;
     if (!this.querySelector('.photo-slides')) {
-      this.innerHTML = `<div class="photo-slides" aria-hidden="true">${photos.map((file, index) => `<img class="photo-slide photo-slide-${index}${index === 0 ? ' is-active' : ''}" src="${new URL(`assets/photos/${file}`, import.meta.url).href}" alt="" width="1024" height="683" decoding="async" fetchpriority="${index === 0 ? 'high' : 'low'}">`).join('')}</div>`;
+      this.innerHTML = `<div class="photo-slides" aria-hidden="true">${photos.map((file, index) => `<img class="photo-slide photo-slide-${index}${index === 0 ? ' is-active' : ''}" ${index===0?'src':'data-src'}="${new URL(`assets/photos/${file}`, import.meta.url).href}" alt="" width="1024" height="683" decoding="async" fetchpriority="${index === 0 ? 'high' : 'low'}">`).join('')}</div>`;
     }
     this._images = [...this.querySelectorAll('.photo-slide')];
     document.addEventListener('visibilitychange', () => this._schedule(), {signal});
@@ -51,7 +51,8 @@ class BesakihPhotoSlideshow extends HTMLElement {
     clearTimeout(this._timer);
     const selection = this._selection = (this._selection || 0) + 1;
     try {
-      await this._images[index].decode();
+      const image=this._images[index];if(!image.getAttribute('src'))image.src=image.dataset.src;
+      await image.decode();
     } catch {
       if (this.isConnected && selection === this._selection) {
         this._images[index].dataset.unavailable = 'true';

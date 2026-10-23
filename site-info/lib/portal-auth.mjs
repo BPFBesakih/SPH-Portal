@@ -246,6 +246,15 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       if ([401, 403].includes(result.status) || result.ok && result.data === null) throw new Failure('SESSION_ENDED', 401);
       requireValue(result.ok); return accountContext(result.data, userId, username);
     }
+    async function verifiedAccount(tokens,userId,authId,username,onStage=()=>{}) {
+      onStage('LOGIN_AUTH_VERIFICATION');
+      // Both independent checks must settle before a session can be used or released.
+      const [identityResult,accountResult]=await Promise.allSettled([verifyTokens(tokens,userId,authId),profile(tokens,userId,username)]);
+      if(identityResult.status==='rejected')throw identityResult.reason;
+      onStage('LOGIN_ACCOUNT_CONTEXT');
+      if(accountResult.status==='rejected')throw accountResult.reason;
+      return accountResult.value;
+    }
     async function withSession(action, body, refreshAttempt = 0) {
       const values = cookies(request);
       if (!values[SESSION_COOKIE] && action === 'logout') { clear = true; return response({ ok: true }, 200, clearCookies); }
@@ -300,8 +309,7 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
         // Saving releases the lease. Reacquire before any further use of tokens.
         return await withSession(action, body, refreshAttempt + 1);
       }
-      await verifyTokens(pair, held.user_id, held.auth_session_id);
-      currentAccount = await profile(pair, held.user_id);
+      currentAccount = await verifiedAccount(pair,held.user_id,held.auth_session_id);
       if (action === 'me') return response({ ok: true, account: publicAccount(currentAccount) });
 
       if (action === 'operation') {
@@ -424,9 +432,7 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
         && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(pair.access_token)) receivedLoginToken = pair.access_token;
       const claims = validatePair(pair);
       loginStage = 'LOGIN_AUTH_VERIFICATION';
-      await verifyTokens(pair, claims.sub, claims.session_id);
-      loginStage = 'LOGIN_ACCOUNT_CONTEXT';
-      currentAccount = await profile(pair, claims.sub, username);
+      currentAccount = await verifiedAccount(pair,claims.sub,claims.session_id,username,stage=>{loginStage=stage;});
       loginStage = 'LOGIN_SESSION_STORAGE';
       const token = random(); const csrf = random();
       tokenHash = await hash(token);
