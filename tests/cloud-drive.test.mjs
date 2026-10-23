@@ -13,7 +13,7 @@ function fixture(options={}){
   if(init.method==='POST')return Response.json({id:'fixture_file_001'});
   if(init.method==='DELETE')return new Response(null,{status:204});
   if(url.includes('alt=media'))return new Response('fixture-content');
-  return Response.json({id:'fixture_file_001',parents:[options.foreign?'other_folder':env.GOOGLE_DRIVE_FOLDER_ID],trashed:false,appProperties:{sph_portal:'v1'}});
+  return Response.json({id:'fixture_file_001',parents:[options.foreign?'other_folder':env.GOOGLE_DRIVE_FOLDER_ID],trashed:false,mimeType:'image/png',appProperties:{sph_portal:'v1'}});
  });return {storage,calls};
 }
 test('private Drive uploads use the existing folder, opaque names and no public permissions',async()=>{

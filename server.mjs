@@ -1,4 +1,5 @@
 import {quickReportManagement,publicQuickReport,takeQuickReportSlot} from './lib/quick-reports.mjs';
+import {publicCoachingLink,takeCoachingLinkSlot} from './lib/coaching-links.mjs';
 import {createServer} from 'node:http';
 import {readFileSync,existsSync,statSync} from 'node:fs';
 import {resolve,extname} from 'node:path';
@@ -38,7 +39,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       const url=new URL(req.url,'http://internal'),p=url.pathname.split('/').filter(Boolean).map(decodeURIComponent);const method=req.method;
       if(p[0]!=='api'){
         assert(['GET','HEAD'].includes(method),'Metode tidak diizinkan.',405);
-        const pathname=url.pathname==='/'?'/index.html':['/laporan-cepat','/laporan-cepat/'].includes(url.pathname)?'/quick-report.html':url.pathname;
+        const pathname=url.pathname==='/'?'/index.html':['/laporan-cepat','/laporan-cepat/'].includes(url.pathname)?'/quick-report.html':['/coaching','/coaching/'].includes(url.pathname)?'/coaching-link.html':url.pathname;
         assert(/^\/[a-zA-Z0-9/_-]+\.(html|js|css|svg|png|webp|ico|woff2)$/.test(pathname),'Halaman tidak ditemukan.',404);
         const path=resolve(root,'public',`.${pathname}`);assert(path.startsWith(resolve(root,'public')+String.fromCharCode(process.platform==='win32'?92:47))&&existsSync(path)&&statSync(path).isFile(),'Halaman tidak ditemukan.',404);
         const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.woff2':'font/woff2'};res.writeHead(200,{'Content-Type':types[extname(path)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(method==='HEAD'?undefined:readFileSync(path));return;
@@ -54,6 +55,12 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
         assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Asal permintaan tidak diizinkan.',403);
         const allowed=tx(db,()=>takeQuickReportSlot(db,req.socket.remoteAddress,p[1]));assert(allowed,'Terlalu banyak percobaan. Coba lagi beberapa menit kemudian.',429);
         const result=tx(db,()=>publicQuickReport(db,p[1],body,dataDir,requestId));send(result);return;
+      }
+      if(p[0]==='coaching-link'){
+        assert(method==='POST'&&p.length===2,'Metode tidak diizinkan.',405);
+        assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Asal permintaan tidak diizinkan.',403);
+        const allowed=tx(db,()=>takeCoachingLinkSlot(db,req.socket.remoteAddress,p[1]));assert(allowed,'Terlalu banyak percobaan. Coba lagi beberapa menit kemudian.',429);
+        const result=tx(db,()=>publicCoachingLink(db,p[1],body,dataDir,requestId));send(result);return;
       }
       if(p[0]==='auth'&&p[1]==='login'&&method==='POST') {
         rateLimit(req,'login');const result=await login(db,body,req);res.setHeader('Set-Cookie',[cookie('besakih_session',result.token,true,result.hours*3600),cookie('besakih_csrf',result.csrfToken,false,result.hours*3600)]);send({user:result.user,csrfToken:result.csrfToken});return;

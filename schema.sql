@@ -253,3 +253,21 @@ CREATE TABLE IF NOT EXISTS purchase_documents (
  id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES purchase_requests(id), doc_type TEXT NOT NULL CHECK(doc_type IN('PR','PO','SPK','SPV')), object_id TEXT NOT NULL, number TEXT, snapshot_json TEXT NOT NULL, snapshot_hash TEXT NOT NULL, verification_code TEXT NOT NULL UNIQUE, superseded_at TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
 CREATE INDEX IF NOT EXISTS purchase_document_object ON purchase_documents(object_id);
+
+CREATE TABLE IF NOT EXISTS coaching_links (
+ id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash)=64), label TEXT NOT NULL,
+ is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)), revoked_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ created_by TEXT REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS coaching_files (
+ id TEXT PRIMARY KEY, coaching_session_id TEXT NOT NULL REFERENCES coaching_sessions(id), file_id TEXT NOT NULL UNIQUE REFERENCES files(id), caption TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+
+CREATE TABLE IF NOT EXISTS coaching_form_submissions (
+ id TEXT PRIMARY KEY, form_id TEXT NOT NULL, response_id TEXT NOT NULL, payload_hash TEXT NOT NULL, coaching_session_id TEXT NOT NULL UNIQUE REFERENCES coaching_sessions(id),
+ submitted_at TEXT NOT NULL, department TEXT NOT NULL, section TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, UNIQUE(form_id,response_id));
+CREATE UNIQUE INDEX IF NOT EXISTS coaching_one_active_link ON coaching_links(is_active) WHERE is_active=1;
+CREATE INDEX IF NOT EXISTS coaching_files_session_idx ON coaching_files(coaching_session_id);

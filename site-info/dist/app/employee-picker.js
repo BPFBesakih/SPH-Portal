@@ -1,19 +1,19 @@
 import {esc} from './ui.js';
 
 let pickerCount=0;
-export function employeePickerField({label='Tautkan pegawai (opsional)',required=false}={}){
+export function employeePickerField({label='Tautkan pegawai (opsional)',required=false,name='employee_id',placeholder}={}){
   const id=`employee-picker-${++pickerCount}`;
   return `<div class="field full employee-picker" data-employee-picker>
     <label for="${id}">${esc(label)}</label>
-    <input id="${id}" type="search" placeholder="${required?'Ketik nama Anda…':'Cari nama atau nomor pegawai…'}" ${required?'required':''} autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-results" aria-describedby="${id}-hint">
-    <input type="hidden" name="employee_id" value="">
+    <input id="${id}" type="search" placeholder="${esc(placeholder||(required?'Ketik nama Anda…':'Cari nama atau nomor pegawai…'))}" ${required?'required':''} autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-results" aria-describedby="${id}-hint">
+    <input type="hidden" name="${esc(name)}" value="">
     <div id="${id}-results" class="employee-picker-results" role="listbox" aria-label="Hasil pencarian pegawai" hidden></div>
     <small id="${id}-hint" class="employee-picker-hint" role="status"></small>
   </div>`;
 }
 
 export function setupEmployeePicker(dialog,employees=[],{required=false}={}){
-  const picker=dialog.querySelector('[data-employee-picker]'),input=picker.querySelector('[role=combobox]'),value=picker.querySelector('[name=employee_id]'),list=picker.querySelector('[role=listbox]'),hint=picker.querySelector('[role=status]');
+  const picker=dialog.querySelector('[data-employee-picker]'),input=picker.querySelector('[role=combobox]'),value=picker.querySelector('input[type=hidden]'),list=picker.querySelector('[role=listbox]'),hint=picker.querySelector('[role=status]');
   const normalize=text=>String(text||'').trim().toLocaleLowerCase('id-ID').replace(/\s+/g,' ');
   const items=employees.map(employee=>({...employee,secondary:employee.employee_no||employee.position_name||'',search:normalize(`${employee.full_name} ${employee.employee_no||''} ${employee.position_name||''}`)}));
   let matches=[],active=-1;
@@ -25,7 +25,7 @@ export function setupEmployeePicker(dialog,employees=[],{required=false}={}){
     list.children[active].scrollIntoView({block:'nearest'});
   }
   function choose(index){
-    const employee=matches[index];if(!employee)return;
+    const employee=matches[index];if(!employee)return;if(employee.disabled){hint.textContent='Nama dan penempatan ganda perlu diperiksa SDM. Pilih nama lain atau hubungi pengelola.';return;}
     value.value=employee.id;input.value=employee.full_name;input.setCustomValidity('');
     close();hint.textContent=required?`Nama yang dipilih: ${employee.full_name}${employee.secondary?` · ${employee.secondary}`:''}.`:`Dipilih: ${employee.full_name}${employee.employee_no?` (${employee.employee_no})`:''}. Kosongkan pencarian untuk membatalkan tautan.`;
   }
@@ -34,8 +34,8 @@ export function setupEmployeePicker(dialog,employees=[],{required=false}={}){
     if(value.value)return;
     if(query.length<2){hint.textContent=items.length?(required?'Ketik minimal 2 huruf, lalu pilih nama Anda dari hasil pencarian.':'Ketik minimal 2 karakter nama atau nomor pegawai. Kosongkan bila tidak ditautkan.'):(required?'Daftar petugas belum tersedia. Hubungi koordinator.':'Belum ada pegawai yang dapat ditautkan.');return;}
     const terms=query.split(' '),found=items.filter(employee=>terms.every(term=>employee.search.includes(term)));matches=found.slice(0,8);
-    list.innerHTML=matches.map((employee,index)=>`<div id="${list.id}-${index}" class="employee-picker-option" role="option" aria-selected="false" data-index="${index}"><span>${esc(employee.full_name)}</span>${employee.secondary?`<small>${esc(employee.secondary)}</small>`:''}</div>`).join('');
-    hint.textContent=!found.length?'Pegawai tidak ditemukan. Coba nama atau nomor pegawai lain.':found.length>matches.length?`Menampilkan ${matches.length} dari ${found.length} hasil. Perjelas pencarian untuk mempersempit hasil.`:`${found.length} pegawai ditemukan. Pilih pegawai yang sesuai.`;
+    list.innerHTML=matches.map((employee,index)=>`<div id="${list.id}-${index}" class="employee-picker-option" role="option" aria-selected="false"${employee.disabled?' aria-disabled="true"':''} data-index="${index}"><span>${esc(employee.full_name)}</span>${employee.secondary?`<small>${esc(employee.secondary)}</small>`:''}</div>`).join('');
+    hint.textContent=!found.length?(required?'Nama tidak ditemukan. Coba bagian nama lainnya.':'Pegawai tidak ditemukan. Coba nama atau nomor pegawai lain.'):found.length>matches.length?`Menampilkan ${matches.length} dari ${found.length} hasil. Perjelas pencarian untuk mempersempit hasil.`:`${found.length} pegawai ditemukan. Pilih pegawai yang sesuai.`;
     list.hidden=!matches.length;input.setAttribute('aria-expanded',String(!!matches.length));
   }
   input.addEventListener('input',()=>{value.value='';input.setCustomValidity(required?'Pilih nama Anda dari hasil pencarian.':normalize(input.value)?'Pilih pegawai dari hasil pencarian atau kosongkan kolom ini.':'');search();});

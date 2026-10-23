@@ -493,7 +493,9 @@ export async function hrRoutes(c) {
           ...session,
           employee_name: (await get(db, 'employees', session.employee_id)).full_name,
           coach_name: (await get(db, 'employees', session.coach_employee_id)).full_name,
-          actions: await all(db, 'SELECT a.*,e.full_name responsible_name FROM coaching_actions a JOIN employees e ON e.id=a.responsible_employee_id WHERE coaching_session_id=? ORDER BY a.created_at', id)
+          actions: await all(db, 'SELECT a.*,e.full_name responsible_name FROM coaching_actions a JOIN employees e ON e.id=a.responsible_employee_id WHERE coaching_session_id=? ORDER BY a.created_at', id),
+          files: await linkedFiles(db, 'coaching', id),
+          held_date_only: Boolean(await one(db, 'SELECT id FROM coaching_form_submissions WHERE coaching_session_id=?', id))
         };
       }
       if (m === 'POST' && action === 'actions') return await tx(db, async () => {

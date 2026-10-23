@@ -4,9 +4,9 @@ import {Buffer} from 'node:buffer';
 import {basename} from 'node:path';
 import {randomUUID, createHash} from 'node:crypto';
 import {all, one, get, insert, tx, audit, assert, text, now} from './db.mjs';
-import {has, can, employeeContext, postContext, reportContext, announcementsManager, documentAllowed, trainingAllowed} from './auth.mjs';
+import {has, can, employeeContext, postContext, reportContext, announcementsManager, documentAllowed, trainingAllowed, coachingAllowed} from './auth.mjs';
 import {purchaseFileAllowed} from './purchasing.mjs';
-const attachments = [['employee_files', 'employee_id', 'employee'], ['employee_contracts', 'employee_id', 'contract'], ['document_versions', 'document_id', 'document'], ['training_materials', 'training_event_id', 'material'], ['participant_certificates', 'training_participant_id', 'certificate'], ['logbook_files', 'logbook_entry_id', 'logbook'], ['incident_files', 'incident_id', 'incident'], ['announcement_files', 'announcement_id', 'announcement'], ['purchase_attachments', 'request_id', 'purchase']];
+const attachments = [['employee_files', 'employee_id', 'employee'], ['employee_contracts', 'employee_id', 'contract'], ['document_versions', 'document_id', 'document'], ['training_materials', 'training_event_id', 'material'], ['participant_certificates', 'training_participant_id', 'certificate'], ['logbook_files', 'logbook_entry_id', 'logbook'], ['incident_files', 'incident_id', 'incident'], ['announcement_files', 'announcement_id', 'announcement'], ['purchase_attachments', 'request_id', 'purchase'], ['coaching_files', 'coaching_session_id', 'coaching']];
 export async function claimFile(db, user, id) {
   const f = await get(db, 'files', id);
   assert(f.status === 'AVAILABLE' && f.uploaded_by === user.id, 'Berkas tidak tersedia untuk dilampirkan.', 403);
@@ -22,6 +22,7 @@ export async function linkedFiles(db, type, id) {
 export async function fileAllowed(db, user, id) {
   for (const material of await all(db, 'SELECT tm.training_event_id,v.document_id FROM training_materials tm JOIN document_versions v ON v.id=tm.document_version_id WHERE v.file_id=?', id)) if (await trainingAllowed(db, user, 'download', await get(db, 'training_events', material.training_event_id)) && await documentAllowed(db, user, 'download', await get(db, 'documents', material.document_id))) return true;
   for (const [table, key, type] of attachments) for (const link of await all(db, `SELECT * FROM ${table} WHERE file_id=?`, id)) {
+    if (type === 'coaching' && await coachingAllowed(db, user, 'read', await get(db, 'coaching_sessions', link.coaching_session_id))) return true;
     if (['employee', 'contract'].includes(type) && await can(db, user, 'hr.employee_files.read', await employeeContext(db, link[key]))) return true;
     if (type === 'document') {
       const doc = await get(db, 'documents', link.document_id);
