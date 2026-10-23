@@ -256,6 +256,7 @@ CREATE INDEX IF NOT EXISTS purchase_document_object ON purchase_documents(object
 
 CREATE TABLE IF NOT EXISTS coaching_links (
  id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash)=64), label TEXT NOT NULL,
+ share_token TEXT CHECK(share_token IS NULL OR length(share_token)=64),
  is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)), revoked_at TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
  created_by TEXT REFERENCES users(id)

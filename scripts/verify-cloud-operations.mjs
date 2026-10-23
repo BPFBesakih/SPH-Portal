@@ -317,6 +317,18 @@ try{
   const token=`${Buffer.from('{}').toString('base64url')}.${Buffer.from(JSON.stringify({sub:officer.id,session_id:sessionId})).toString('base64url')}.fixture`;
   const invoke=body=>edge(new Request('https://fixture-project.supabase.co/functions/v1/portal-api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
   const operation={action:'operation',path:'portal/me',method:'GET',query:'',body:{},access_token:token,session_hash:cookieHash,lease_hash:leaseHash,session_version:1};
+  await check('packaged coaching share link requires a current global coaching grant',async()=>{
+   const shareToken='c'.repeat(64),link=await insert(db,'coaching_links',{token_hash:hash(shareToken),share_token:shareToken,label:'Coaching Fixture',is_active:1,created_by:null});
+   const request={...operation,path:'coaching-form-link'};assert.equal((await invoke(request)).status,403);
+   const role=await insert(db,'roles',{code:'COACHING_SHARE_FIXTURE',name:'Coaching Share Fixture',is_system:0,is_active:1});
+   const permission=await one(db,"SELECT id FROM permissions WHERE code='hr.coaching.manage'");await run(db,'INSERT INTO role_permissions(role_id,permission_id) VALUES(?,?)',role.id,permission.id);
+   const assignment=await insert(db,'user_roles',{user_id:officer.id,role_id:role.id,scope_kind:'SELF'});assert.equal((await invoke(request)).status,403);
+   await run(db,"UPDATE user_roles SET scope_kind='ALL' WHERE id=?",assignment.id);
+   const response=await invoke(request);assert.equal(response.status,200,await response.clone().text());assert.deepEqual((await response.json()).result,{label:'Coaching Fixture',token:shareToken});
+   const list=await invoke({...operation,path:'coaching'});assert.equal(list.status,200);const listing=(await list.json()).result;assert.equal(listing.can_share_link,true);assert(!JSON.stringify(listing).includes(shareToken));
+   await run(db,'UPDATE coaching_links SET is_active=0 WHERE id=?',link.id);assert.equal((await invoke(request)).status,404);
+   await run(db,'DELETE FROM user_roles WHERE id=?',assignment.id);assert.equal((await invoke(request)).status,403);
+  });
   await check('the packaged Edge function verifies Auth and its current leased portal session',async()=>{
    assert.equal(globalThis.__sphFixture.mode.auth,'secret');
    let response=await invoke(operation);assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).result.user.username,'officer');

@@ -3237,10 +3237,18 @@ async function hrRoutes(c) {
       });
     }
   }
+  if (p[0] === "coaching-form-link") {
+    assert(m === "GET" && p.length === 1, "Alamat tidak ditemukan.", 404);
+    assert(await can(db, user, "hr.coaching.manage"), "Hanya pengelola coaching seluruh unit yang dapat mengambil tautan formulir.", 403);
+    const link = await one(db, "SELECT id,label,token_hash,share_token FROM coaching_links WHERE is_active=1 AND revoked_at IS NULL");
+    assert(link && typeof link.share_token === "string" && /^[a-f0-9]{64}$/.test(link.share_token) && digest(link.share_token) === link.token_hash, "Tautan formulir coaching belum tersedia. Hubungi pengelola portal.", 404);
+    return {label: link.label, token: link.share_token};
+  }
   if (p[0] === "coaching") {
     if (m === "GET" && !id) {
       assert(await has(db, user, "hr.coaching.read") || await has(db, user, "hr.coaching.manage"), "Akses ditolak.", 403);
       return {
+        can_share_link: await can(db, user, "hr.coaching.manage"),
         items: await asyncFilter(await all(db, `SELECT s.*,e.full_name employee_name,c.full_name coach_name,(SELECT count(*) FROM coaching_actions WHERE coaching_session_id=s.id AND status<>'DONE') open_actions FROM coaching_sessions s JOIN employees e ON e.id=s.employee_id JOIN employees c ON c.id=s.coach_employee_id ORDER BY held_at DESC`), async s => await coachingAllowed(db, user, "read", s))
       };
     }

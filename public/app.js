@@ -5,6 +5,7 @@ import {state,api,post,refresh,permitted} from './api.js';
 import {esc,icon,avatar,button,formDialog,dialog,toast,formatDate,localToday} from './ui.js';
 import {loadPage,pageTitles,employeeRows,importRows,documentRows,incidentRows,logbookRows,rosterPage,configPage,documentsPage,incidentsPage} from './pages.js';
 import {handleFormAction} from './forms.js';
+import {openCoachingShareLink} from './coaching-link-management.js';
 import {openDetail,closeDetails} from './details.js';
 import {purchasingNav,purchasingRoutes,purchasingAllowed,loadPurchasingOverview,invalidatePurchasingOverview,handlePurchasingAction,bindPurchasingPage,afterPurchasingPage,purchasingNotices,resetPurchasingState} from './purchasing.js';
 import {createNavigationQueue} from './navigation-queue.js';
@@ -127,6 +128,7 @@ document.addEventListener('click',async event=>{
     if(action.startsWith('go-')){const route={'go-employees':'employees','go-roster':'roster','go-config':'roster-settings'}[action];if(route)location.hash=route;return;}
     if(await handleAnnouncementAction(action,el))return;
     if(await handlePurchasingAction(action,el))return;
+    if(action==='coaching-share-link'){const previous=el.disabled;el.disabled=true;try{await openCoachingShareLink();}finally{el.disabled=previous;}return;}
     if(action==='report-photo'){showReportPhoto(el.dataset.id);return;}
     if(action==='detail'){await openDetail(el.dataset.type,el.dataset.id);return;}
     if(action==='profile'){dialog('Akun Anda',`<div class="account-profile"><div class="table-person">${avatar(state.me.name)}<div><strong>${esc(state.me.name)}</strong><p class="muted text-small">${esc(state.me.user.username)}</p></div></div><div class="actions">${button('Ganti password','change-password','key','outlined')}${button('Keluar','logout','logout','primary')}</div></div>`);return;}

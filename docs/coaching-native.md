@@ -8,7 +8,8 @@ Formulir dibuka langsung pada `https://bpbesakih.com/coaching/#<token>` tanpa ak
 - Cloudflare Pages `/api/coaching-link/context` dan `/submit` memeriksa asal permintaan, IP ingress, dan ukuran JSON. Kunci server hanya berada di konfigurasi Cloudflare.
 - Edge Function `coaching-native` memakai autentikasi kunci server, lalu memeriksa hash token, pegawai aktif, tanggal, isian, foto, batas percobaan, dan idempotensi. Foto JPG/PNG maksimal 10 MB disimpan privat pada folder Drive `SPH-Portal-Coaching`, di dalam `SPH Portal - Foto Laporan`.
 - Sesi, tindakan, lampiran, dan sumber kiriman disimpan secara transaksional dalam tabel coaching yang sama dengan portal. Identitas yang dipilih dinyatakan sebagai isian mandiri; tautan ini tidak membuktikan identitas pengisi.
-- Tabel `portal.coaching_links` hanya menyimpan SHA-256 token. RLS aktif tanpa kebijakan akses langsung dan semua hak API dicabut. Tidak ada endpoint publik untuk membaca coaching/foto.
+- Tabel `portal.coaching_links` menyimpan hash untuk validasi dan `share_token` privat agar pengelola dapat mengambil kembali link yang sama. RLS aktif tanpa kebijakan akses langsung dan semua hak API dicabut. Endpoint sesi `GET /api/coaching-form-link` hanya mengembalikan link aktif bagi pemegang `hr.coaching.manage` dengan cakupan `ALL`; daftar sesi tidak memuat token. Tidak ada endpoint publik untuk membaca coaching/foto.
+- Pada **SDM → Evaluasi & Coaching**, pengelola tersebut melihat tombol **Salin Link Formulir Coaching**. Dialog dapat menyalin link atau membuka formulir. Link tidak disimpan di aset publik, penyimpanan browser, atau log.
 - Rekap Google Sheets lama tetap menjadi arsip. Kiriman native disimpan langsung di Supabase dan tidak menambahkan baris ke Sheets lama.
 
 ## Aktivasi dan pencabutan

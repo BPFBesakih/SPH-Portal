@@ -83,3 +83,24 @@ test('native HTTP form submits without a portal account and requires the same or
  assert.equal((await fetch(url+'/coaching/')).status,200);assert.equal((await fetch(url+'/api/coaching-link/context',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})})).status,403);
  const response=await post(payload(f));assert.equal(response.status,200);assert.match((await response.json()).reference,/^CH-/);
 });
+
+test('only global coaching managers can retrieve the existing share link and lists never expose it',async t=>{
+ const f=fixture(t),reader=f.account('reader',f.employees[0].id),manager=f.account('manager',null),scoped=f.account('scoped',null);
+ const sdm=one(f.db,"SELECT id FROM roles WHERE code='SDM'").id;
+ insert(f.db,'user_roles',{user_id:manager.id,role_id:sdm,scope_kind:'ALL'});
+ const assignment=insert(f.db,'user_roles',{user_id:scoped.id,role_id:sdm,scope_kind:'ASSIGNED_UNITS'});run(f.db,'INSERT INTO user_role_units(user_role_id,org_unit_id,include_descendants) VALUES(?,?,1)',assignment.id,f.unit.id);
+ run(f.db,'UPDATE coaching_links SET share_token=? WHERE id=?',token,f.link.id);
+ const call=(user,path='coaching-form-link',method='GET')=>hrRoutes({db:f.db,user,p:path.split('/'),method,body:{},url:new URL('http://fixture')});
+ for(const user of [reader,scoped]){await assert.rejects(call(user),e=>e.status===403);assert.equal((await call(user,'coaching')).can_share_link,false);}
+ const list=await call(manager,'coaching');assert.equal(list.can_share_link,true);assert(!JSON.stringify(list).includes(token));
+ assert.deepEqual(await call(manager),{label:f.link.label,token});
+ await assert.rejects(call(manager,'coaching-form-link','POST'),e=>e.status===404);
+ run(f.db,"UPDATE coaching_links SET share_token=? WHERE id=?",'f'.repeat(64),f.link.id);await assert.rejects(call(manager),e=>e.status===404);
+ run(f.db,'UPDATE coaching_links SET share_token=?,is_active=0 WHERE id=?',token,f.link.id);await assert.rejects(call(manager),e=>e.status===404);
+});
+
+test('existing SQLite coaching links upgrade without changing their active token hash',t=>{
+ const f=fixture(t),path=resolve(f.directory,'upgrade.sqlite');let db=openDb(path);
+ try{db.exec('ALTER TABLE coaching_links DROP COLUMN share_token');insert(db,'coaching_links',{token_hash:digest(token),label:'Existing link',is_active:1,created_by:null});}finally{db.close();}
+ db=openDb(path);try{const row=one(db,'SELECT token_hash,share_token FROM coaching_links');assert.equal(row.token_hash,digest(token));assert.equal(row.share_token,null);}finally{db.close();}
+});
