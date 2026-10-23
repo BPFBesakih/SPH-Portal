@@ -17,7 +17,7 @@ Terapkan migrasi foundation `20261022214727_coaching_custom_form.sql`, lalu `202
 
 Satu tautan aktif diperbolehkan. Buat token acak kriptografis 32 byte, simpan hash saja bersama label dan metadata pada `portal.coaching_links`, kemudian bagikan URL dengan token pada fragmen. Untuk mencabut tautan, set `is_active=0`, isi `revoked_at`, dan tingkatkan `row_version`. Untuk mengganti tautan, cabut yang lama terlebih dahulu dalam transaksi, lalu buat token baru. Pencabutan tidak menghapus rekaman atau foto.
 
-Google Script lama boleh dihentikan setelah halaman native dan konteks namanya terverifikasi di domain produksi. Periksa ledger lama untuk kiriman tertunda; tuntaskan dahulu bila ada. Hapus pemicu `retryCoachingSync_`, arsipkan deployment web app, lalu pindahkan proyek Script ke Sampah Drive. Pertahankan folder, foto, dan rekap. Fungsi `coaching-google-sync` lama diganti respons 410 tanpa akses data dan gateway JWT diaktifkan.
+Status 23 Oktober 2026: formulir native dan pencarian nama terverifikasi pada domain produksi; satu tautan aktif dibuat tanpa menyimpan token mentah di repositori. Ledger Google lama kosong. Deployment web app lama telah diarsipkan dan URL-nya menampilkan Page Not Found. Semua kode Script diganti pemberitahuan pensiun dan handler `retryCoachingSync_` tanpa operasi (tanpa baca/tulis/upload/jaringan), kemudian proyek dipindahkan ke Sampah Drive. Pemicu tidak dihapus permanen. Folder, foto, dan rekap dipertahankan. Fungsi `coaching-google-sync` versi 2 merespons 410 tanpa akses data dengan gateway JWT aktif.
 
 ## Validasi
 
