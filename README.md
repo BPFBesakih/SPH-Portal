@@ -61,7 +61,7 @@ Jam shift, batas istirahat/kerja, pola, dan kebutuhan pos tidak diisi otomatis p
 
 ## Deploy
 
-Jalur produksi memakai **Cloudflare Pages + Supabase + folder Google Drive privat**. Aplikasi lengkap berada di [ruang kerja SPH Portal](https://sph-portal.pages.dev/app/); halaman akun tetap di [halaman masuk](https://sph-portal.pages.dev/portal/).
+Jalur produksi memakai **Cloudflare Pages + Supabase + folder Google Drive privat**. Aplikasi lengkap berada di [ruang kerja SPH Portal](https://bpbesakih.com/app/); halaman akun tetap di [halaman masuk](https://bpbesakih.com/portal/). Ruang kerja dapat dipasang sebagai aplikasi (PWA) di HP dan komputer; lihat [panduan PWA](docs/PWA.md).
 
 [Panduan produksi lengkap](docs/CLOUDFLARE-SUPABASE.md) menjelaskan migrasi PostgreSQL, sesi, izin/scope, unggahan Drive, penerapan, dan validasi. Migrasi 009 membuat 48 tabel privat dan lima view identitas, mempertahankan akun/izin yang sudah ada, serta menyiapkan 157 calon pegawai untuk ditinjau. Data impor tetap calon, belum profil aktif. Role operasional diberikan admin secara eksplisit.
 

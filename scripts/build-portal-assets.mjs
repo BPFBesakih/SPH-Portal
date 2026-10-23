@@ -1,7 +1,7 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
-const {build,transform}=await import(process.argv[2]||new URL('./cloud-tools/node_modules/esbuild/lib/main.js',import.meta.url).href);
+const {build,transform}=await import(process.argv.slice(2).find(arg=>!arg.startsWith('--'))||new URL('./cloud-tools/node_modules/esbuild/lib/main.js',import.meta.url).href);
 const root=new URL('../',import.meta.url),app=new URL('site-info/dist/app/',root),out=new URL('site-info/dist/portal-static/',root);
 mkdirSync(out,{recursive:true});
 const result=await build({entryPoints:[fileURLToPath(new URL('app.js',app))],bundle:true,write:false,format:'esm',platform:'browser',target:'es2022',minify:true,legalComments:'none',plugins:[{name:'preserve-photo-path',setup(b){b.onLoad({filter:/photo-slideshow\.js$/},async args=>({contents:readFileSync(args.path,'utf8').replace('new URL(`assets/photos/${file}`, import.meta.url)','new URL(`/app/assets/photos/${file}`, location.href)'),loader:'js'}));}}]});

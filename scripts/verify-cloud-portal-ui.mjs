@@ -20,7 +20,9 @@ const permissions=['admin.users.read','admin.users.manage','admin.users.reset','
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
 async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960},delays={},failures={},purchasingAccess=false,documentsAccess=false,documentManager=true,trainingAccess=false,initialHash=''}={}){
- const context=await browser.newContext({viewport,baseURL:origin,reducedMotion});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
+ // page.route cannot serve service-worker scripts on the synthetic origin.
+ // Real worker registration and offline behavior are checked by verify-pwa-ui.mjs.
+ const context=await browser.newContext({viewport,baseURL:origin,reducedMotion,serviceWorkers:'block'});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
  if(clock)await page.clock.install({time:new Date('2026-10-18T00:00:00Z')});
  let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
  if(purchasingAccess)currentPermissions.push('purchasing.requests.read_all');

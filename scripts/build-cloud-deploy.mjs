@@ -3,11 +3,14 @@ import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {build} from './cloud-tools/node_modules/esbuild/lib/main.js';
 const root=new URL('../',import.meta.url);
+const frontendOnly=process.argv.includes('--frontend-only');
+if(!frontendOnly){
 for(const script of ['generate-cloud-modules.mjs','generate-cloud-schema.mjs']){
  const result=spawnSync(process.execPath,[fileURLToPath(new URL(script,import.meta.url))],{stdio:'inherit'});if(result.status!==0)process.exit(result.status||1);
 }
 const output=new URL('supabase/deploy/portal-api/',root);mkdirSync(output,{recursive:true});
 await build({entryPoints:[fileURLToPath(new URL('supabase/functions/portal-api/index.ts',root))],outfile:fileURLToPath(new URL('index.ts',output)),bundle:true,format:'esm',platform:'neutral',target:'es2022',packages:'external',legalComments:'none'});
+}
 const app=new URL('site-info/dist/app/',root);mkdirSync(app,{recursive:true});cpSync(new URL('public/',root),app,{recursive:true});
 function visit(dir){for(const name of readdirSync(dir)){const path=new URL(name,dir);if(statSync(path).isDirectory()){visit(new URL(`${name}/`,dir));continue;}if(!/\.(html|js|css)$/.test(name))continue;let text=readFileSync(path,'utf8').replaceAll('/assets/','/app/assets/');if(name==='index.html')text=text.replaceAll('href="/styles.css"','href="/app/styles.css"').replaceAll('href="/mvp.css"','href="/app/mvp.css"').replaceAll('href="/appearance.css"','href="/app/appearance.css"').replaceAll('href="/photo-slideshow.css"','href="/app/photo-slideshow.css"').replaceAll('src="/app.js"','src="/app/app.js"');
  if(name==='api.js')text=text.replace('const headers={...options.headers};',"if(path==='auth/me')path='portal/me';const headers={...options.headers};")
@@ -19,7 +22,7 @@ visit(app);
 const quickReportPage=new URL('site-info/dist/laporan-cepat/',root);mkdirSync(quickReportPage,{recursive:true});
 writeFileSync(new URL('index.html',quickReportPage),readFileSync(new URL('public/quick-report.html',root),'utf8').replaceAll('/assets/','/app/assets/').replace('href="/quick-report.css"','href="/app/quick-report.css"').replace('src="/quick-report.js"','src="/app/quick-report.js"'));
 
-console.log('Prepared Cloudflare /app/ assets and one-file Supabase portal-api deployment. No production data or credentials included.');
+console.log(frontendOnly?'Prepared Cloudflare frontend assets only.':'Prepared Cloudflare /app/ assets and one-file Supabase portal-api deployment. No production data or credentials included.');
 
 const coachingPage=new URL('site-info/dist/coaching/',root);mkdirSync(coachingPage,{recursive:true});
 writeFileSync(new URL('index.html',coachingPage),readFileSync(new URL('public/coaching-link.html',root),'utf8').replaceAll('/assets/','/app/assets/').replace('href="/quick-report.css"','href="/app/quick-report.css"').replace('href="/coaching-link.css"','href="/app/coaching-link.css"').replace('src="/coaching-link.js"','src="/app/coaching-link.js"'));

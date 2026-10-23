@@ -9,6 +9,7 @@ import {openCoachingShareLink} from './coaching-link-management.js';
 import {openDetail,closeDetails} from './details.js';
 import {purchasingNav,purchasingRoutes,purchasingAllowed,loadPurchasingOverview,invalidatePurchasingOverview,handlePurchasingAction,bindPurchasingPage,afterPurchasingPage,purchasingNotices,resetPurchasingState} from './purchasing.js';
 import {createNavigationQueue} from './navigation-queue.js';
+import {registerServiceWorker} from './pwa.js';
 const app=document.querySelector('#app'),navigation=createNavigationQueue();
 let renderedWorkspace='',renderedNavigation='';
 function applyTheme(theme){
@@ -148,4 +149,5 @@ document.addEventListener('data-changed',()=>{invalidateAnnouncementSummary();in
 document.addEventListener('refresh-app',()=>{invalidateAnnouncementSummary();invalidatePurchasingOverview();navigate();});document.addEventListener('session-ended',()=>loginPage());window.addEventListener('hashchange',()=>{closeDetails();closeBell();navigate();});
 const preferred=localStorage.getItem('besakih-theme');applyTheme(preferred==='dark'?'dark':'light');
 document.querySelector('.skip-link').addEventListener('click',event=>{event.preventDefault();(document.querySelector('#main')||document.querySelector('#login-form input'))?.focus();});
+registerServiceWorker();
 try{state.me=await api('auth/me');state.permissions=state.me.permissions;await navigate();}catch{await loginPage();}
