@@ -1,3 +1,4 @@
+import {binaryUploadType,readBinaryUpload,UploadBodyError} from './upload-body.mjs';
 // Cloudflare Pages backend. No Supabase token or key is returned to the browser.
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const HASH = /^[a-f0-9]{64}$/;
@@ -391,8 +392,12 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
       }
       let body = {};
       if (method !== 'GET') {
-        requireValue(request.headers.get('content-type')?.toLowerCase().startsWith('application/json'), 'INVALID_REQUEST', 415);
-        body = await readJson(request.body, operation ? url.pathname === '/api/uploads' ? 14 * 1024 * 1024 + 65536 : 131072 : 4096);
+        if(operation&&url.pathname==='/api/uploads'&&method==='POST'&&request.headers.get('content-type')?.toLowerCase()===binaryUploadType){
+          try{body=await readBinaryUpload(request);}catch(error){if(error instanceof UploadBodyError)return response({error:error.message},error.status);throw error;}
+        }else{
+          requireValue(request.headers.get('content-type')?.toLowerCase().startsWith('application/json'), 'INVALID_REQUEST', 415);
+          body = await readJson(request.body, operation ? url.pathname === '/api/uploads' ? 14 * 1024 * 1024 + 65536 : 131072 : 4096);
+        }
         requireValue(body && typeof body === 'object' && !Array.isArray(body), 'INVALID_REQUEST', 400);
       }
       if (action === 'password') {

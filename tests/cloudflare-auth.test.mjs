@@ -558,3 +558,14 @@ test('login and session checks start independent identity and account reads toge
  const f=fixture(options);let timeout;const guard=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('Identity and account reads were serialized')),2000);});
  try{const session=await Promise.race([login(f),guard]);arrived.clear();assert.equal((await Promise.race([f.handler(request('me',session),f.env),guard])).status,200);}finally{clearTimeout(timeout);pending.forEach(resolve=>resolve());}
 });
+
+function binaryRequest(session={},overrides={}){return new Request(env.PORTAL_ORIGIN+'/api/uploads',{method:'POST',headers:{origin:env.PORTAL_ORIGIN,'sec-fetch-site':'same-origin','content-type':'application/octet-stream','x-upload-name':encodeURIComponent('Bukti kegiatan.pdf'),'x-upload-type':'application/pdf',...(session.cookie?{cookie:session.cookie}:{}),...(session.csrf?{'x-csrf-token':session.csrf}:{}),...overrides},body:Buffer.from('%PDF-1.4\nBukti fiktif')});}
+test('binary uploads retain session, CSRF and password checks and forward identical file bytes',async()=>{
+ const f=fixture({operations:true}),session=await login(f);let r=await f.handler(binaryRequest(),f.env);assert.equal(r.status,401);
+ r=await f.handler(binaryRequest({cookie:session.cookie}),f.env);assert.equal(r.status,403);
+ r=await f.handler(binaryRequest(session,{origin:'https://attacker.invalid'}),f.env);assert.equal(r.status,403);
+ r=await f.handler(binaryRequest(session),f.env);assert.equal(r.status,428);assert.equal(f.called('portal-api').length,0);
+ const account=profile();account.user.must_change_password=false;f.setProfile(account);r=await f.handler(binaryRequest(session),f.env);assert.equal(r.status,200,await r.clone().text());const call=f.called('portal-api')[0];assert.equal(call.body.path,'uploads');assert.deepEqual(call.body.body,{name:'Bukti kegiatan.pdf',mime_type:'application/pdf',data:Buffer.from('%PDF-1.4\nBukti fiktif').toString('base64')});assertPrivate(await r.text());
+ r=await f.handler(binaryRequest(session,{'x-upload-type':'text/html'}),f.env);assert.equal(r.status,415);assert.equal(f.called('portal-api').length,1);
+ const elsewhere=new Request(env.PORTAL_ORIGIN+'/api/employees',{method:'POST',headers:binaryRequest(session).headers,body:'bytes'});assert.equal((await f.handler(elsewhere,f.env)).status,415);
+});

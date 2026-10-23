@@ -4,13 +4,13 @@ import {Buffer} from 'node:buffer';
 import {basename} from 'node:path';
 import {randomUUID, createHash} from 'node:crypto';
 import {all, one, get, insert, tx, audit, assert, text, now} from './db.mjs';
-import {has, can, employeeContext, postContext, reportContext, announcementsManager, documentAllowed, trainingAllowed, coachingAllowed} from './auth.mjs';
+import {grants, has, can, employeeContext, postContext, reportContext, announcementsManager, documentAllowed, trainingAllowed, coachingAllowed} from './auth.mjs';
 import {purchaseFileAllowed} from './purchasing.mjs';
 const attachments = [['employee_files', 'employee_id', 'employee'], ['employee_contracts', 'employee_id', 'contract'], ['document_versions', 'document_id', 'document'], ['training_materials', 'training_event_id', 'material'], ['participant_certificates', 'training_participant_id', 'certificate'], ['logbook_files', 'logbook_entry_id', 'logbook'], ['incident_files', 'incident_id', 'incident'], ['announcement_files', 'announcement_id', 'announcement'], ['purchase_attachments', 'request_id', 'purchase'], ['coaching_files', 'coaching_session_id', 'coaching']];
 export async function claimFile(db, user, id) {
   const f = await get(db, 'files', id);
   assert(f.status === 'AVAILABLE' && f.uploaded_by === user.id, 'Berkas tidak tersedia untuk dilampirkan.', 403);
-  assert(!await asyncSome(attachments, async ([t]) => await one(db, `SELECT id FROM ${t} WHERE file_id=?`, id)), 'Berkas sudah terhubung. Unggah berkas baru untuk objek ini.');
+  assert(!await one(db, attachments.map(([table])=>`SELECT 1 AS linked FROM ${table} WHERE file_id=?`).join(' UNION ALL ')+' LIMIT 1', ...attachments.map(()=>id)), 'Berkas sudah terhubung. Unggah berkas baru untuk objek ini.');
   return f;
 }
 export async function linkedFiles(db, type, id) {
@@ -50,7 +50,7 @@ export async function fileAllowed(db, user, id) {
   return false;
 }
 export async function upload(db, user, b, dataDir) {
-  assert(await announcementsManager(db, user) || await asyncSome(['hr.documents.manage', 'hr.employee_files.manage', 'hr.training.manage', 'hr.training.participants', 'security.logbook.create', 'security.incidents.create', 'security.incidents.update', 'purchasing.requests.create', 'purchasing.procurement.manage'], async p => await has(db, user, p)), 'Akses unggah ditolak.', 403);
+  assert(await announcementsManager(db, user) || (await grants(db,user)).some(g=>['hr.documents.manage', 'hr.employee_files.manage', 'hr.training.manage', 'hr.training.participants', 'security.logbook.create', 'security.incidents.create', 'security.incidents.update', 'purchasing.requests.create', 'purchasing.procurement.manage'].includes(g.code)), 'Akses unggah ditolak.', 403);
   return await storeUpload(db,user,b,dataDir);
 }
 export async function storeUpload(db,user,b,dataDir) {

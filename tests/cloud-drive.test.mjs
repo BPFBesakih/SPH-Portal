@@ -10,7 +10,7 @@ function fixture(options={}){
   if(url==='https://oauth2.googleapis.com/token')return options.tokenError?new Response('private-upstream-detail',{status:400}):Response.json({access_token:'fixture-access'});
   assert.equal(init.headers.Authorization,'Bearer fixture-access');
   if(options.redirect)return new Response(null,{status:302,headers:{Location:'https://attacker.invalid'}});
-  if(init.method==='POST')return Response.json({id:'fixture_file_001'});
+  if(init.method==='POST')return Response.json({id:'fixture_file_001',parents:[env.GOOGLE_DRIVE_FOLDER_ID],trashed:false,mimeType:'image/png',appProperties:{sph_portal:'v1'}});
   if(init.method==='DELETE')return new Response(null,{status:204});
   if(url.includes('alt=media'))return new Response('fixture-content');
   return Response.json({id:'fixture_file_001',parents:[options.foreign?'other_folder':env.GOOGLE_DRIVE_FOLDER_ID],trashed:false,mimeType:'image/png',appProperties:{sph_portal:'v1'}});
@@ -62,7 +62,7 @@ test('Drive settings ignore surrounding whitespace consistently with the connect
    for(const [name,key] of [['client_id','GOOGLE_DRIVE_CLIENT_ID'],['client_secret','GOOGLE_DRIVE_CLIENT_SECRET'],['refresh_token','GOOGLE_DRIVE_REFRESH_TOKEN']])assert.equal(init.body.get(name),env[key]);
    return Response.json({access_token:'fixture-access'});
   }
-  const body=await init.body.text();assert(body.includes('"parents":["fixture_folder"]'));return Response.json({id:'fixture_file_001'});
+  const body=await init.body.text();assert(body.includes('"parents":["fixture_folder"]'));return Response.json({id:'fixture_file_001',parents:[env.GOOGLE_DRIVE_FOLDER_ID],trashed:false,mimeType:'image/png',appProperties:{sph_portal:'v1'}});
  });
  assert.equal(await storage.put(Buffer.from('x'),'image/png'),'fixture_file_001');
 });

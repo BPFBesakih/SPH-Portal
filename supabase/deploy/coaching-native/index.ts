@@ -1,3 +1,4 @@
+import {createHash as driveCacheHash} from 'node:crypto';
 // test-results/coaching-native/release/supabase/functions/coaching-native/index.ts
 import { withSupabase } from "npm:@supabase/server@1";
 import postgres from "npm:postgres@3.4.7";
@@ -121,11 +122,15 @@ var driveModuleFolders = Object.freeze({
   website: "SPH-Portal-Website",
   coaching: "SPH-Portal-Coaching"
 });
-function createDriveStorage(env, fetchImpl = globalThis.fetch.bind(globalThis), options = {}) {
+const driveAccessTokens=new Map();
+function createDriveStorage(env, fetchImpl, options = {}) {
+  const tokenCache = options.tokenCache || (fetchImpl === void 0 ? driveAccessTokens : void 0);
+  fetchImpl = fetchImpl || globalThis.fetch.bind(globalThis);
   const value = (name) => typeof env[name] === "string" ? env[name].trim() : "";
   const folder = value("GOOGLE_DRIVE_FOLDER_ID"), clientId = value("GOOGLE_DRIVE_CLIENT_ID"), clientSecret = value("GOOGLE_DRIVE_CLIENT_SECRET"), refreshToken = value("GOOGLE_DRIVE_REFRESH_TOKEN");
-  const created = [], moves = [], claimed = /* @__PURE__ */ new Set(), folders = /* @__PURE__ */ new Map();
-  let access;
+  const cacheKey = driveCacheHash("sha256").update(JSON.stringify([folder, clientId, clientSecret, refreshToken])).digest("hex");
+  const created = [], moves = [], claimed = /* @__PURE__ */ new Set(), folders = /* @__PURE__ */ new Map(), freshUploads = /* @__PURE__ */ new Map();
+  let access, pendingAccess;
   const folderType = "application/vnd.google-apps.folder";
   const metadataFields = "id,parents,trashed,mimeType,appProperties";
   async function request(url, options2 = {}, stage = "storage") {
@@ -135,17 +140,44 @@ function createDriveStorage(env, fetchImpl = globalThis.fetch.bind(globalThis), 
     } catch {
       throw storageError(stage, null, "network_error");
     }
-    if (!r.ok) throw storageError(stage, r.status, await errorReason(r));
+    if (!r.ok) {
+      if (r.status === 401 && stage !== "token") {
+        access = void 0;
+        tokenCache?.delete(cacheKey);
+      }
+      throw storageError(stage, r.status, await errorReason(r));
+    }
     return r;
   }
   async function token() {
     if (access) return access;
     assert(folder && clientId && clientSecret && refreshToken, "Penyimpanan berkas belum dikonfigurasi.", 503);
-    const r = await request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken }) }, "token");
-    const j = await r.json();
-    assert(typeof j.access_token === "string" && j.access_token.length < 8192, "Penyimpanan berkas belum dapat diakses.", 503);
-    access = j.access_token;
-    return access;
+    const saved = tokenCache?.get(cacheKey);
+    if (saved && saved.expiresAt > Date.now()) {
+      access = saved.access;
+      return access;
+    }
+    if (!pendingAccess) pendingAccess = (async () => {
+      const r = await request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken }) }, "token");
+      const j = await r.json();
+      assert(typeof j.access_token === "string" && j.access_token.length > 0 && j.access_token.length < 8192, "Penyimpanan berkas belum dapat diakses.", 503);
+      const lifetime = Math.min(Number(j.expires_in), 3600);
+      access = j.access_token;
+      if (tokenCache && Number.isFinite(lifetime) && lifetime > 60) {
+        for (const [key, item] of tokenCache) if (item.expiresAt <= Date.now()) tokenCache.delete(key);
+        if (tokenCache.size >= 4 && !tokenCache.has(cacheKey)) tokenCache.delete(tokenCache.keys().next().value);
+        tokenCache.set(cacheKey, { access, expiresAt: Date.now() + (lifetime - 60) * 1e3 });
+      }
+      return access;
+    })();
+    try {
+      return await pendingAccess;
+    } catch (error) {
+      tokenCache?.delete(cacheKey);
+      throw error;
+    } finally {
+      pendingAccess = void 0;
+    }
   }
   const headers = async () => ({ Authorization: `Bearer ${await token()}` });
   const valid = (id) => assert(typeof id === "string" && /^[A-Za-z0-9_-]{8,200}$/.test(id), "Berkas tidak tersedia.", 404);
@@ -214,11 +246,11 @@ function createDriveStorage(env, fetchImpl = globalThis.fetch.bind(globalThis), 
   }
   return {
     async put(data, mime) {
-      const boundary = `sph_${randomUUID2()}`;
+      const boundary = `sph_${randomUUID()}`;
       const module = options.module;
       assert(module == null || knownModule(module), "Modul penyimpanan tidak valid.");
       const parent = module ? await moduleFolder(module) : folder;
-      const meta = { name: randomUUID2(), parents: [parent], appProperties: { sph_portal: "v1", ...module ? { sph_module: module } : {} } };
+      const meta = { name: randomUUID(), parents: [parent], appProperties: { sph_portal: "v1", ...module ? { sph_module: module } : {} } };
       const body = new Blob([`--${boundary}\r
 Content-Type: application/json; charset=UTF-8\r
 \r
@@ -228,10 +260,12 @@ Content-Type: ${mime}\r
 \r
 `, data, `\r
 --${boundary}--`]);
-      const r = await request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", { method: "POST", headers: { ...await headers(), "Content-Type": `multipart/related; boundary=${boundary}` }, body }, "upload");
+      const r = await request(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${metadataFields}`, { method: "POST", headers: { ...await headers(), "Content-Type": `multipart/related; boundary=${boundary}` }, body }, "upload");
       const file = await r.json();
       valid(file.id);
       created.push(file.id);
+      assert(file.trashed === false && file.mimeType === mime && file.parents?.length === 1 && file.parents[0] === parent && file.appProperties?.sph_portal === "v1" && (!module || file.appProperties.sph_module === module), "Unggahan berkas belum dapat diverifikasi.", 503);
+      freshUploads.set(file.id, module);
       return file.id;
     },
     claim(id) {
@@ -241,7 +275,7 @@ Content-Type: ${mime}\r
     async finalize() {
       if (!claimed.size) return;
       assert(knownModule(options.module), "Modul lampiran belum dapat ditentukan.", 503);
-      for (const id of claimed) await organize(id, options.module);
+      for (const id of claimed) if (freshUploads.get(id) !== options.module) await organize(id, options.module);
       claimed.clear();
     },
     async get(id, module) {
@@ -286,6 +320,7 @@ Content-Type: ${mime}\r
     }
   };
 }
+
 
 // test-results/coaching-native/release/supabase/functions/_shared/portal/coaching-links.mjs
 import { Buffer as Buffer3 } from "node:buffer";

@@ -9,7 +9,7 @@ export function driveFixture(options={}){
  async function fetch(url,init={}){
   calls.push({url:String(url),init});assert.equal(init.redirect,'manual');
   const u=new URL(url);
-  if(u.origin==='https://oauth2.googleapis.com')return Response.json({access_token:'fixture-access'});
+  if(u.origin==='https://oauth2.googleapis.com')return Response.json({access_token:'fixture-access',expires_in:options.expiresIn??3600});
   assert.equal(u.origin,'https://www.googleapis.com');assert.equal(init.headers.Authorization,'Bearer fixture-access');
   if(u.pathname==='/upload/drive/v3/files'){
    const bytes=Buffer.from(await init.body.arrayBuffer());
@@ -17,7 +17,7 @@ export function driveFixture(options={}){
    const start=bytes.indexOf('\r\n\r\n',end)+4,boundary=init.headers['Content-Type'].split('boundary=')[1];
    const finish=bytes.lastIndexOf(`\r\n--${boundary}--`);
    const row=add(`uploaded_file_${++sequence}`,{...meta,mimeType:bytes.subarray(end,start).toString().match(/Content-Type: ([^\r]+)/)[1],data:bytes.subarray(start,finish)});
-   return Response.json({id:row.id});
+   return Response.json(metadata(row));
   }
   if(u.pathname==='/drive/v3/files'&&init.method==='POST'){
    if(options.folderError)return Response.json({error:{errors:[{reason:'insufficientPermissions'}]}},{status:403});

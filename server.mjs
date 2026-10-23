@@ -1,3 +1,5 @@
+import {Readable} from 'node:stream';
+import {binaryUploadType,readBinaryUpload,UploadBodyError} from './site-info/lib/upload-body.mjs';
 import {quickReportManagement,publicQuickReport,takeQuickReportSlot} from './lib/quick-reports.mjs';
 import {publicCoachingLink,takeCoachingLinkSlot} from './lib/coaching-links.mjs';
 import {createServer} from 'node:http';
@@ -18,6 +20,9 @@ import {purchasingRoutes,purchasingPendingCount} from './lib/purchasing.mjs';
 const root=fileURLToPath(new URL('.',import.meta.url));
 function cookie(name,value,httpOnly=true,maxAge=8*3600){return `${name}=${value}; Path=/; SameSite=Strict; Max-Age=${maxAge}${httpOnly?'; HttpOnly':''}${process.env.COOKIE_SECURE==='true'?'; Secure':''}`;}
 async function jsonBody(req) {
+  if(req.method==='POST'&&new URL(req.url,'http://internal').pathname==='/api/uploads'&&req.headers['content-type']?.toLowerCase()===binaryUploadType){
+    try{return await readBinaryUpload({headers:new Headers(req.headers),body:Readable.toWeb(req)});}catch(error){if(error instanceof UploadBodyError)throw new AppError(error.status,error.message);throw error;}
+  }
   const max=(Number(process.env.MAX_UPLOAD_MB)||10)*1400000+65536;let size=0;const chunks=[];
   for await(const chunk of req){size+=chunk.length;assert(size<=max,'Permintaan terlalu besar.',413);chunks.push(chunk);}
   if(!chunks.length)return {};

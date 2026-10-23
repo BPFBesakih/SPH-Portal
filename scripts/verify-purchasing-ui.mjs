@@ -98,9 +98,9 @@ try{
     await context.close();
   });
   await check('pemilih ruang kerja tiga modul tetap di dalam batas sidebar',async()=>{
-    const {page,context}=await login('gabungan');const box=await page.locator('.workspace-switch').boundingBox();
-    const buttons=page.locator('.workspace-switch button');assert.equal(await buttons.count(),3);
-    for(let i=0;i<3;i++){const b=await buttons.nth(i).boundingBox();assert(b.x>=box.x-0.5&&b.x+b.width<=box.x+box.width+0.5&&b.y+b.height<=box.y+box.height+0.5,`tombol ruang kerja ${i+1} keluar batas`);}
+    const {page,context}=await login('gabungan');await page.locator('.workspace-switch').waitFor({state:'visible'});
+    // Measure the current navigation in one turn while summaries may replace it.
+    assert(await page.locator('.workspace-switch').evaluate(el=>{const box=el.getBoundingClientRect(),buttons=[...el.querySelectorAll('button')];return buttons.length===3&&buttons.every(button=>{const b=button.getBoundingClientRect();return b.width>0&&b.x>=box.x-.5&&b.right<=box.right+.5&&b.bottom<=box.bottom+.5;});}),'pemilih ruang kerja keluar batas');
     await page.locator('.sidebar').screenshot({path:resolve(output,'07-tiga-ruang-kerja.png')});
     await context.close();
   });

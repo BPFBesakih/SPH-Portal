@@ -1,3 +1,4 @@
+import {createHash as driveCacheHash} from 'node:crypto';
 import {randomBytes as quickReportRandomBytes} from 'node:crypto';
 // supabase/functions/portal-api/index.ts
 import { withSupabase } from "npm:@supabase/server@1";
@@ -185,107 +186,205 @@ function driveModuleForOperation(path,body={}){
  const module={documents:'sop',training:'pelatihan',employees:'pegawai',logbook:'patroli',incidents:'kejadian',announcements:'informasi',purchasing:'pengadaan',website:'website',coaching:'coaching'}[resource];
  return typeof module==='string'?module:null;
 }
-function createDriveStorage(env,fetchImpl=globalThis.fetch.bind(globalThis),options={}){
- const value=name=>typeof env[name]==='string'?env[name].trim():'';
- const folder=value('GOOGLE_DRIVE_FOLDER_ID'),clientId=value('GOOGLE_DRIVE_CLIENT_ID'),clientSecret=value('GOOGLE_DRIVE_CLIENT_SECRET'),refreshToken=value('GOOGLE_DRIVE_REFRESH_TOKEN');
- const created=[],moves=[],claimed=new Set(),folders=new Map();let access;
- const folderType='application/vnd.google-apps.folder';
- const metadataFields='id,parents,trashed,mimeType,appProperties';
- async function request(url,options={},stage='storage'){
-  let r;try{r=await fetchImpl(url,{...options,redirect:'manual',signal:AbortSignal.timeout(12000)});}catch{throw storageError(stage,null,'network_error');}
-  if(!r.ok)throw storageError(stage,r.status,await errorReason(r));return r;
- }
- async function token(){
-  if(access)return access;
-  assert(folder&&clientId&&clientSecret&&refreshToken,'Penyimpanan berkas belum dikonfigurasi.',503);
-  const r=await request('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:clientId,client_secret:clientSecret,refresh_token:refreshToken})},'token');
-  const j=await r.json();assert(typeof j.access_token==='string'&&j.access_token.length<8192,'Penyimpanan berkas belum dapat diakses.',503);access=j.access_token;return access;
- }
- const headers=async()=>({Authorization:`Bearer ${await token()}`});
- const valid=id=>assert(typeof id==='string'&&/^[A-Za-z0-9_-]{8,200}$/.test(id),'Berkas tidak tersedia.',404);
- const knownModule=module=>typeof module==='string'&&Object.hasOwn(driveModuleFolders,module);
- const validFolder=(meta,module)=>meta&&typeof meta.id==='string'&&/^[A-Za-z0-9_-]{8,200}$/.test(meta.id)&&meta.trashed===false&&meta.mimeType===folderType&&meta.parents?.length===1&&meta.parents[0]===folder&&meta.appProperties?.sph_portal==='v1'&&meta.appProperties.sph_module===module;
- async function metadata(id){
-  valid(id);
-  try{return await (await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=${metadataFields}`,{headers:await headers()},'metadata')).json();}
-  catch(error){if(error instanceof AppError&&error.details?.stage==='metadata'&&error.details.upstream_status===404)throw new AppError(404,'Berkas tidak tersedia.');throw error;}
- }
- async function moduleFolder(module){
-  assert(knownModule(module),'Modul penyimpanan tidak valid.');
-  if(!folders.has(module)){
-   const pending=(async()=>{
-    valid(folder);
-    const url=new URL('https://www.googleapis.com/drive/v3/files');
-    url.searchParams.set('q',`'${folder}' in parents and trashed = false and mimeType = '${folderType}' and appProperties has { key='sph_portal' and value='v1' } and appProperties has { key='sph_module' and value='${module}' }`);
-    url.searchParams.set('fields',`files(${metadataFields})`);url.searchParams.set('pageSize','100');url.searchParams.set('orderBy','createdTime');
-    const listing=await (await request(url.href,{headers:await headers()},'folder')).json();
-    const existing=listing.files?.find(meta=>validFolder(meta,module));if(existing)return existing.id;
-    const meta=await (await request(`https://www.googleapis.com/drive/v3/files?fields=${metadataFields}`,{method:'POST',headers:{...await headers(),'Content-Type':'application/json'},body:JSON.stringify({name:driveModuleFolders[module],mimeType:folderType,parents:[folder],appProperties:{sph_portal:'v1',sph_module:module}})},'folder')).json();
-    assert(validFolder(meta,module),'Folder penyimpanan belum dapat diverifikasi.',503);return meta.id;
-   })();folders.set(module,pending);
-   try{return await pending;}catch(error){folders.delete(module);throw error;}
-  }return folders.get(module);
- }
- async function ownedMetadata(id){
-  const meta=await metadata(id);
-  assert(meta.id===id&&meta.trashed===false&&typeof meta.mimeType==='string'&&meta.mimeType!==folderType&&meta.appProperties?.sph_portal==='v1'&&meta.parents?.length===1,'Berkas tidak tersedia.',404);
-  if(meta.parents[0]===folder)return meta;
-  const parent=await metadata(meta.parents[0]),module=parent?.appProperties?.sph_module;
-  assert(knownModule(module)&&validFolder(parent,module)&&parent.id===meta.parents[0]&&(!meta.appProperties.sph_module||meta.appProperties.sph_module===module),'Berkas tidak tersedia.',404);
-  return meta;
- }
- async function move(id,from,to,properties){
-  const url=new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`);
-  url.searchParams.set('addParents',to);url.searchParams.set('removeParents',from);url.searchParams.set('fields',metadataFields);
-  return (await request(url.href,{method:'PATCH',headers:{...await headers(),'Content-Type':'application/json'},body:JSON.stringify({appProperties:properties})},'organize')).json();
- }
- async function organize(id,module,meta){
-  assert(knownModule(module),'Modul penyimpanan tidak valid.');meta=meta||await ownedMetadata(id);
-  if(meta.parents[0]!==folder&&meta.appProperties.sph_module===module)return;
-  const target=await moduleFolder(module);if(meta.parents[0]===target)return;
-  // Record before PATCH so an uncertain network result can be reconciled on rollback.
-  moves.push({id,from:meta.parents[0],to:target,properties:{...meta.appProperties}});
-  const moved=await move(id,meta.parents[0],target,{...meta.appProperties,sph_module:module});
-  assert(moved.id===id&&moved.parents?.length===1&&moved.parents[0]===target&&moved.appProperties?.sph_portal==='v1'&&moved.appProperties.sph_module===module,'Pemindahan berkas belum dapat diverifikasi.',503);
- }
- return {
-  async put(data,mime){
-   const boundary=`sph_${randomUUID3()}`;
-   const module=options.module;assert(module==null||knownModule(module),'Modul penyimpanan tidak valid.');
-   const parent=module?await moduleFolder(module):folder;
-   const meta={name:randomUUID3(),parents:[parent],appProperties:{sph_portal:'v1',...(module?{sph_module:module}:{})}};
-   const body=new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`,data,`\r\n--${boundary}--`]);
-   const r=await request('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',{method:'POST',headers:{...await headers(),'Content-Type':`multipart/related; boundary=${boundary}`},body},'upload');
-   const file=await r.json();valid(file.id);created.push(file.id);return file.id;
-  },
-  claim(id){valid(id);claimed.add(id);},
-  async finalize(){
-   if(!claimed.size)return;
-   assert(knownModule(options.module),'Modul lampiran belum dapat ditentukan.',503);
-   for(const id of claimed)await organize(id,options.module);
-   claimed.clear();
-  },
-  async get(id,module){
-   const meta=await ownedMetadata(id);
-   if(module)await organize(id,module,meta);
-   const r=await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`,{headers:await headers()},'download');
-   const chunks=[];let size=0;const reader=r.body.getReader();
-   try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>10*1024*1024){await reader.cancel();throw new AppError(503,'Berkas melebihi ukuran yang diizinkan.');}chunks.push(value);}}finally{reader.releaseLock();}
-   return Buffer.concat(chunks);
-  },
-  async rollback(){
-   for(const entry of moves.slice().reverse()){
-    if(created.includes(entry.id))continue;
-    try{
-     const meta=await ownedMetadata(entry.id);if(meta.parents[0]!==entry.to)continue;
-     // Drive merges appProperties; null removes a newly added property.
-     await move(entry.id,entry.to,entry.from,{...entry.properties,sph_module:entry.properties.sph_module||null});
-    }catch{/* Both the original root and verified module folders remain readable. */}
-   }
-   for(const id of created){try{await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`,{method:'DELETE',headers:await headers()},'cleanup');}catch{/* An unlinked private upload remains inaccessible through the portal. */}}
-  },
- };
+const driveAccessTokens=new Map();
+function createDriveStorage(env, fetchImpl, options = {}) {
+  const tokenCache = options.tokenCache || (fetchImpl === void 0 ? driveAccessTokens : void 0);
+  fetchImpl = fetchImpl || globalThis.fetch.bind(globalThis);
+  const value = (name) => typeof env[name] === "string" ? env[name].trim() : "";
+  const folder = value("GOOGLE_DRIVE_FOLDER_ID"), clientId = value("GOOGLE_DRIVE_CLIENT_ID"), clientSecret = value("GOOGLE_DRIVE_CLIENT_SECRET"), refreshToken = value("GOOGLE_DRIVE_REFRESH_TOKEN");
+  const cacheKey = driveCacheHash("sha256").update(JSON.stringify([folder, clientId, clientSecret, refreshToken])).digest("hex");
+  const created = [], moves = [], claimed = /* @__PURE__ */ new Set(), folders = /* @__PURE__ */ new Map(), freshUploads = /* @__PURE__ */ new Map();
+  let access, pendingAccess;
+  const folderType = "application/vnd.google-apps.folder";
+  const metadataFields = "id,parents,trashed,mimeType,appProperties";
+  async function request(url, options2 = {}, stage = "storage") {
+    let r;
+    try {
+      r = await fetchImpl(url, { ...options2, redirect: "manual", signal: AbortSignal.timeout(12e3) });
+    } catch {
+      throw storageError(stage, null, "network_error");
+    }
+    if (!r.ok) {
+      if (r.status === 401 && stage !== "token") {
+        access = void 0;
+        tokenCache?.delete(cacheKey);
+      }
+      throw storageError(stage, r.status, await errorReason(r));
+    }
+    return r;
+  }
+  async function token() {
+    if (access) return access;
+    assert(folder && clientId && clientSecret && refreshToken, "Penyimpanan berkas belum dikonfigurasi.", 503);
+    const saved = tokenCache?.get(cacheKey);
+    if (saved && saved.expiresAt > Date.now()) {
+      access = saved.access;
+      return access;
+    }
+    if (!pendingAccess) pendingAccess = (async () => {
+      const r = await request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken }) }, "token");
+      const j = await r.json();
+      assert(typeof j.access_token === "string" && j.access_token.length > 0 && j.access_token.length < 8192, "Penyimpanan berkas belum dapat diakses.", 503);
+      const lifetime = Math.min(Number(j.expires_in), 3600);
+      access = j.access_token;
+      if (tokenCache && Number.isFinite(lifetime) && lifetime > 60) {
+        for (const [key, item] of tokenCache) if (item.expiresAt <= Date.now()) tokenCache.delete(key);
+        if (tokenCache.size >= 4 && !tokenCache.has(cacheKey)) tokenCache.delete(tokenCache.keys().next().value);
+        tokenCache.set(cacheKey, { access, expiresAt: Date.now() + (lifetime - 60) * 1e3 });
+      }
+      return access;
+    })();
+    try {
+      return await pendingAccess;
+    } catch (error) {
+      tokenCache?.delete(cacheKey);
+      throw error;
+    } finally {
+      pendingAccess = void 0;
+    }
+  }
+  const headers = async () => ({ Authorization: `Bearer ${await token()}` });
+  const valid = (id) => assert(typeof id === "string" && /^[A-Za-z0-9_-]{8,200}$/.test(id), "Berkas tidak tersedia.", 404);
+  const knownModule = (module) => typeof module === "string" && Object.hasOwn(driveModuleFolders, module);
+  const validFolder = (meta, module) => meta && typeof meta.id === "string" && /^[A-Za-z0-9_-]{8,200}$/.test(meta.id) && meta.trashed === false && meta.mimeType === folderType && meta.parents?.length === 1 && meta.parents[0] === folder && meta.appProperties?.sph_portal === "v1" && meta.appProperties.sph_module === module;
+  async function metadata(id) {
+    valid(id);
+    try {
+      return await (await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=${metadataFields}`, { headers: await headers() }, "metadata")).json();
+    } catch (error) {
+      if (error instanceof AppError && error.details?.stage === "metadata" && error.details.upstream_status === 404) throw new AppError(404, "Berkas tidak tersedia.");
+      throw error;
+    }
+  }
+  async function moduleFolder(module) {
+    assert(knownModule(module), "Modul penyimpanan tidak valid.");
+    if (!folders.has(module)) {
+      const pending = (async () => {
+        valid(folder);
+        const url = new URL("https://www.googleapis.com/drive/v3/files");
+        url.searchParams.set("q", `'${folder}' in parents and trashed = false and mimeType = '${folderType}' and appProperties has { key='sph_portal' and value='v1' } and appProperties has { key='sph_module' and value='${module}' }`);
+        url.searchParams.set("fields", `files(${metadataFields})`);
+        url.searchParams.set("pageSize", "100");
+        url.searchParams.set("orderBy", "createdTime");
+        const listing = await (await request(url.href, { headers: await headers() }, "folder")).json();
+        const existing = listing.files?.find((meta2) => validFolder(meta2, module));
+        if (existing) return existing.id;
+        const meta = await (await request(`https://www.googleapis.com/drive/v3/files?fields=${metadataFields}`, { method: "POST", headers: { ...await headers(), "Content-Type": "application/json" }, body: JSON.stringify({ name: driveModuleFolders[module], mimeType: folderType, parents: [folder], appProperties: { sph_portal: "v1", sph_module: module } }) }, "folder")).json();
+        assert(validFolder(meta, module), "Folder penyimpanan belum dapat diverifikasi.", 503);
+        return meta.id;
+      })();
+      folders.set(module, pending);
+      try {
+        return await pending;
+      } catch (error) {
+        folders.delete(module);
+        throw error;
+      }
+    }
+    return folders.get(module);
+  }
+  async function ownedMetadata(id) {
+    const meta = await metadata(id);
+    assert(meta.id === id && meta.trashed === false && typeof meta.mimeType === "string" && meta.mimeType !== folderType && meta.appProperties?.sph_portal === "v1" && meta.parents?.length === 1, "Berkas tidak tersedia.", 404);
+    if (meta.parents[0] === folder) return meta;
+    const parent = await metadata(meta.parents[0]), module = parent?.appProperties?.sph_module;
+    assert(knownModule(module) && validFolder(parent, module) && parent.id === meta.parents[0] && (!meta.appProperties.sph_module || meta.appProperties.sph_module === module), "Berkas tidak tersedia.", 404);
+    return meta;
+  }
+  async function move(id, from, to, properties) {
+    const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`);
+    url.searchParams.set("addParents", to);
+    url.searchParams.set("removeParents", from);
+    url.searchParams.set("fields", metadataFields);
+    return (await request(url.href, { method: "PATCH", headers: { ...await headers(), "Content-Type": "application/json" }, body: JSON.stringify({ appProperties: properties }) }, "organize")).json();
+  }
+  async function organize(id, module, meta) {
+    assert(knownModule(module), "Modul penyimpanan tidak valid.");
+    meta = meta || await ownedMetadata(id);
+    if (meta.parents[0] !== folder && meta.appProperties.sph_module === module) return;
+    const target = await moduleFolder(module);
+    if (meta.parents[0] === target) return;
+    moves.push({ id, from: meta.parents[0], to: target, properties: { ...meta.appProperties } });
+    const moved = await move(id, meta.parents[0], target, { ...meta.appProperties, sph_module: module });
+    assert(moved.id === id && moved.parents?.length === 1 && moved.parents[0] === target && moved.appProperties?.sph_portal === "v1" && moved.appProperties.sph_module === module, "Pemindahan berkas belum dapat diverifikasi.", 503);
+  }
+  return {
+    async put(data, mime) {
+      const boundary = `sph_${randomUUID()}`;
+      const module = options.module;
+      assert(module == null || knownModule(module), "Modul penyimpanan tidak valid.");
+      const parent = module ? await moduleFolder(module) : folder;
+      const meta = { name: randomUUID(), parents: [parent], appProperties: { sph_portal: "v1", ...module ? { sph_module: module } : {} } };
+      const body = new Blob([`--${boundary}\r
+Content-Type: application/json; charset=UTF-8\r
+\r
+${JSON.stringify(meta)}\r
+--${boundary}\r
+Content-Type: ${mime}\r
+\r
+`, data, `\r
+--${boundary}--`]);
+      const r = await request(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${metadataFields}`, { method: "POST", headers: { ...await headers(), "Content-Type": `multipart/related; boundary=${boundary}` }, body }, "upload");
+      const file = await r.json();
+      valid(file.id);
+      created.push(file.id);
+      assert(file.trashed === false && file.mimeType === mime && file.parents?.length === 1 && file.parents[0] === parent && file.appProperties?.sph_portal === "v1" && (!module || file.appProperties.sph_module === module), "Unggahan berkas belum dapat diverifikasi.", 503);
+      freshUploads.set(file.id, module);
+      return file.id;
+    },
+    claim(id) {
+      valid(id);
+      claimed.add(id);
+    },
+    async finalize() {
+      if (!claimed.size) return;
+      assert(knownModule(options.module), "Modul lampiran belum dapat ditentukan.", 503);
+      for (const id of claimed) if (freshUploads.get(id) !== options.module) await organize(id, options.module);
+      claimed.clear();
+    },
+    async get(id, module) {
+      const meta = await ownedMetadata(id);
+      if (module) await organize(id, module, meta);
+      const r = await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`, { headers: await headers() }, "download");
+      const chunks = [];
+      let size = 0;
+      const reader = r.body.getReader();
+      try {
+        for (; ; ) {
+          const { done, value: value2 } = await reader.read();
+          if (done) break;
+          size += value2.length;
+          if (size > 10 * 1024 * 1024) {
+            await reader.cancel();
+            throw new AppError(503, "Berkas melebihi ukuran yang diizinkan.");
+          }
+          chunks.push(value2);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return Buffer.concat(chunks);
+    },
+    async rollback() {
+      for (const entry of moves.slice().reverse()) {
+        if (created.includes(entry.id)) continue;
+        try {
+          const meta = await ownedMetadata(entry.id);
+          if (meta.parents[0] !== entry.to) continue;
+          await move(entry.id, entry.to, entry.from, { ...entry.properties, sph_module: entry.properties.sph_module || null });
+        } catch {
+        }
+      }
+      for (const id of created) {
+        try {
+          await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`, { method: "DELETE", headers: await headers() }, "cleanup");
+        } catch {
+        }
+      }
+    }
+  };
 }
+
 
 // supabase/functions/_shared/portal/router.mjs
 import { Buffer as Buffer3 } from "node:buffer";
@@ -2555,10 +2654,10 @@ var attachments = [["employee_files", "employee_id", "employee"], ["employee_con
 async function claimFile(db, user, id) {
   const f = await get(db, "files", id);
   assert(f.status === "AVAILABLE" && f.uploaded_by === user.id, "Berkas tidak tersedia untuk dilampirkan.", 403);
-  assert(!await asyncSome(attachments, async ([t]) => await one(db, `SELECT id FROM ${t} WHERE file_id=?`, id)), "Berkas sudah terhubung. Unggah berkas baru untuk objek ini.");
-  db.storage?.claim?.(f.storage_key);
+  assert(!await one(db, attachments.map(([table]) => `SELECT 1 AS linked FROM ${table} WHERE file_id=?`).join(" UNION ALL ") + " LIMIT 1", ...attachments.map(() => id)), "Berkas sudah terhubung. Unggah berkas baru untuk objek ini.");
   return f;
 }
+
 async function fileStorageModule(db, id) {
   const modules = {
     website: 'website',
@@ -2613,9 +2712,10 @@ async function fileAllowed(db, user, id) {
   return false;
 }
 async function upload(db, user, b, dataDir) {
-  assert(await announcementsManager(db, user) || await asyncSome(["hr.documents.manage", "hr.employee_files.manage", "hr.training.manage", "hr.training.participants", "security.logbook.create", "security.incidents.create", "security.incidents.update", "purchasing.requests.create", "purchasing.procurement.manage"], async (p) => await has(db, user, p)), "Akses unggah ditolak.", 403);
+  assert(await announcementsManager(db, user) || (await grants(db, user)).some((g) => ["hr.documents.manage", "hr.employee_files.manage", "hr.training.manage", "hr.training.participants", "security.logbook.create", "security.incidents.create", "security.incidents.update", "purchasing.requests.create", "purchasing.procurement.manage"].includes(g.code)), "Akses unggah ditolak.", 403);
   return await storeUpload(db, user, b, dataDir);
 }
+
 async function storeUpload(db, user, b, dataDir) {
   const name = basename(text(b.name, "Nama berkas", 180)).replace(/[\r\n"]/g, "_");
   assert(typeof b.data === "string" && /^[A-Za-z0-9+/]*={0,2}$/.test(b.data), "Isi berkas tidak valid.");
