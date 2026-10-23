@@ -14,9 +14,9 @@ Formulir dibuka langsung pada `https://bpbesakih.com/coaching/#<token>` tanpa ak
 
 ## Aktivasi dan pencabutan
 
-Terapkan migrasi foundation `20261022214727_coaching_custom_form.sql`, lalu `20261023053253_coaching_native_links.sql`. Bangun fungsi menggunakan `node scripts/build-native-coaching.mjs`, deploy fungsi terpisah `coaching-native` dengan pemeriksaan kunci server di handler, dan rilis aset Cloudflare. Jangan menimpa `portal-api` dengan bundle lama.
+Terapkan migrasi foundation `20261022214727_coaching_custom_form.sql`, lalu `20261023053253_coaching_native_links.sql` dan `20261023125306_coaching_share_link.sql`. Bangun fungsi menggunakan `node scripts/build-native-coaching.mjs`, deploy fungsi terpisah `coaching-native` dengan pemeriksaan kunci server di handler, dan rilis aset Cloudflare. Jangan menimpa `portal-api` dengan bundle lama.
 
-Satu tautan aktif diperbolehkan. Buat token acak kriptografis 32 byte, simpan hash saja bersama label dan metadata pada `portal.coaching_links`, kemudian bagikan URL dengan token pada fragmen. Untuk mencabut tautan, set `is_active=0`, isi `revoked_at`, dan tingkatkan `row_version`. Untuk mengganti tautan, cabut yang lama terlebih dahulu dalam transaksi, lalu buat token baru. Pencabutan tidak menghapus rekaman atau foto.
+Satu tautan aktif diperbolehkan. Buat token acak kriptografis 32 byte, simpan hash dan `share_token` privat bersama label dan metadata pada `portal.coaching_links`, kemudian bagikan URL dengan token pada fragmen. Untuk mencabut tautan, set `is_active=0`, isi `revoked_at`, dan tingkatkan `row_version`. Untuk mengganti tautan, cabut yang lama terlebih dahulu dalam transaksi, lalu buat token baru. Pencabutan tidak menghapus rekaman atau foto.
 
 Status 23 Oktober 2026: formulir native dan pencarian nama terverifikasi pada domain produksi; satu tautan aktif dibuat tanpa menyimpan token mentah di repositori. Ledger Google lama kosong. Deployment web app lama telah diarsipkan dan URL-nya menampilkan Page Not Found. Semua kode Script diganti pemberitahuan pensiun dan handler `retryCoachingSync_` tanpa operasi (tanpa baca/tulis/upload/jaringan), kemudian proyek dipindahkan ke Sampah Drive. Pemicu tidak dihapus permanen. Folder, foto, dan rekap dipertahankan. Fungsi `coaching-google-sync` versi 2 merespons 410 tanpa akses data dengan gateway JWT aktif.
 
