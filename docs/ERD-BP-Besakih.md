@@ -1,5 +1,7 @@
 # ERD logis — Login & Hak Akses, SDM, dan Keamanan BP Besakih
 
+> **Acuan status 25 Oktober 2026:** ini model logis awal, bukan inventaris schema produksi saat ini. Migrasi Pengadaan, formulir dan kebijakan admin dilanjutkan sesudahnya. Penghapusan kegiatan sekarang mengikuti role Superadmin, bukan pengecualian username `itadmin`; aturan admin dan status terkini ada di [konteks proyek](KONTEKS-PROYEK.md). Periksa migrasi/source aktif sebelum menyimpulkan struktur fisik atau menerapkan ulang schema.
+
 Versi 1.0 · 15 Oktober 2026 · Rancangan MVP untuk dibahas dan diimplementasikan bersama PRD.
 
 Dokumen ini menjelaskan model data logis, relasi, dan aturan integritas. Ini bukan skema SQL dan belum mengikat produk pada penyedia basis data tertentu. Identitas pejabat, jumlah petugas, jam shift, hari kerja, dan batas istirahat tidak ditetapkan oleh ERD; semuanya harus diisi dari kebijakan operasional yang dikonfirmasi BP Besakih.

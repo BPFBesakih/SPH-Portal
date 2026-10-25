@@ -1,8 +1,10 @@
 # Halaman informasi publik SPH Portal
 
+**Status 25 Oktober 2026:** domain produksi adalah [bpbesakih.com](https://bpbesakih.com/). `/app/` sudah mendukung PWA; `/portal/` untuk akun; `/laporan-cepat/` dan `/coaching/` melayani formulir bertoken. Supabase/Drive adalah backend produksi; Node.js/SQLite tetap jalur lokal. `PORTAL_LEGACY_ORIGIN` telah dihapus dari Production pada 24 Oktober, dan RUM dinonaktifkan. Lihat [konteks proyek](../docs/KONTEKS-PROYEK.md) serta [catatan keamanan](../docs/SECURITY-HARDENING-2026-10-24.md).
+
 Produksi kini memakai aplikasi lengkap `/app/`, Pages Functions untuk sesi dan perantara API, serta Edge Function `portal-api` untuk modul operasional PostgreSQL dan Drive. Lihat [panduan deploy lengkap](../docs/CLOUDFLARE-SUPABASE.md). Catatan di bawah adalah riwayat tahap penyiapan akun; keterangan “belum tersedia” pada tahap lama telah digantikan oleh migrasi modul 009.
 
-Folder ini berisi halaman informasi publik, halaman masuk `/portal/`, serta Pages Functions untuk backend akun. Konfigurasi Production sudah disimpan dan deployment ulang berhasil; pemeriksaan tanpa sesi menghasilkan HTTP 401 yang diharapkan. Selain pengujian dengan API fiktif, pengelola sudah mengonfirmasi login nyata, tampilan akun setelah langkah ganti password, sesi setelah muat ulang, logout, serta login ulang memakai password baru. Refresh token dan kedaluwarsa nyata masih perlu diuji. Backend aplikasi utama masih Node.js/SQLite; modul operasional dan unggahan belum dipindahkan ke Supabase.
+Folder ini berisi halaman publik, ruang kerja, halaman akun, formulir, aset terbangun dan Pages Functions. Modul operasional serta penyimpanan privat sudah terhubung ke Supabase/Drive. Riwayat konfirmasi login, pergantian password dan sesi dipertahankan di bawah; itu tidak menggantikan pengujian refresh/kedaluwarsa nyata maupun UAT semua modul.
 
 ## Pengaturan Cloudflare Pages dari Git
 
@@ -14,13 +16,15 @@ Folder ini berisi halaman informasi publik, halaman masuk `/portal/`, serta Page
 | Root directory (advanced) | `site-info` |
 | Build command | `exit 0` |
 | Build output directory | `dist` |
-| Environment variables | Tidak diperlukan untuk halaman informasi |
+| Environment variables | Halaman statis tidak memerlukan secret; fungsi akun/operasional memerlukan konfigurasi runtime di bawah. |
 
-Berkas `dist/` sudah siap disajikan; tidak ada proses build atau pemasangan dependensi. Alamat produksi adalah `https://sph-portal.pages.dev/`: beranda `/`, halaman masuk `/portal/`, kebijakan privasi `/privacy/`, dan ketentuan penggunaan `/terms/`.
+Berkas `dist/` dibangun sebelum push; Cloudflare menyajikannya tanpa build dependensi tambahan. Alamat produksi adalah `https://bpbesakih.com/`; `sph-portal.pages.dev` dan `www` mengalihkan ke sana. Beranda `/`, akun `/portal/`, ruang kerja `/app/`, privasi `/privacy/`, ketentuan `/terms/` serta bukti Search Console tetap tersedia.
 
 Penerapan publik dilakukan sendiri oleh pengelola melalui dashboard Cloudflare setelah meninjau halaman. Commit/push saja belum menyelesaikan konfigurasi Pages atau penerapan backend.
 
 ## Backend akun Cloudflare
+
+Bagian ini mempertahankan riwayat penyiapan akun 16 Oktober 2026; pembatasan rute dan ketersediaan modul pada tahap tersebut telah dilanjutkan oleh rilis operasional.
 
 `functions/api/auth/[action].js` meneruskan request ke `lib/portal-auth.mjs`. `_routes.json` hanya mengaktifkan Functions pada `/api/auth/*`; halaman `/`, `/privacy/`, `/terms/`, serta bukti Search Console tetap disajikan sebagai aset statis. Source backend berada di luar `dist/`. Tidak ada rahasia dalam source atau bundel aset publik. Push dapat memicu deployment otomatis yang sudah dikonfigurasi pengelola; keberhasilan deployment dan runtime harus diperiksa terpisah.
 
@@ -40,7 +44,7 @@ Migrasi Supabase 001–008 sudah dikonfirmasi diterapkan. Pada 16 Oktober 2026, 
 | Nama | Jenis | Nilai/purpose |
 |---|---|---|
 | `PORTAL_ORIGIN` | Text | `https://bpbesakih.com` |
-| `PORTAL_LEGACY_ORIGIN` | Text, opsional | `https://sph-portal.pages.dev`; hapus sesudah masa transisi domain selesai |
+| `PORTAL_LEGACY_ORIGIN` | Opsional di kode, tidak aktif di Production | Dihapus pada 24 Oktober 2026; jangan isi kembali untuk deployment normal. |
 | `SUPABASE_URL` | Text | `https://mcblosxtuhgxbgyrhfhm.supabase.co` |
 | `SUPABASE_SECRET_KEY` | Secret | Key `sb_secret_…` yang mengizinkan pemanggilan backend/Edge Function; isi langsung dari dashboard Supabase. |
 | `SUPABASE_PUBLISHABLE_KEY` | Text atau Secret | Key `sb_publishable_…` untuk Auth dan RPC dengan JWT pengguna; tetap konfigurasi backend. |
@@ -103,6 +107,6 @@ Bukti ini mengonfirmasi login nyata, keadaan akun sesudah langkah ganti password
 
 Google Search Console sudah mengonfirmasi kepemilikan properti URL-prefix `https://sph-portal.pages.dev/` melalui berkas HTML di atas. Google Auth Platform menampilkan status OAuth **In production**. Verifikasi Branding belum selesai: pesan Google meminta jeda 24 jam setelah verifikasi kepemilikan sebelum mencoba ulang. Status produksi OAuth tidak berarti portal operasional atau Branding sudah disetujui.
 
-## Transisi domain
+## Transisi domain (selesai)
 
-`PORTAL_LEGACY_ORIGIN` menerima satu origin HTTPS tambahan secara eksplisit. Browser harus mengirim permintaan perubahan dari origin yang sama dengan URL permintaan, meskipun kedua domain terdaftar. Cookie tetap `__Host-`, tanpa atribut Domain, sehingga pengguna masuk terpisah di setiap domain. Setelah domain baru bisa dipakai seluruh jaringan, aktifkan pengalihan alamat lama dan hapus variabel legacy pada deployment berikutnya.
+Pada 22 Oktober, `PORTAL_LEGACY_ORIGIN` dipakai sementara untuk satu origin HTTPS tambahan; cookie tetap host-only dan pemeriksaan origin/CSRF tetap berlaku. Pengalihan alamat lama sudah aktif dan variabel tersebut dihapus dari Production pada 24 Oktober. Dukungan opsional di kode dipertahankan, tetapi bukan konfigurasi aktif. Lihat [riwayat migrasi domain](../docs/DOMAIN-MIGRATION-2026-10-22.md).

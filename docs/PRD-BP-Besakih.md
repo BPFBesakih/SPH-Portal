@@ -1,5 +1,7 @@
 # PRD — HRIS BP Besakih
 
+> **Acuan status 25 Oktober 2026:** dokumen ini mempertahankan kebutuhan dasar 15 Oktober. Keputusan berikutnya, termasuk Superadmin berakses penuh/IT-admin terpisah, Pengadaan, foto/GPS laporan, formulir bertoken dan PWA, dirangkum di [konteks proyek](KONTEKS-PROYEK.md). Tabel cakupan, kebijakan admin dan keputusan terbuka di versi awal tidak boleh dianggap sebagai inventaris fitur/status produksi terbaru.
+
 **Versi:** 1.0  
 **Tanggal:** 15 Oktober 2026  
 **Cakupan:** Login & Hak Akses, Modul SDM, dan Modul Keamanan  

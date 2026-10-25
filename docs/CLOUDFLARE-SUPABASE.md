@@ -1,5 +1,15 @@
 # Deploy seluruh modul ke Cloudflare + Supabase
 
+## Acuan terkini — 25 Oktober 2026
+
+Produksi aktif di [bpbesakih.com/app/](https://bpbesakih.com/app/), menggunakan Pages/Functions, Supabase Auth/PostgreSQL/Edge Functions dan Drive privat. Domain lama mengalihkan ke domain utama; `PORTAL_LEGACY_ORIGIN` telah dihapus dari Production. PWA, Pengadaan, peserta pelatihan sekaligus, Laporan Cepat, Coaching native, folder Drive per modul dan optimasi performa sudah memiliki catatan rilis. Website publik lengkap masih pekerjaan lokal.
+
+Kebijakan 19 Oktober menetapkan Superadmin berakses penuh dan IT-admin berakses administratif terpisah; penghapusan kegiatan mengikuti role Superadmin. Keterangan lama tentang role sistem yang dapat diubah bebas, pengecualian username, 48 tabel atau 157 calon impor di bawah adalah keadaan historis. Jumlah tabel/data dan versi Edge aktif harus diperiksa ulang, bukan diturunkan dari `modules_revision=20261016.1`.
+
+Sebelum build/deploy berikutnya, baca [konteks proyek](KONTEKS-PROYEK.md), terutama pemisahan source Git, patch backend aktif dan pekerjaan lokal. Sebagian backend telah diterapkan terarah dari source produksi; build penuh dari checkout lama dapat menghilangkan patch tersebut. Build lokal bukan deployment. Untuk perubahan fitur, urutan umumnya migrasi aditif → backend → Pages → verifikasi.
+
+## Riwayat migrasi awal — 16 Oktober 2026
+
 Pada 16 Oktober 2026, migrasi produksi berhasil diterapkan, `portal-api` versi 2 aktif, dan commit `492e74f` berhasil diterbitkan Cloudflare. Pemeriksaan publik `/app/` menghasilkan HTTP 200, `/api/health` menghasilkan HTTP 200 dengan `modules_revision=20261016.1`, serta `/api/portal/me` tanpa sesi ditolak HTTP 401. Fingerprint akun sebelum/sesudah migrasi identik; 157 calon impor tetap PENDING, enam izin SUPER_ADMIN tetap sama, dan belum ada profil pegawai aktif yang dibuat dari calon impor.
 
 Validasi lokal: 109 tes Node, 17 kelompok integrasi PostgreSQL/paket Edge, empat kelompok browser aplikasi lengkap, serta tujuh kelompok browser akun lulus. Koneksi database produksi dibuktikan health check; login produksi seluruh modul, unggahan nyata, kamera/GPS perangkat, serta beban operasional masih memerlukan pengujian pengguna sesuai role.

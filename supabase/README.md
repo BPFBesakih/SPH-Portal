@@ -1,8 +1,12 @@
-# Persiapan backend Supabase
+# Backend Supabase SPH-Portal
+
+**Acuan 25 Oktober 2026:** produksi sudah memakai Supabase Auth/PostgreSQL/Edge Functions bersama Cloudflare Pages dan Google Drive privat. Node.js/SQLite adalah jalur lokal. Modul operasional, Pengadaan, Laporan Cepat dan Coaching native sudah mempunyai catatan penerapan. Ringkasan status, batas pengujian, dan perbedaan source lokal/produksi ada di [konteks proyek](../docs/KONTEKS-PROYEK.md).
+
+Bagian berikut adalah **riwayat penyiapan**, bukan konfigurasi yang perlu dijalankan ulang. Catatan awal minimum password 12 karakter, role `itadmin` sebagai Super Admin, 48 tabel dan 157 calon staging telah diikuti perubahan: password minimal enam karakter pada 18 Oktober, pemisahan Superadmin/IT-admin pada 19 Oktober, serta migrasi modul/formulir. Jangan memakai hitungan atau setup awal untuk menimpa keadaan live. Versi fungsi, schema, grants, sumber backend dan konfigurasi dashboard harus dibaca sebelum penerapan berikutnya.
 
 Migrasi operasional `20261016000900_operational_modules.sql` serta Edge Function `portal-api` melanjutkan fondasi akun di dokumen ini. Sebanyak 48 tabel privat dan lima view identitas mendukung seluruh modul, tanpa memberi role baru otomatis kepada akun yang sudah ada. Lihat [panduan produksi lengkap](../docs/CLOUDFLARE-SUPABASE.md). Bagian berikut mempertahankan riwayat verifikasi tahap penyiapan.
 
-Backend aplikasi utama masih Node.js/SQLite. Berkas di sini menyiapkan komponen Supabase secara bertahap; keberhasilan satu komponen tidak menyelesaikan migrasi aplikasi.
+Pada tahap awal yang didokumentasikan berikut, aplikasi masih memakai Node.js/SQLite dan komponen Supabase disiapkan bertahap. Status itu sudah digantikan penerapan produksi yang dirangkum di atas.
 
 ## Hasil dashboard 16 Oktober 2026
 

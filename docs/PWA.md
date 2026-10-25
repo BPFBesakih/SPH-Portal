@@ -1,5 +1,7 @@
 # Aplikasi terpasang (PWA)
 
+**Status 25 Oktober 2026: sudah dirilis.** Commit `e30ef6ee03f115a87d24db03f3f1eae7e221810f` dipush pada 23 Oktober dan menjadi source deployment sukses 24 Oktober. Pemeriksaan HTTP 25 Oktober mengonfirmasi `/app/` menautkan manifest, serta `/app/manifest.webmanifest` dan `/app/sw.js` memberi HTTP 200 dengan tipe konten sesuai. Pemasangan langsung pada perangkat Android/iPhone belum diuji. Lihat [konteks proyek](KONTEKS-PROYEK.md).
+
 Ruang kerja `/app/` dapat dipasang sebagai aplikasi di HP dan komputer: ikon sendiri di layar utama dan jendela sendiri tanpa bilah alamat. Isinya tetap ruang kerja yang sama, dan semua data tetap diambil dari server.
 
 ## Memasang
@@ -64,6 +66,6 @@ Pemeriksaan browser memakai profil sementara dan server lokal, tanpa akun atau d
 node scripts/verify-pwa-ui.mjs <path-ke-playwright/index.mjs> <path-ke-browser>
 ```
 
-Hasil verifikasi lokal 23 Oktober 2026: seluruh 202 pengujian Node.js lulus, termasuk sembilan pengujian PWA. Lima pemeriksaan PWA di browser Chromium/Edge juga lulus: pendaftaran worker dengan CSP produksi, manifest tanpa kesalahan pemasangan, halaman offline di desktop dan layar HP, pemulihan otomatis saat online, serta lingkup worker yang tidak mengambil alih halaman akun. Sebanyak 28 pemeriksaan regresi browser portal juga lulus. Screenshot berada di `test-results/pwa-ui/`. Pemasangan langsung pada perangkat Android dan iPhone belum diuji; penerapan produksi belum dilakukan.
+Hasil verifikasi 23 Oktober 2026: folder kerja lokal lulus 225 pengujian Node.js, sedangkan paket rilis terpisah berbasis source produksi lulus 202 pengujian, termasuk sembilan pengujian PWA. Lima pemeriksaan PWA di browser Chromium/Edge juga lulus: pendaftaran worker dengan CSP produksi, manifest tanpa kesalahan pemasangan, halaman offline di desktop dan layar HP, pemulihan otomatis saat online, serta lingkup worker yang tidak mengambil alih halaman akun. Sebanyak 28 pemeriksaan regresi browser portal juga lulus. Jumlah tes berbeda karena cakupan source lokal dan rilis berbeda; angka tersebut tidak dijumlahkan. Screenshot berada di `test-results/pwa-ui/`. Status penerapan produksi terbaru tercatat di awal dokumen; pemasangan Android/iPhone masih memerlukan pengujian perangkat fisik.
 
 Referensi: [syarat pemasangan PWA](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable), [manifest aplikasi web](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest).

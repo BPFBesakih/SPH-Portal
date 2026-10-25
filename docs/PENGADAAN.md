@@ -1,5 +1,7 @@
 # Modul Pengadaan (MVP pertama)
 
+**Pembaruan status 25 Oktober 2026:** modul sudah diterbitkan pada [domain utama](https://bpbesakih.com/app/). Pengaturan atasan, kewenangan Sekban/Wakil dan akses Pos RKA telah mempunyai catatan penerapan 19 Oktober; prasyarat/data terkini tetap perlu ditinjau. Audit 18 Oktober mencatat empat temuan kontrol (cakupan unit Pos RKA, nota melebihi persetujuan, penerimaan sebagian, dan tahun RKA) yang belum memiliki bukti penutupan dalam catatan yang diperiksa. Lihat [tindak lanjut proyek](KONTEKS-PROYEK.md#11-tindak-lanjut-yang-belum-boleh-dianggap-selesai). Alur normal/tes lama yang lulus bukan bukti penutupan temuan tersebut. Kebijakan Superadmin/IT-admin terbaru juga menggantikan uraian role awal di bawah.
+
 Modul Pengadaan memindahkan alur PR dari kertas ke portal: pemohon mengajukan PR dengan akun portalnya, atasan mengetahui, Keuangan memverifikasi Pos RKA, Sekban atau Kaban menyetujui, lalu Purchasing memeriksa kelengkapan, membandingkan harga, menerbitkan PO/SPK atau surat penunjukan, dan mencatat pembelian serta serah terima. Rujukan aturan: PRD Modul Pengadaan (kode aturan `ATR-*` dipakai di pesan kesalahan dan komentar kode).
 
 ## Yang termasuk MVP ini
@@ -30,6 +32,8 @@ Migrasi membuat lima role baru tanpa memberikannya ke akun mana pun. Role lama (
 | `PURCHASE_ADMIN` | Pengelola Pengadaan | pengaturan, Plh, pengalihan penyetuju, vendor, Pos RKA, baca PR | Seluruh organisasi |
 
 Atasan, Sekban, dan Kaban tidak memerlukan izin khusus untuk menyetujui: tahap ditujukan ke pegawai tertentu dan ruang kerja Pengadaan muncul bila ada tahap yang menunggu mereka. Beri mereka `PURCHASE_REQUESTER` bila mereka juga mengajukan PR.
+
+Wakil Sekretaris Badan dapat diberi kewenangan Sekban yang setara melalui `officials.sekban_deputy_position_id`. Sekban atau Wakil dapat memutuskan tahap bersama, dan nama pelaksana sebenarnya tercatat pada riwayat serta dokumen tanpa penanda Plh. PR dari Sekban maupun Wakil sendiri naik ke Kaban untuk persetujuan akhir. Ketiga jabatan harus memiliki pemegang aktif yang berbeda dan tunggal; kewenangan bersama tidak mencakup tahap Kaban.
 
 ## Penerapan ke produksi (berurutan)
 
