@@ -7,6 +7,7 @@ import {loadPage,pageTitles,employeeRows,importRows,documentRows,incidentRows,lo
 import {handleFormAction} from './forms.js';
 import {bindBriefings,handleBriefingAction} from './briefings.js';
 import {openCoachingShareLink} from './coaching-link-management.js';
+import {openReportExport} from './report-exports.js';
 import {openDetail,closeDetails} from './details.js';
 import {purchasingNav,purchasingRoutes,purchasingAllowed,loadPurchasingOverview,invalidatePurchasingOverview,handlePurchasingAction,bindPurchasingPage,afterPurchasingPage,purchasingNotices,resetPurchasingState} from './purchasing.js';
 import {createNavigationQueue} from './navigation-queue.js';
@@ -130,6 +131,7 @@ document.addEventListener('click',async event=>{
     if(action==='switch-hr'||action==='switch-security'||action==='switch-purchasing'){state.module=action.slice(7);const route={hr:'dashboard',security:'security',purchasing:'purchasing'}[state.module];if(location.hash===`#${route}`)await navigate();else location.hash=route;return;}
     if(action.startsWith('go-')){const route={'go-employees':'employees','go-roster':'roster','go-config':'roster-settings'}[action];if(route)location.hash=route;return;}
     if(await handleBriefingAction(action,el))return;
+    if(action==='export-patroli'||action==='export-coaching'){openReportExport(action==='export-patroli'?'patroli':'coaching');return;}
     if(await handleAnnouncementAction(action,el))return;
     if(await handlePurchasingAction(action,el))return;
     if(action==='coaching-share-link'){const previous=el.disabled;el.disabled=true;try{await openCoachingShareLink();}finally{el.disabled=previous;}return;}
