@@ -2,7 +2,7 @@
 
 **Diperbarui: 26 Oktober 2026 (UTC+8).** Dokumen ini merangkum produk, keputusan, arsitektur, rilis, kondisi operasional, pekerjaan lokal, dan tindak lanjut dalam satu berkas yang dapat dibaca tanpa percakapan sebelumnya. Ini ringkasan konteks terverifikasi, bukan salinan seluruh percakapan atau jaminan semua alur produksi sudah diuji.
 
-Tambahan 26 Oktober: fitur **Briefing Pagi (Wewarah Semeng)** disiapkan pada cabang `codex/briefing-pagi` untuk peninjauan dan rilis terarah. Rekap/foto pegawai mengikuti unit penempatan utama aktif; SDM mengelola sesuai scope. Form native bertautan memuat nama, tanggal, bidang/jabatan resmi, urusan, pegawai tidak hadir, materi/kendala, dan foto kamera. Rincian dan verifikasi ada di [BRIEFING-PAGI.md](BRIEFING-PAGI.md). Migrasi dan backend produksi belum diterapkan; master, layanan Google lama, dan pekerjaan lokal lain dipertahankan.
+Tambahan 26 Oktober: **Briefing Pagi (Wewarah Semeng) sudah dirilis ke produksi**. Menu tersedia di semua ruang kerja; rekap/foto mengikuti unit penempatan utama aktif pegawai dan SDM mengelola sesuai scope. Rilis produksi 26 Oktober 2026, 09.53 WITA: Cloudflare Pages deployment `21fbc84d-7cf1-41b7-abe0-3b1d1cf8b52d` berhasil pada source `1dda71adaf33f2734e15063c78545a818540af18`. `portal-api` versi 20 mempertahankan baseline aktif versi 19 dengan tujuh perubahan terarah; `briefing-native` versi 1 aktif. Migrasi `morning_briefings` tercatat sebagai `20261026015021`. Satu tautan formulir sudah diaktifkan secara privat. Halaman dan context produksi HTTP 200; health 200; tautan salah 404; origin asing 403; kiriman tidak lengkap 422; daftar dan tautan rekap tanpa login 401. Ketiga tabel baru memakai RLS dan tidak memiliki grants langsung ke klien. Tidak ada briefing/foto uji yang dibuat; fingerprint 69 akun tetap sama. Kamera pada HP nyata dan pengisian oleh pegawai tetap perlu uji pengguna. Rincian ada di [BRIEFING-PAGI.md](BRIEFING-PAGI.md).
 
 ## 1. Ringkasan terkini
 
@@ -14,10 +14,10 @@ SPH-Portal adalah aplikasi internal **Badan Pengelola Fasilitas Kawasan Suci Pur
 | Infrastruktur | Cloudflare Pages/Functions, Supabase Auth/PostgreSQL/Edge Functions di jalur Singapura, dan Google Drive privat. |
 | PWA | Kode sudah dipush pada 23 Oktober; manifest dan service worker produksi terkonfirmasi tersedia pada 25 Oktober. Data operasional tetap memerlukan internet. |
 | Keamanan domain | HSTS 30 hari, SPF/DMARC untuk domain yang belum mengirim email, DNSSEC, penonaktifan RUM, dan penghapusan origin lama diterapkan pada 24 Oktober. HTTP/DNS publik diperiksa ulang pada 25 Oktober. |
-| Formulir bersama | Laporan Cepat Keamanan dan Coaching native telah diterbitkan; akses pengiriman memerlukan tautan bertoken. |
+| Formulir bersama | Laporan Cepat Keamanan, Coaching native dan Briefing Pagi telah diterbitkan; akses pengiriman memerlukan tautan bertoken. |
 | Website publik Besakih yang lebih lengkap | Implementasi/editor konten masih pekerjaan lokal; belum ada bukti rilisnya ke produksi. Berbeda dari halaman informasi publik yang sudah aktif. |
 | Repo | [BPFBesakih/SPH-Portal](https://github.com/BPFBesakih/SPH-Portal), publik, cabang utama `master`. |
-| Baseline kode rilis | `e30ef6ee03f115a87d24db03f3f1eae7e221810f` — PWA, 23 Oktober 2026. Ini baseline sebelum pembaruan dokumentasi 25 Oktober, bukan klaim bahwa HEAD selamanya tetap pada commit tersebut. |
+| Baseline kode rilis | `1dda71adaf33f2734e15063c78545a818540af18` — Briefing Pagi, 26 Oktober 2026. PWA tetap tersedia sejak `e30ef6e`; commit dokumentasi selanjutnya tidak mengubah baseline kode fitur ini. |
 | Folder kerja utama | Masih di `3a988e3f68437892d00c96391903c3db7a5944fc` saat inventarisasi; tertinggal 15 commit dari baseline rilis dan memuat banyak perubahan lokal. Jangan menyamakan keadaan ini dengan produksi. |
 
 ## 2. Cara membaca status dan sumber

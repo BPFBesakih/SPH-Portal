@@ -1,6 +1,8 @@
 # Briefing Pagi (Wewarah Semeng)
 
-Status 26 Oktober 2026 (WITA): **tersedia pada cabang `codex/briefing-pagi`, belum diterapkan ke produksi**. Form Apps Script yang diberikan SDM dipakai sebagai acuan isian; layanan lama dan data historisnya tetap tersedia.
+Status 26 Oktober 2026 (WITA): **sudah aktif di produksi pada [bpbesakih.com/app/#briefings](https://bpbesakih.com/app/#briefings)**. Form Apps Script yang diberikan SDM dipakai sebagai acuan isian; layanan lama dan data historisnya tetap tersedia.
+
+Rilis produksi 26 Oktober 2026, 09.53 WITA: Cloudflare Pages deployment `21fbc84d-7cf1-41b7-abe0-3b1d1cf8b52d` berhasil pada source `1dda71adaf33f2734e15063c78545a818540af18`. `portal-api` versi 20 mempertahankan baseline aktif versi 19 dengan tujuh perubahan terarah; `briefing-native` versi 1 aktif. Migrasi `morning_briefings` tercatat sebagai `20261026015021`. Satu tautan formulir sudah diaktifkan secara privat. Halaman dan context produksi HTTP 200; health 200; tautan salah 404; origin asing 403; kiriman tidak lengkap 422; daftar dan tautan rekap tanpa login 401. Ketiga tabel baru memakai RLS dan tidak memiliki grants langsung ke klien. Tidak ada briefing/foto uji yang dibuat; fingerprint 69 akun tetap sama. Kamera pada HP nyata dan pengisian oleh pegawai tetap perlu uji pengguna.
 
 ## Perilaku
 
@@ -43,9 +45,9 @@ Hasil verifikasi salinan bersih di atas master `3f05611`, 26 Oktober 2026:
 
 PGlite untuk verifier baru memakai `scripts/briefing-tools/node_modules/@electric-sql/pglite` versi `0.3.14` (dependensi fixture lokal, tidak dikirim ke browser). Pasang fixture dengan `npm install --prefix scripts/briefing-tools --no-save --no-package-lock @electric-sql/pglite@0.3.14`. Lokasi lain dapat diberikan sebagai argumen pertama verifier. Preview terisolasi: `node scripts/preview-briefings.mjs`, URL `http://127.0.0.1:4614/#briefings`; akun fiktif `sdm.preview` / `pegawai.preview`, password `Preview2026!`. Preview memakai database memori dan tidak membuka `data/portal.sqlite`.
 
-## Rilis berikutnya
+## Prosedur rilis
 
-1. Cocokkan source backend portal produksi dengan riwayat patch aktif; gunakan catatan `KONTEKS-PROYEK.md`. **Jangan deploy keseluruhan workspace atau mengganti `portal-api` dengan bundle lokal lama.** Bundle `supabase/deploy/portal-api/index.ts` belum dibangun ulang untuk briefing pada pekerjaan ini.
+1. Cocokkan source backend portal produksi dengan riwayat patch aktif; gunakan catatan `KONTEKS-PROYEK.md`. **Jangan deploy keseluruhan workspace atau mengganti `portal-api` dengan bundle lokal lama.** Bundle `supabase/deploy/portal-api/index.ts` kini berisi kandidat yang telah diterapkan sebagai versi 20, ditambal langsung dari versi 19 produksi. Regenerasi penuh dari source modular tetap memerlukan rekonsiliasi patch lama.
 2. Siapkan perubahan portal API yang mencakup route briefing, katalog izin, dan adapter/otorisasi foto di atas baseline produksi yang sudah diverifikasi. Jalankan kembali verifikasi transaksi serta akses lintas unit pada kandidat bundle itu.
 3. Terapkan migrasi aditif `20261026004937_morning_briefings.sql`, deploy kandidat `portal-api` yang telah dicocokkan, lalu deploy `briefing-native` dengan secret server yang sudah ada. Source/bundle native disiapkan melalui `node scripts/generate-cloud-modules.mjs` dan `node scripts/build-native-briefing.mjs`.
 4. Rilis frontend terarah: menu/halaman rekap dan modulnya; callback opsional employee picker; form `/briefing-pagi/`; Functions proxy; route exclusion, redirect, serta header no-store/noindex/no-referrer. Aset frontend pada cabang ini dibangun dari salinan master bersih dengan perubahan briefing saja; pekerjaan website/editor dan perubahan lokal lain tidak disertakan.
