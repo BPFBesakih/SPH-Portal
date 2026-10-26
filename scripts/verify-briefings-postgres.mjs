@@ -4,9 +4,17 @@ import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
 import {insert,one,all,today,now} from '../supabase/functions/_shared/portal/db.mjs';
-import {routeOperation} from '../supabase/functions/_shared/portal/router.mjs';
-import {fileAllowed} from '../supabase/functions/_shared/portal/files.mjs';
 import {driveFixture} from '../tests/helpers/drive-fixture.mjs';
+
+let routeOperation,fileAllowed;
+if(process.argv[3]){
+  let candidate=readFileSync(resolve(process.argv[3]),'utf8');
+  candidate=candidate.replace('import { withSupabase } from "npm:@supabase/server@1";','const withSupabase=(mode,handler)=>{if(mode.auth!=="secret")throw new Error("Unexpected auth mode");return handler;};').replace('import postgres from "npm:postgres@3.4.7";','const postgres=()=>{throw new Error("Unexpected external database connection");};');
+  ({routeOperation,fileAllowed}=await import(`data:text/javascript;base64,${Buffer.from(candidate+'\nexport {routeOperation,fileAllowed};').toString('base64')}`));
+}else{
+  ({routeOperation}=await import('../supabase/functions/_shared/portal/router.mjs'));
+  ({fileAllowed}=await import('../supabase/functions/_shared/portal/files.mjs'));
+}
 
 const {PGlite}=await import(pathToFileURL(resolve(process.argv[2]||'scripts/briefing-tools/node_modules/@electric-sql/pglite/dist/index.js')).href);
 const pg=new PGlite(),drive=driveFixture(),realFetch=globalThis.fetch,priorDeno=globalThis.Deno,token='b'.repeat(64);let checks=0;

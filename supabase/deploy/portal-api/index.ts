@@ -178,12 +178,12 @@ function storageError(stage,status,reason){
 const driveModuleFolders=Object.freeze({
  sop:'SPH-Portal-SOP',pelatihan:'SPH-Portal-Pelatihan',pegawai:'SPH-Portal-Pegawai',
  patroli:'SPH-Portal-Patroli',kejadian:'SPH-Portal-Kejadian',informasi:'SPH-Portal-Informasi',
- pengadaan:'SPH-Portal-Pengadaan',website:'SPH-Portal-Website',coaching:'SPH-Portal-Coaching',
+ pengadaan:'SPH-Portal-Pengadaan',website:'SPH-Portal-Website',coaching:'SPH-Portal-Coaching',briefing:'SPH-Portal-Briefing',
 });
 function driveModuleForOperation(path,body={}){
  const resource=typeof path==='string'?path.split('/')[0]:'';
  if(resource==='attachments')return {employee:'pegawai',logbook:'patroli',incident:'kejadian'}[body?.type]||null;
- const module={documents:'sop',training:'pelatihan',employees:'pegawai',logbook:'patroli',incidents:'kejadian',announcements:'informasi',purchasing:'pengadaan',website:'website',coaching:'coaching'}[resource];
+ const module={briefings:'briefing',documents:'sop',training:'pelatihan',employees:'pegawai',logbook:'patroli',incidents:'kejadian',announcements:'informasi',purchasing:'pengadaan',website:'website',coaching:'coaching'}[resource];
  return typeof module==='string'?module:null;
 }
 const driveAccessTokens=new Map();
@@ -2650,7 +2650,7 @@ async function purchasingPendingCount(db, user) {
 }
 
 // supabase/functions/_shared/portal/files.mjs
-var attachments = [["employee_files", "employee_id", "employee"], ["employee_contracts", "employee_id", "contract"], ["document_versions", "document_id", "document"], ["training_materials", "training_event_id", "material"], ["participant_certificates", "training_participant_id", "certificate"], ["logbook_files", "logbook_entry_id", "logbook"], ["incident_files", "incident_id", "incident"], ["announcement_files", "announcement_id", "announcement"], ["purchase_attachments", "request_id", "purchase"], ["coaching_files", "coaching_session_id", "coaching"]];
+var attachments = [["briefing_files", "briefing_id", "briefing"], ["employee_files", "employee_id", "employee"], ["employee_contracts", "employee_id", "contract"], ["document_versions", "document_id", "document"], ["training_materials", "training_event_id", "material"], ["participant_certificates", "training_participant_id", "certificate"], ["logbook_files", "logbook_entry_id", "logbook"], ["incident_files", "incident_id", "incident"], ["announcement_files", "announcement_id", "announcement"], ["purchase_attachments", "request_id", "purchase"], ["coaching_files", "coaching_session_id", "coaching"]];
 async function claimFile(db, user, id) {
   const f = await get(db, "files", id);
   assert(f.status === "AVAILABLE" && f.uploaded_by === user.id, "Berkas tidak tersedia untuk dilampirkan.", 403);
@@ -2678,12 +2678,13 @@ async function fileStorageModule(db, id) {
 async function linkedFiles(db, type, id) {
   const entry = attachments.find((x) => x[2] === type);
   assert(entry, "Jenis lampiran tidak valid.");
-  const metadata = type === "announcement" ? ",l.usage_kind,l.caption" : ["logbook", "incident"].includes(type) ? ",l.captured_at,l.capture_source" : "";
+  const metadata = type === "announcement" ? ",l.usage_kind,l.caption" : ["logbook", "incident", "briefing"].includes(type) ? ",l.captured_at,l.capture_source" : "";
   return await all(db, `SELECT f.id,f.original_name,f.mime_type,f.size_bytes,l.id link_id${metadata} FROM ${entry[0]} l JOIN files f ON f.id=l.file_id WHERE l.${entry[1]}=? AND f.status='AVAILABLE'`, id);
 }
 async function fileAllowed(db, user, id) {
   for (const material of await all(db, "SELECT tm.training_event_id,v.document_id FROM training_materials tm JOIN document_versions v ON v.id=tm.document_version_id WHERE v.file_id=?", id)) if (await trainingAllowed(db, user, "download", await get(db, "training_events", material.training_event_id)) && await documentAllowed(db, user, "download", await get(db, "documents", material.document_id))) return true;
   for (const [table, key, type] of attachments) for (const link of await all(db, `SELECT * FROM ${table} WHERE file_id=?`, id)) {
+    if (type === "briefing" && await briefingAllowed(db, user, "read", await get(db, "morning_briefings", link.briefing_id))) return true;
     if (["employee", "contract"].includes(type) && await can(db, user, "hr.employee_files.read", await employeeContext(db, link[key]))) return true;
     if (type === "document") {
       const doc = await get(db, "documents", link.document_id);
@@ -4933,6 +4934,140 @@ async function publicQuickReport(db, action, b, dataDir, requestId) {
   return quickReport_receipt(row);
 }
 
+async function briefingAllowed(db, user, action, row) {
+  if (await can(db, user, 'hr.briefings.manage', row)) return true;
+  if (action !== 'read' || row.deleted_at) return false;
+  if (await can(db, user, 'hr.briefings.read', row)) return true;
+  if (!user.employee_id) return false;
+  const key = `briefing-placement:${user.id}`, cache = db.authorizationCache;
+  const placements = cache?.has(key) ? cache.get(key) : await all(db, `SELECT p.org_unit_id FROM employees e JOIN employee_placements ep ON ep.employee_id=e.id
+    JOIN positions p ON p.id=ep.position_id AND p.is_active=1 JOIN org_units u ON u.id=p.org_unit_id AND u.is_active=1
+    WHERE e.id=? AND e.is_active=1 AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)`, user.employee_id, today(), today());
+  cache?.set(key, placements);
+  return placements.length === 1 && placements[0].org_unit_id === row.org_unit_id;
+}
+
+async function briefingRoutes({db, user, p, method, body: b = {}, url}) {
+  if (p[0] !== 'briefings') return undefined;
+  if (p[1] === 'form-link') {
+    assert(p.length === 2, 'Alamat tidak ditemukan.', 404);
+    const active = await one(db, 'SELECT * FROM briefing_links WHERE is_active=1 AND revoked_at IS NULL');
+    if (method === 'GET') {
+      assert(user.employee_id || await has(db, user, 'hr.briefings.manage'), 'Hubungkan akun dengan data pegawai melalui SDM untuk mengisi briefing.', 403);
+      if (!active) return {
+        available: false
+      };
+      assert(typeof active.share_token === 'string' && digest(active.share_token) === active.token_hash, 'Tautan belum tersedia.', 503);
+      return {
+        available: true,
+        label: active.label,
+        token: active.share_token,
+        id: active.id,
+        row_version: active.row_version
+      };
+    }
+    assert(await can(db, user, 'hr.briefings.manage'), 'Hanya pengelola SDM seluruh unit yang dapat mengelola tautan.', 403);
+    if (method === 'POST') return await tx(db, async () => {
+      assert(active ? b.id === active.id && b.row_version === active.row_version : !b.id, 'Tautan sudah berubah. Buka kembali pengelolaan tautan.', 409);
+      assert(['create', 'rotate', 'revoke'].includes(b.action), 'Tindakan tautan tidak valid.');
+      assert(b.action !== 'create' || !active, 'Tautan aktif sudah tersedia.', 409);
+      assert(b.action === 'create' || active, 'Tautan aktif tidak ditemukan.', 409);
+      if (active) {
+        await update(db, 'briefing_links', active.id, b.row_version, {
+          is_active: 0,
+          revoked_at: now()
+        });
+        await audit(db, user, 'REVOKE', 'briefing_links', active.id);
+      }
+      if (b.action === 'revoke') return {
+        available: false
+      };
+      const token = randomBytes(32).toString('hex'), row = await insert(db, 'briefing_links', {
+        token_hash: digest(token),
+        share_token: token,
+        label: 'Briefing Pagi (Wewarah Semeng)',
+        is_active: 1,
+        created_by: user.id
+      });
+      await audit(db, user, 'CREATE', 'briefing_links', row.id);
+      return {
+        available: true,
+        id: row.id,
+        row_version: row.row_version,
+        label: row.label,
+        token
+      };
+    });
+    assert(false, 'Metode tidak diizinkan.', 405);
+  }
+  if (method === 'GET' && p.length === 1) {
+    const includeArchived = url?.searchParams.get('archived') === '1';
+    const from = url?.searchParams.get('from'), to = url?.searchParams.get('to'), unit = url?.searchParams.get('unit'), search = url?.searchParams.get('search')?.trim().toLocaleLowerCase('id') || '';
+    if (from) date(from, 'Tanggal mulai');
+    if (to) date(to, 'Tanggal akhir');
+    assert(!(from && to) || from <= to, 'Rentang tanggal tidak valid.');
+    assert(search.length <= 200, 'Pencarian terlalu panjang.');
+    const rows = await asyncFilter(await all(db, `SELECT * FROM morning_briefings WHERE (?='' OR held_on>=?) AND (?='' OR held_on<=?) AND (?='' OR org_unit_id=?) ORDER BY held_on DESC,submitted_at DESC`, from || '', from || '', to || '', to || '', unit || '', unit || ''), async row => await briefingAllowed(db, user, 'read', row) && (includeArchived || !row.deleted_at) && (!search || [row.employee_name, row.department, row.section, row.briefing_notes].some(v => v.toLocaleLowerCase('id').includes(search))));
+    const units = await asyncFilter(await all(db, 'SELECT id,name FROM org_units WHERE is_active=1 ORDER BY name'), async u => await briefingAllowed(db, user, 'read', {
+      org_unit_id: u.id
+    }));
+    const current = await one(db, `SELECT count(*) n FROM employees e JOIN employee_placements ep ON ep.employee_id=e.id JOIN positions p ON p.id=ep.position_id JOIN org_units u ON u.id=p.org_unit_id WHERE e.id=? AND e.is_active=1 AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?) AND p.is_active=1 AND u.is_active=1`, user.employee_id, today(), today());
+    return {
+      items: await asyncMap(rows, async ({payload_hash, response_id, link_id, ...row}) => ({
+        ...row,
+        can_manage: await briefingAllowed(db, user, 'manage', row)
+      })),
+      units,
+      can_manage: await has(db, user, 'hr.briefings.manage'),
+      can_manage_link: await can(db, user, 'hr.briefings.manage'),
+      can_fill: Number(current?.n) === 1,
+      needs_placement: !await has(db, user, 'hr.briefings.manage') && Number(current?.n) !== 1
+    };
+  }
+  assert(p.length === 2, 'Alamat tidak ditemukan.', 404);
+  const row = await get(db, 'morning_briefings', p[1]);
+  if (method === 'GET') {
+    assert(await briefingAllowed(db, user, 'read', row), 'Akses briefing ditolak.', 403);
+    const {payload_hash, response_id, link_id, ...safe} = row;
+    return {
+      ...safe,
+      can_manage: await briefingAllowed(db, user, 'manage', row),
+      files: await linkedFiles(db, 'briefing', row.id)
+    };
+  }
+  assert(await briefingAllowed(db, user, 'manage', row), 'Akses pengelolaan briefing ditolak.', 403);
+  if (method === 'PATCH') return await tx(db, async () => {
+    const reason = text(b.reason, 'Alasan perubahan', 1000);
+    let changes;
+    if (b.action === 'archive') changes = {
+      deleted_at: now(),
+      deleted_by: user.id
+    }; else if (b.action === 'restore') changes = {
+      deleted_at: null,
+      deleted_by: null
+    }; else {
+      assert(!row.deleted_at, 'Pulihkan briefing sebelum mengubahnya.', 409);
+      const held = date(b.held_on, 'Tanggal briefing');
+      assert(held <= today(), 'Tanggal briefing tidak boleh di masa depan.');
+      changes = {
+        held_on: held,
+        section: text(b.section, 'Bagian / urusan', 200),
+        absent_notes: text(b.absent_notes, 'Pegawai yang tidak hadir', 3000),
+        briefing_notes: text(b.briefing_notes, 'Materi wewarah dan kendala', 10000)
+      };
+    }
+    const saved = await update(db, 'morning_briefings', row.id, b.row_version, changes);
+    await audit(db, user, b.action === 'archive' ? 'ARCHIVE' : b.action === 'restore' ? 'RESTORE' : 'UPDATE', 'morning_briefings', row.id, {
+      fields: Object.keys(changes)
+    }, reason);
+    return {
+      id: saved.id,
+      row_version: saved.row_version
+    };
+  });
+  assert(false, 'Metode tidak diizinkan.', 405);
+}
+
 async function routeOperation({ db, user, path, method, body = {}, query = "" }) {
   assert(typeof path === "string" && /^[a-z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path) && path.length <= 512, "Alamat API tidak valid.", 404);
   assert(["GET", "POST", "PATCH", "DELETE"].includes(method), "Metode tidak diizinkan.", 405);
@@ -4968,7 +5103,7 @@ async function routeOperation({ db, user, path, method, body = {}, query = "" })
     return { binary: true, data: Buffer3.from(data).toString("base64"), mime_type: file.mime_type, name: file.original_name, inline: url.searchParams.get("inline") === "1" && ["image/png", "image/jpeg"].includes(file.mime_type) };
   }
   const ctx = { db, user, p, method, body, url };
-  for (const handler of [quickReportManagement, announcementRoutes, hrRoutes, securityRoutes, rosterRoutes, adminRoutes, purchasingRoutes]) {
+  for (const handler of [briefingRoutes, quickReportManagement, announcementRoutes, hrRoutes, securityRoutes, rosterRoutes, adminRoutes, purchasingRoutes]) {
     const result = await handler(ctx);
     if (result !== void 0) return result;
   }
