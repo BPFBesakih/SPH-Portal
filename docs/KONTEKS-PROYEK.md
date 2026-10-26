@@ -1,6 +1,8 @@
 # Konteks lengkap proyek SPH-Portal
 
-**Diperbarui: 25 Oktober 2026 (UTC+8).** Dokumen ini merangkum produk, keputusan, arsitektur, rilis, kondisi operasional, pekerjaan lokal, dan tindak lanjut dalam satu berkas yang dapat dibaca tanpa percakapan sebelumnya. Ini ringkasan konteks terverifikasi, bukan salinan seluruh percakapan atau jaminan semua alur produksi sudah diuji.
+**Diperbarui: 26 Oktober 2026 (UTC+8).** Dokumen ini merangkum produk, keputusan, arsitektur, rilis, kondisi operasional, pekerjaan lokal, dan tindak lanjut dalam satu berkas yang dapat dibaca tanpa percakapan sebelumnya. Ini ringkasan konteks terverifikasi, bukan salinan seluruh percakapan atau jaminan semua alur produksi sudah diuji.
+
+Tambahan 26 Oktober: fitur **Briefing Pagi (Wewarah Semeng)** disiapkan pada cabang `codex/briefing-pagi` untuk peninjauan dan rilis terarah. Rekap/foto pegawai mengikuti unit penempatan utama aktif; SDM mengelola sesuai scope. Form native bertautan memuat nama, tanggal, bidang/jabatan resmi, urusan, pegawai tidak hadir, materi/kendala, dan foto kamera. Rincian dan verifikasi ada di [BRIEFING-PAGI.md](BRIEFING-PAGI.md). Migrasi dan backend produksi belum diterapkan; master, layanan Google lama, dan pekerjaan lokal lain dipertahankan.
 
 ## 1. Ringkasan terkini
 

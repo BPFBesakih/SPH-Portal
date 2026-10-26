@@ -2,6 +2,7 @@ import {Readable} from 'node:stream';
 import {binaryUploadType,readBinaryUpload,UploadBodyError} from './site-info/lib/upload-body.mjs';
 import {quickReportManagement,publicQuickReport,takeQuickReportSlot} from './lib/quick-reports.mjs';
 import {publicCoachingLink,takeCoachingLinkSlot} from './lib/coaching-links.mjs';
+import {briefingRoutes,publicBriefingLink,takeBriefingLinkSlot} from './lib/briefings.mjs';
 import {createServer} from 'node:http';
 import {readFileSync,existsSync,statSync} from 'node:fs';
 import {resolve,extname} from 'node:path';
@@ -44,8 +45,9 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       const url=new URL(req.url,'http://internal'),p=url.pathname.split('/').filter(Boolean).map(decodeURIComponent);const method=req.method;
       if(p[0]!=='api'){
         assert(['GET','HEAD'].includes(method),'Metode tidak diizinkan.',405);
-        const pathname=url.pathname==='/'?'/index.html':['/laporan-cepat','/laporan-cepat/'].includes(url.pathname)?'/quick-report.html':['/coaching','/coaching/'].includes(url.pathname)?'/coaching-link.html':url.pathname;
+        const pathname=url.pathname==='/'?'/index.html':['/laporan-cepat','/laporan-cepat/'].includes(url.pathname)?'/quick-report.html':['/coaching','/coaching/'].includes(url.pathname)?'/coaching-link.html':['/briefing-pagi','/briefing-pagi/'].includes(url.pathname)?'/briefing-link.html':url.pathname;
         assert(/^\/[a-zA-Z0-9/_-]+\.(html|js|css|svg|png|webp|ico|woff2|webmanifest)$/.test(pathname),'Halaman tidak ditemukan.',404);
+        if(pathname==='/briefing-link.html'){res.setHeader('X-Robots-Tag','noindex, nofollow');res.setHeader('Referrer-Policy','no-referrer');}
         const path=resolve(root,'public',`.${pathname}`);assert(path.startsWith(resolve(root,'public')+String.fromCharCode(process.platform==='win32'?92:47))&&existsSync(path)&&statSync(path).isFile(),'Halaman tidak ditemukan.',404);
         const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.woff2':'font/woff2','.webmanifest':'application/manifest+json'};res.writeHead(200,{'Content-Type':types[extname(path)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(method==='HEAD'?undefined:readFileSync(path));return;
       }
@@ -66,6 +68,12 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
         assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Asal permintaan tidak diizinkan.',403);
         const allowed=tx(db,()=>takeCoachingLinkSlot(db,req.socket.remoteAddress,p[1]));assert(allowed,'Terlalu banyak percobaan. Coba lagi beberapa menit kemudian.',429);
         const result=tx(db,()=>publicCoachingLink(db,p[1],body,dataDir,requestId));send(result);return;
+      }
+      if(p[0]==='briefing-link'){
+        assert(method==='POST'&&p.length===2&&!url.search,'Alamat tidak ditemukan.',404);
+        assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Asal permintaan tidak diizinkan.',403);
+        const allowed=tx(db,()=>takeBriefingLinkSlot(db,req.socket.remoteAddress,p[1]));assert(allowed,'Terlalu banyak percobaan. Coba lagi beberapa menit kemudian.',429);
+        const result=tx(db,()=>publicBriefingLink(db,p[1],body,dataDir,requestId));send(result);return;
       }
       if(p[0]==='auth'&&p[1]==='login'&&method==='POST') {
         rateLimit(req,'login');const result=await login(db,body,req);res.setHeader('Set-Cookie',[cookie('besakih_session',result.token,true,result.hours*3600),cookie('besakih_csrf',result.csrfToken,false,result.hours*3600)]);send({user:result.user,csrfToken:result.csrfToken});return;
@@ -95,7 +103,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(p[0]==='attachments'&&method==='POST'){send(attach(db,user,body.type,body.owner_id,body),201);return;}
       if(p[0]==='files'&&p[1]&&method==='GET') {const {file,data}=download(db,user,p[1],dataDir);res.writeHead(200,{'Content-Type':file.mime_type,'Content-Disposition':`${url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.original_name)}`,'Content-Length':data.length,'Cache-Control':'private, no-store'});res.end(data);return;}
       const ctx={db,user,p,method,body,url};
-      for(const handler of [quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
+      for(const handler of [briefingRoutes,quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
       throw new AppError(404,'Alamat API tidak ditemukan.');
     } catch(error) {
       const conflict=/UNIQUE constraint/.test(error.message),invalid=/FOREIGN KEY constraint|CHECK constraint|NOT NULL constraint/.test(error.message);

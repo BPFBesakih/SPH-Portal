@@ -10,6 +10,7 @@ export const resourceActions = {
   'hr.documents': ['read', 'manage', 'publish', 'download'],
   'hr.training': ['read', 'manage', 'participants', 'download'],
   'hr.coaching': ['read', 'create', 'update', 'manage'],
+  'hr.briefings': ['read', 'manage'],
   'security.config': ['read', 'manage'],
   'security.roster': ['read', 'generate', 'edit', 'publish', 'acknowledge', 'export'],
   'security.logbook': ['read', 'create', 'update', 'download'],
@@ -68,6 +69,18 @@ export async function can(db, user, permission, context = {}) {
 }
 export async function has(db, user, permission) {
   return (await grants(db, user)).some(g => g.code === permission);
+}
+export async function briefingAllowed(db, user, action, row) {
+  if (await can(db, user, 'hr.briefings.manage', row)) return true;
+  if (action !== 'read' || row.deleted_at) return false;
+  if (await can(db, user, 'hr.briefings.read', row)) return true;
+  if (!user.employee_id) return false;
+  const key = `briefing-placement:${user.id}`, cache = db.authorizationCache;
+  const placements = cache?.has(key) ? cache.get(key) : await all(db, `SELECT p.org_unit_id FROM employees e JOIN employee_placements ep ON ep.employee_id=e.id
+    JOIN positions p ON p.id=ep.position_id AND p.is_active=1 JOIN org_units u ON u.id=p.org_unit_id AND u.is_active=1
+    WHERE e.id=? AND e.is_active=1 AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)`, user.employee_id, today(), today());
+  cache?.set(key, placements);
+  return placements.length === 1 && placements[0].org_unit_id === row.org_unit_id;
 }
 export async function requireAccess(db, user, permission, context = {}) {
   assert(await can(db, user, permission, context), 'Anda tidak memiliki akses untuk tindakan atau cakupan data ini.', 403);

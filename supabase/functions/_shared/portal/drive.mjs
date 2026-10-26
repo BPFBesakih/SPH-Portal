@@ -32,12 +32,12 @@ function storageError(stage,status,reason){
 export const driveModuleFolders=Object.freeze({
  sop:'SPH-Portal-SOP',pelatihan:'SPH-Portal-Pelatihan',pegawai:'SPH-Portal-Pegawai',
  patroli:'SPH-Portal-Patroli',kejadian:'SPH-Portal-Kejadian',informasi:'SPH-Portal-Informasi',
- pengadaan:'SPH-Portal-Pengadaan',website:'SPH-Portal-Website',coaching:'SPH-Portal-Coaching',
+ pengadaan:'SPH-Portal-Pengadaan',website:'SPH-Portal-Website',coaching:'SPH-Portal-Coaching',briefing:'SPH-Portal-Briefing',
 });
 export function driveModuleForOperation(path,body={}){
  const resource=typeof path==='string'?path.split('/')[0]:'';
  if(resource==='attachments')return {employee:'pegawai',logbook:'patroli',incident:'kejadian'}[body?.type]||null;
- const module={coaching:'coaching',documents:'sop',training:'pelatihan',employees:'pegawai',logbook:'patroli',incidents:'kejadian',announcements:'informasi',purchasing:'pengadaan',website:'website'}[resource];
+ const module={briefings:'briefing',coaching:'coaching',documents:'sop',training:'pelatihan',employees:'pegawai',logbook:'patroli',incidents:'kejadian',announcements:'informasi',purchasing:'pengadaan',website:'website'}[resource];
  return typeof module==='string'?module:null;
 }
 export function createDriveStorage(env,fetchImpl,options={}){

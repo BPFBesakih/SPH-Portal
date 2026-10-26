@@ -32,7 +32,7 @@ try{
  for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n>'20261016000900_operational_modules.sql').sort())await pg.exec(readFileSync(new URL(name,directory),'utf8'));
  await check('migration preserves existing accounts, six admin permissions and all 157 pending candidates',async()=>{
   assert.deepEqual((await pg.query('SELECT id,username,status,must_change_password,row_version FROM public.app_users ORDER BY id')).rows,beforeIdentity);
-  assert.equal((await pg.query("SELECT count(*)::int n FROM public.app_role_permissions rp JOIN public.app_roles r ON r.id=rp.role_id WHERE r.code='SUPER_ADMIN'")).rows[0].n,6);
+  assert.equal((await pg.query("SELECT count(*)::int n FROM public.app_role_permissions rp JOIN public.app_roles r ON r.id=rp.role_id JOIN public.app_permissions p ON p.id=rp.permission_id WHERE r.code='SUPER_ADMIN' AND p.module_code='admin'")).rows[0].n,6);
   assert.equal((await pg.query("SELECT count(*)::int n FROM import_staging.employee_candidates WHERE status='PENDING'")).rows[0].n,157);
   assert.equal((await pg.query("SELECT count(*)::int n FROM portal.import_candidates WHERE status='PENDING'")).rows[0].n,157);
   assert.equal((await pg.query('SELECT count(*)::int n FROM portal.employees')).rows[0].n,0);

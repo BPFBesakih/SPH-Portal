@@ -7,6 +7,10 @@ verify_jwt = false
 [functions.drive-connection-check]
 verify_jwt = false
 
+# Same server-secret gateway as coaching; the link permits submission only.
+[functions.briefing-native]
+verify_jwt = false
+
 [functions.coaching-native]
 verify_jwt = false
 

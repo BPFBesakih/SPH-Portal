@@ -27,4 +27,7 @@ console.log(frontendOnly?'Prepared Cloudflare frontend assets only.':'Prepared C
 const coachingPage=new URL('site-info/dist/coaching/',root);mkdirSync(coachingPage,{recursive:true});
 writeFileSync(new URL('index.html',coachingPage),readFileSync(new URL('public/coaching-link.html',root),'utf8').replaceAll('/assets/','/app/assets/').replace('href="/quick-report.css"','href="/app/quick-report.css"').replace('href="/coaching-link.css"','href="/app/coaching-link.css"').replace('src="/coaching-link.js"','src="/app/coaching-link.js"'));
 
+const briefingPage=new URL('site-info/dist/briefing-pagi/',root);mkdirSync(briefingPage,{recursive:true});
+writeFileSync(new URL('index.html',briefingPage),readFileSync(new URL('public/briefing-link.html',root),'utf8').replaceAll('/assets/','/app/assets/').replace('href="/quick-report.css"','href="/app/quick-report.css"').replace('href="/coaching-link.css"','href="/app/coaching-link.css"').replace('src="/briefing-link.js"','src="/app/briefing-link.js"'));
+
 await import('./build-portal-assets.mjs');

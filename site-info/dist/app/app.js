@@ -5,6 +5,7 @@ import {state,api,post,refresh,permitted} from './api.js';
 import {esc,icon,avatar,button,formDialog,dialog,toast,formatDate,localToday} from './ui.js';
 import {loadPage,pageTitles,employeeRows,importRows,documentRows,incidentRows,logbookRows,rosterPage,configPage,documentsPage,incidentsPage} from './pages.js';
 import {handleFormAction} from './forms.js';
+import {bindBriefings,handleBriefingAction} from './briefings.js';
 import {openCoachingShareLink} from './coaching-link-management.js';
 import {openDetail,closeDetails} from './details.js';
 import {purchasingNav,purchasingRoutes,purchasingAllowed,loadPurchasingOverview,invalidatePurchasingOverview,handlePurchasingAction,bindPurchasingPage,afterPurchasingPage,purchasingNotices,resetPurchasingState} from './purchasing.js';
@@ -17,10 +18,10 @@ function applyTheme(theme){
   document.querySelector('meta[name="theme-color"]').content=getComputedStyle(document.documentElement).getPropertyValue('--besakih-theme-color').trim();
 }
 const navs={hr:[['dashboard','Dashboard','dashboard','hr.'],['employees','Data Pegawai & Organisasi','people','hr.employees.read'],['documents','Regulasi & SOP','document','hr.documents.read'],['training','Kegiatan & Pelatihan','training','hr.training.read'],['coaching','Evaluasi & Coaching','coaching','hr.coaching.read']],security:[['security','Dashboard','dashboard','security.'],['roster','Jadwal & Penugasan','calendar','security.roster.read'],['logbook','Logbook & Patroli','log','security.logbook.read'],['incidents','Laporan Kejadian','incident','security.incidents.read'],['sop','SOP Keamanan','document','hr.documents.read']],purchasing:purchasingNav};
-const commonNav=[['announcements','Informasi Internal','bell','announcements']];
+const commonNav=[['announcements','Informasi Internal','bell','announcements'],['briefings','Briefing Pagi','coaching','briefings']];
 const adminNav=[['accounts','Akun Pengguna','people','admin.users.read'],['roles','Role & Izin','key','admin.roles.read'],['audit','Riwayat Aktivitas','audit','admin.audit.read']];
 const hasModule=module=>module==='purchasing'?state.permissions.some(p=>p.startsWith('purchasing.'))||state.me?.purchasing_pending>0||state.purchasing?.counts?.approvals>0:state.permissions.some(p=>p.startsWith(module+'.')&&(module!=='hr'||!state.permissions.some(x=>x.startsWith('security.'))||!['hr.documents.read','hr.documents.download'].includes(p)));
-const visible=([,,,permission])=>permission==='announcements'?true:permission.startsWith('purchasing:')?purchasingAllowed(permission.slice(11)):permission.endsWith('.')?state.permissions.some(p=>p.startsWith(permission)):permitted(permission)||(permission==='hr.coaching.read'&&permitted('hr.coaching.manage'));
+const visible=([,,,permission])=>['announcements','briefings'].includes(permission)?true:permission.startsWith('purchasing:')?purchasingAllowed(permission.slice(11)):permission.endsWith('.')?state.permissions.some(p=>p.startsWith(permission)):permitted(permission)||(permission==='hr.coaching.read'&&permitted('hr.coaching.manage'));
 function currentRoute(){const r=location.hash.slice(1).split('?')[0];if(r==='pr-verify')return r;const active=activeRoute(r),entry=[...navs.hr,...navs.security,...navs.purchasing,...commonNav,...adminNav].find(n=>n[0]===active),isPurchasing=purchasingRoutes.includes(r),isHr=['dashboard','employees','organization','imports','documents','training','coaching'].includes(r),isSecurity=['security','roster','roster-settings','logbook','incidents','sop'].includes(r);return pageTitles[r]&&entry&&visible(entry)&&(!isHr||hasModule('hr'))&&(!isSecurity||hasModule('security'))&&(!isPurchasing||hasModule('purchasing'))?r:(hasModule('hr')?'dashboard':hasModule('security')?'security':hasModule('purchasing')?'purchasing':permitted('admin.users.read')?'accounts':permitted('admin.roles.read')?'roles':'announcements');}
 function activeRoute(route){return ['organization','imports'].includes(route)?'employees':route==='roster-settings'?'roster':route;}
 function navLink([route,label,ico]){return `<a href="#${route}" class="nav-link ${activeRoute(state.route)===route?'active':''}" ${activeRoute(state.route)===route?'aria-current="page"':''}>${icon(ico)}<span>${esc(label)}</span>${route==='announcements'?'<span class="badge-count" data-announcement-count hidden></span>':''}${route==='pr-approvals'&&state.purchasing?.counts?.approvals?`<span class="badge-count">${Number(state.purchasing.counts.approvals)}</span>`:''}</a>`;}
@@ -100,6 +101,7 @@ document.addEventListener('click',e=>{const panel=document.querySelector('.bell-
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.bell-panel')){closeBell();document.querySelector('[data-action=notifications]')?.focus();}});
 window.addEventListener('resize',closeBell);
 function bindPage(){
+  bindBriefings();
   bindAnnouncements();syncAnnouncementBadges();syncBell();
   document.querySelector('#list-search')?.addEventListener('input',e=>{state.filter=e.target.value.toLowerCase();state.page=1;updateList();});
   document.querySelector('#unit-filter')?.addEventListener('change',e=>{state.unit=e.target.value;state.page=1;updateList();});
@@ -127,6 +129,7 @@ document.addEventListener('click',async event=>{
     if(action==='mobile-menu'||action==='mobile-close'){document.querySelector('.sidebar')?.classList.toggle('open',action==='mobile-menu');document.querySelector('.mobile-backdrop')?.classList.toggle('open',action==='mobile-menu');return;}
     if(action==='switch-hr'||action==='switch-security'||action==='switch-purchasing'){state.module=action.slice(7);const route={hr:'dashboard',security:'security',purchasing:'purchasing'}[state.module];if(location.hash===`#${route}`)await navigate();else location.hash=route;return;}
     if(action.startsWith('go-')){const route={'go-employees':'employees','go-roster':'roster','go-config':'roster-settings'}[action];if(route)location.hash=route;return;}
+    if(await handleBriefingAction(action,el))return;
     if(await handleAnnouncementAction(action,el))return;
     if(await handlePurchasingAction(action,el))return;
     if(action==='coaching-share-link'){const previous=el.disabled;el.disabled=true;try{await openCoachingShareLink();}finally{el.disabled=previous;}return;}

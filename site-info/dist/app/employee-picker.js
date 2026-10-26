@@ -12,7 +12,7 @@ export function employeePickerField({label='Tautkan pegawai (opsional)',required
   </div>`;
 }
 
-export function setupEmployeePicker(dialog,employees=[],{required=false}={}){
+export function setupEmployeePicker(dialog,employees=[],{required=false,onSelect}={}){
   const picker=dialog.querySelector('[data-employee-picker]'),input=picker.querySelector('[role=combobox]'),value=picker.querySelector('input[type=hidden]'),list=picker.querySelector('[role=listbox]'),hint=picker.querySelector('[role=status]');
   const normalize=text=>String(text||'').trim().toLocaleLowerCase('id-ID').replace(/\s+/g,' ');
   const items=employees.map(employee=>({...employee,secondary:employee.employee_no||employee.position_name||'',search:normalize(`${employee.full_name} ${employee.employee_no||''} ${employee.position_name||''}`)}));
@@ -26,7 +26,7 @@ export function setupEmployeePicker(dialog,employees=[],{required=false}={}){
   }
   function choose(index){
     const employee=matches[index];if(!employee)return;if(employee.disabled){hint.textContent='Nama dan penempatan ganda perlu diperiksa SDM. Pilih nama lain atau hubungi pengelola.';return;}
-    value.value=employee.id;input.value=employee.full_name;input.setCustomValidity('');
+    value.value=employee.id;input.value=employee.full_name;input.setCustomValidity('');onSelect?.(employee);
     close();hint.textContent=required?`Nama yang dipilih: ${employee.full_name}${employee.secondary?` · ${employee.secondary}`:''}.`:`Dipilih: ${employee.full_name}${employee.employee_no?` (${employee.employee_no})`:''}. Kosongkan pencarian untuk membatalkan tautan.`;
   }
   function search(){
@@ -38,7 +38,7 @@ export function setupEmployeePicker(dialog,employees=[],{required=false}={}){
     hint.textContent=!found.length?(required?'Nama tidak ditemukan. Coba bagian nama lainnya.':'Pegawai tidak ditemukan. Coba nama atau nomor pegawai lain.'):found.length>matches.length?`Menampilkan ${matches.length} dari ${found.length} hasil. Perjelas pencarian untuk mempersempit hasil.`:`${found.length} pegawai ditemukan. Pilih pegawai yang sesuai.`;
     list.hidden=!matches.length;input.setAttribute('aria-expanded',String(!!matches.length));
   }
-  input.addEventListener('input',()=>{value.value='';input.setCustomValidity(required?'Pilih nama Anda dari hasil pencarian.':normalize(input.value)?'Pilih pegawai dari hasil pencarian atau kosongkan kolom ini.':'');search();});
+  input.addEventListener('input',()=>{value.value='';onSelect?.(null);input.setCustomValidity(required?'Pilih nama Anda dari hasil pencarian.':normalize(input.value)?'Pilih pegawai dari hasil pencarian atau kosongkan kolom ini.':'');search();});
   input.addEventListener('focus',search);
   input.addEventListener('keydown',event=>{
     if(event.isComposing)return;

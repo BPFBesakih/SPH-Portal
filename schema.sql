@@ -75,6 +75,23 @@ CREATE TABLE IF NOT EXISTS coaching_sessions (
 CREATE TABLE IF NOT EXISTS coaching_actions (
  id TEXT PRIMARY KEY, coaching_session_id TEXT NOT NULL REFERENCES coaching_sessions(id), responsible_employee_id TEXT NOT NULL REFERENCES employees(id), action_text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN('OPEN','IN_PROGRESS','DONE')), due_on TEXT, progress_notes TEXT, completion_notes TEXT, completed_at TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK((status='DONE' AND completed_at IS NOT NULL AND length(trim(completion_notes))>0) OR (status<>'DONE' AND completed_at IS NULL)));
+CREATE TABLE IF NOT EXISTS briefing_links (
+ id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash)=64), share_token TEXT NOT NULL CHECK(length(share_token)=64), label TEXT NOT NULL,
+ is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)), revoked_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE UNIQUE INDEX IF NOT EXISTS briefing_one_active_link ON briefing_links(is_active) WHERE is_active=1;
+CREATE TABLE IF NOT EXISTS morning_briefings (
+ id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id), org_unit_id TEXT NOT NULL REFERENCES org_units(id),
+ employee_name TEXT NOT NULL, position_name TEXT NOT NULL, department TEXT NOT NULL, section TEXT NOT NULL, held_on TEXT NOT NULL,
+ absent_notes TEXT NOT NULL, briefing_notes TEXT NOT NULL, submitted_at TEXT NOT NULL, source TEXT NOT NULL CHECK(source='NATIVE_LINK'),
+ link_id TEXT NOT NULL REFERENCES briefing_links(id), response_id TEXT NOT NULL, payload_hash TEXT NOT NULL,
+ deleted_at TEXT, deleted_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), UNIQUE(link_id,response_id));
+CREATE INDEX IF NOT EXISTS briefing_unit_date ON morning_briefings(org_unit_id,held_on);
+CREATE TABLE IF NOT EXISTS briefing_files (
+ id TEXT PRIMARY KEY, briefing_id TEXT NOT NULL UNIQUE REFERENCES morning_briefings(id), file_id TEXT NOT NULL UNIQUE REFERENCES files(id),
+ captured_at TEXT NOT NULL, capture_source TEXT NOT NULL CHECK(capture_source='CAMERA'),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS security_groups (
  id TEXT PRIMARY KEY, org_unit_id TEXT NOT NULL REFERENCES org_units(id), code TEXT NOT NULL COLLATE NOCASE UNIQUE, name TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));

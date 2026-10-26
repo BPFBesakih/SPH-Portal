@@ -25,3 +25,8 @@
 /portal-static/*
   Cache-Control: public, max-age=31536000, immutable
   X-Robots-Tag: noindex, nofollow
+
+/briefing-pagi/*
+  Cache-Control: no-store
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer

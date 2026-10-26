@@ -1,3 +1,4 @@
+import {briefingRoutes} from './briefings.mjs';
 import {quickReportManagement} from './quick-reports.mjs';
 import {Buffer} from 'node:buffer';
 import {createHash} from 'node:crypto';
@@ -39,6 +40,6 @@ export async function routeOperation({db,user,path,method,body={},query=''}){
   return {binary:true,data:Buffer.from(data).toString('base64'),mime_type:file.mime_type,name:file.original_name,inline:url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)};
  }
  const ctx={db,user,p,method,body,url};
- for(const handler of [quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined)return result;}
+ for(const handler of [briefingRoutes,quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined)return result;}
  throw new AppError(404,'Alamat API tidak ditemukan.');
 }

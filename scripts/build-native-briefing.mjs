@@ -1,0 +1,10 @@
+import {mkdirSync,readFileSync,writeFileSync,cpSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {build} from './cloud-tools/node_modules/esbuild/lib/main.js';
+const root=new URL('../',import.meta.url),output=new URL('supabase/deploy/briefing-native/',root);
+mkdirSync(output,{recursive:true});
+await build({entryPoints:[fileURLToPath(new URL('supabase/functions/briefing-native/index.ts',root))],outfile:fileURLToPath(new URL('index.ts',output)),bundle:true,format:'esm',platform:'neutral',target:'es2022',packages:'external',legalComments:'none'});
+const app=new URL('site-info/dist/app/',root),page=new URL('site-info/dist/briefing-pagi/',root);mkdirSync(page,{recursive:true});
+for(const name of ['briefing-link.html','briefing-link.js','employee-picker.js'])cpSync(new URL(`public/${name}`,root),new URL(name,app));
+writeFileSync(new URL('index.html',page),readFileSync(new URL('public/briefing-link.html',root),'utf8').replaceAll('/assets/','/app/assets/').replace('href="/quick-report.css"','href="/app/quick-report.css"').replace('href="/coaching-link.css"','href="/app/coaching-link.css"').replace('src="/briefing-link.js"','src="/app/briefing-link.js"'));
+console.log('Prepared native briefing bundle and form assets. No deployment performed.');
