@@ -12,6 +12,7 @@ import {announcementRoutes} from './announcements.mjs';
 import {dashboard,lookups} from './read-models.mjs';
 import {upload,download,attach} from './files.mjs';
 import {purchasingRoutes,purchasingPendingCount} from './purchasing.mjs';
+import {merchandiseRoutes} from './merchandise.mjs';
 export async function routeOperation({db,user,path,method,body={},query=''}){
  assert(typeof path==='string'&&/^[a-z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)&&path.length<=512,'Alamat API tidak valid.',404);
  assert(['GET','POST','PATCH','DELETE'].includes(method),'Metode tidak diizinkan.',405);
@@ -40,6 +41,6 @@ export async function routeOperation({db,user,path,method,body={},query=''}){
   return {binary:true,data:Buffer.from(data).toString('base64'),mime_type:file.mime_type,name:file.original_name,inline:url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)};
  }
  const ctx={db,user,p,method,body,url};
- for(const handler of [briefingRoutes,quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes]){const result=await handler(ctx);if(result!==undefined)return result;}
+ for(const handler of [briefingRoutes,quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes,merchandiseRoutes]){const result=await handler(ctx);if(result!==undefined)return result;}
  throw new AppError(404,'Alamat API tidak ditemukan.');
 }
