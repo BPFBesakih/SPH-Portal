@@ -37,6 +37,7 @@ export const formatTime=d=>d?new Intl.DateTimeFormat('id-ID',{hour:'2-digit',min
 export const localToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Makassar'}).format(new Date());
 export const localNow=()=>new Date(Date.now()+8*3600000).toISOString().slice(0,16);
 export const toUTC=v=>new Date(`${v}:00+08:00`).toISOString();
+export const toWitaInput=v=>v?new Date(Date.parse(v)+8*3600000).toISOString().slice(0,16):'';
 export const empty=(title='Belum ada data',description='Tambahkan catatan pertama untuk mulai mengelola data.',ico='folder')=>`<div class="empty">${icon(ico)}<strong>${esc(title)}</strong><p>${esc(description)}</p></div>`;
 export const button=(label,action,ico='plus',kind='primary',extra='')=>`<button class="button ${kind}" data-action="${action}" aria-label="${esc(label)}" ${extra}>${icon(ico)}<span>${esc(label)}</span></button>`;
 export const number=v=>new Intl.NumberFormat('id-ID').format(v||0);

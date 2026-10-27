@@ -280,6 +280,43 @@ test('hanya itadmin dapat menghapus kegiatan; audit dan relasi dipertahankan, se
   await assert.rejects(call(hrRoutes,f,`training/${event.id}/documentation`,'POST',{file_id:file.id}),e=>e.status===404);
 });
 
+test('kalender lintas unit hanya memaparkan ringkasan kegiatan untuk akun aktif',async t=>{
+  const f=fixture(t),viewer=f.account('kalender-reader',null);
+  const events=[
+    {title:'Agenda tahun baru',starts_at:'2025-12-31T15:00:00Z',ends_at:'2025-12-31T18:00:00Z',status:'PLANNED'},
+    {title:'Pelatihan tuntas',starts_at:'2026-04-18T01:00:00Z',ends_at:'2026-04-18T03:00:00Z',status:'COMPLETED'},
+    {title:'Pelatihan dibatalkan',starts_at:'2026-08-10T01:00:00Z',ends_at:'2026-08-10T03:00:00Z',status:'CANCELLED'},
+    {title:'Tahun berikutnya',starts_at:'2027-01-01T01:00:00Z',ends_at:'2027-01-01T03:00:00Z',status:'PLANNED'},
+    {title:'Sudah dihapus',starts_at:'2026-05-01T01:00:00Z',ends_at:'2026-05-01T03:00:00Z',status:'PLANNED',deleted_at:now()}
+  ].map((fields,index)=>insert(f.db,'training_events',{...fields,topic:'Topik pribadi',organizer_org_unit_id:index%2?f.otherUnit.id:f.unit.id,location:'Besakih',description:'Ringkasan aman',created_by:f.user.id}));
+  insert(f.db,'training_participants',{training_event_id:events[0].id,employee_id:f.employees[0].id,attendance_status:'PRESENT',created_by:f.user.id});
+  const read=(user,year)=>hrRoutes({db:f.db,user,p:['training','calendar'],method:'GET',body:{},url:new URL(`http://localhost/api/training/calendar?year=${year}`)});
+  const result=await read(viewer,2026);
+  assert.deepEqual(result.items.map(e=>e.title),['Agenda tahun baru','Pelatihan tuntas','Pelatihan dibatalkan']);
+  for(const event of result.items)assert.deepEqual(Object.keys(event).sort(),['description','ends_at','id','location','starts_at','status','title']);
+  await assert.rejects(call(hrRoutes,{...f,user:viewer},'training'),e=>e.status===403);
+  await assert.rejects(call(hrRoutes,{...f,user:viewer},`training/${events[0].id}`),e=>e.status===403);
+  await assert.rejects(read({...viewer,status:'INACTIVE'},2026),e=>e.status===403);
+  await assert.rejects(read(viewer,1999),/Tahun kalender tidak valid/);
+});
+
+test('pengelola SDM dapat mengubah rincian kegiatan tanpa membuka hak edit lintas unit',async t=>{
+  const f=fixture(t),event=await call(hrRoutes,f,'training','POST',{title:'Rencana awal',topic:'Orientasi',organizer_org_unit_id:f.unit.id,starts_at:'2026-10-20T01:00:00Z',ends_at:'2026-10-20T03:00:00Z'});
+  const manager=f.account('manager',null),outsider=f.account('manager-lain',null),viewer=f.account('pegawai',null);
+  f.role(manager,['hr.training.read','hr.training.manage'],'ASSIGNED_UNITS',f.unit.id);
+  f.role(outsider,['hr.training.manage'],'ASSIGNED_UNITS',f.otherUnit.id);
+  const body={row_version:event.row_version,title:'Rencana diperbarui',starts_at:'2026-10-21T09:00:00+08:00',ends_at:'2026-10-21T12:00:00+08:00',location:'Wantilan',description:'Persiapan internal',status:'COMPLETED'};
+  await assert.rejects(call(hrRoutes,{...f,user:viewer},`training/${event.id}/details`,'PATCH',body),e=>e.status===403);
+  await assert.rejects(call(hrRoutes,{...f,user:outsider},`training/${event.id}/details`,'PATCH',body),e=>e.status===403);
+  await assert.rejects(call(hrRoutes,{...f,user:manager},`training/${event.id}/details`,'PATCH',{...body,ends_at:'2026-10-21T08:00:00+08:00'}),/Waktu selesai/);
+  const saved=await call(hrRoutes,{...f,user:manager},`training/${event.id}/details`,'PATCH',body);
+  assert.equal(saved.title,'Rencana diperbarui');assert.equal(saved.status,'PLANNED');
+  assert.equal(saved.starts_at,'2026-10-21T01:00:00.000Z');assert.equal(saved.ends_at,'2026-10-21T04:00:00.000Z');
+  assert.equal(saved.location,'Wantilan');assert.equal(saved.description,'Persiapan internal');
+  await assert.rejects(call(hrRoutes,{...f,user:manager},`training/${event.id}/details`,'PATCH',body),e=>e.status===409);
+  assert.equal(one(f.db,"SELECT count(*) n FROM audit_events WHERE action='UPDATE_DETAILS' AND object_key=?",event.id).n,1);
+});
+
 test('migrasi kegiatan mempertahankan agenda dan materi lama saat database dibuka ulang',t=>{
   const directory=mkdtempSync(resolve(tmpdir(),'besakih-training-'));t.after(()=>cleanup(directory));const path=resolve(directory,'portal.sqlite');
   const legacySchema=readFileSync(new URL('../schema.sql',import.meta.url),'utf8')

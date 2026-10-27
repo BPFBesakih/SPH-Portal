@@ -3,7 +3,8 @@ import {bindAnnouncements,syncAnnouncementBadges,announcementSummary,handleAnnou
 import {showReportPhoto} from './field-reports.js';
 import {state,api,post,refresh,permitted} from './api.js';
 import {esc,icon,avatar,button,formDialog,dialog,toast,formatDate,localToday} from './ui.js';
-import {loadPage,pageTitles,employeeRows,importRows,documentRows,incidentRows,logbookRows,rosterPage,configPage,documentsPage,incidentsPage} from './pages.js';
+import {loadPage,pageTitles,employeeRows,importRows,documentRows,incidentRows,logbookRows,rosterPage,configPage,documentsPage,incidentsPage,trainingPage} from './pages.js';
+import {showTrainingCalendarEvent} from './training-calendar.js';
 import {handleFormAction} from './forms.js';
 import {bindBriefings,handleBriefingAction} from './briefings.js';
 import {openCoachingShareLink} from './coaching-link-management.js';
@@ -18,12 +19,13 @@ function applyTheme(theme){
   document.documentElement.dataset.theme=theme;
   document.querySelector('meta[name="theme-color"]').content=getComputedStyle(document.documentElement).getPropertyValue('--besakih-theme-color').trim();
 }
-const navs={hr:[['dashboard','Dashboard','dashboard','hr.'],['employees','Data Pegawai & Organisasi','people','hr.employees.read'],['documents','Regulasi & SOP','document','hr.documents.read'],['training','Kegiatan & Pelatihan','training','hr.training.read'],['coaching','Evaluasi & Coaching','coaching','hr.coaching.read']],security:[['security','Dashboard','dashboard','security.'],['roster','Jadwal & Penugasan','calendar','security.roster.read'],['logbook','Logbook & Patroli','log','security.logbook.read'],['incidents','Laporan Kejadian','incident','security.incidents.read'],['sop','SOP Keamanan','document','hr.documents.read']],purchasing:purchasingNav};
+const navs={hr:[['dashboard','Dashboard','dashboard','hr.'],['employees','Data Pegawai & Organisasi','people','hr.employees.read'],['documents','Regulasi & SOP','document','hr.documents.read'],['training','Kegiatan & Pelatihan','training','training-calendar'],['coaching','Evaluasi & Coaching','coaching','hr.coaching.read']],security:[['security','Dashboard','dashboard','security.'],['roster','Jadwal & Penugasan','calendar','security.roster.read'],['logbook','Logbook & Patroli','log','security.logbook.read'],['incidents','Laporan Kejadian','incident','security.incidents.read'],['sop','SOP Keamanan','document','hr.documents.read']],purchasing:purchasingNav};
 const commonNav=[['announcements','Informasi Internal','bell','announcements'],['briefings','Briefing Pagi','coaching','briefings']];
 const adminNav=[['accounts','Akun Pengguna','people','admin.users.read'],['roles','Role & Izin','key','admin.roles.read'],['audit','Riwayat Aktivitas','audit','admin.audit.read']];
-const hasModule=module=>module==='purchasing'?state.permissions.some(p=>p.startsWith('purchasing.'))||state.me?.purchasing_pending>0||state.purchasing?.counts?.approvals>0:state.permissions.some(p=>p.startsWith(module+'.')&&(module!=='hr'||!state.permissions.some(x=>x.startsWith('security.'))||!['hr.documents.read','hr.documents.download'].includes(p)));
-const visible=([,,,permission])=>['announcements','briefings'].includes(permission)?true:permission.startsWith('purchasing:')?purchasingAllowed(permission.slice(11)):permission.endsWith('.')?state.permissions.some(p=>p.startsWith(permission)):permitted(permission)||(permission==='hr.coaching.read'&&permitted('hr.coaching.manage'));
-function currentRoute(){const r=location.hash.slice(1).split('?')[0];if(r==='pr-verify')return r;const active=activeRoute(r),entry=[...navs.hr,...navs.security,...navs.purchasing,...commonNav,...adminNav].find(n=>n[0]===active),isPurchasing=purchasingRoutes.includes(r),isHr=['dashboard','employees','organization','imports','documents','training','coaching'].includes(r),isSecurity=['security','roster','roster-settings','logbook','incidents','sop'].includes(r);return pageTitles[r]&&entry&&visible(entry)&&(!isHr||hasModule('hr'))&&(!isSecurity||hasModule('security'))&&(!isPurchasing||hasModule('purchasing'))?r:(hasModule('hr')?'dashboard':hasModule('security')?'security':hasModule('purchasing')?'purchasing':permitted('admin.users.read')?'accounts':permitted('admin.roles.read')?'roles':'announcements');}
+const hasHrDashboard=()=>state.permissions.some(p=>p.startsWith('hr.')&&(!state.permissions.some(x=>x.startsWith('security.'))||!['hr.documents.read','hr.documents.download'].includes(p)));
+const hasModule=module=>module==='hr'?Boolean(state.me):module==='purchasing'?state.permissions.some(p=>p.startsWith('purchasing.'))||state.me?.purchasing_pending>0||state.purchasing?.counts?.approvals>0:state.permissions.some(p=>p.startsWith(module+'.'));
+const visible=([,,,permission])=>permission==='training-calendar'?Boolean(state.me):['announcements','briefings'].includes(permission)?true:permission.startsWith('purchasing:')?purchasingAllowed(permission.slice(11)):permission.endsWith('.')?state.permissions.some(p=>p.startsWith(permission)):permitted(permission)||(permission==='hr.coaching.read'&&permitted('hr.coaching.manage'));
+function currentRoute(){const r=location.hash.slice(1).split('?')[0];if(r==='pr-verify')return r;const active=activeRoute(r),entry=[...navs.hr,...navs.security,...navs.purchasing,...commonNav,...adminNav].find(n=>n[0]===active),isPurchasing=purchasingRoutes.includes(r),isHr=['dashboard','employees','organization','imports','documents','training','coaching'].includes(r),isSecurity=['security','roster','roster-settings','logbook','incidents','sop'].includes(r);return pageTitles[r]&&entry&&visible(entry)&&(!isHr||hasModule('hr'))&&(!isSecurity||hasModule('security'))&&(!isPurchasing||hasModule('purchasing'))?r:(hasHrDashboard()?'dashboard':hasModule('security')?'security':hasModule('purchasing')?'purchasing':permitted('admin.users.read')?'accounts':permitted('admin.roles.read')?'roles':'training');}
 function activeRoute(route){return ['organization','imports'].includes(route)?'employees':route==='roster-settings'?'roster':route;}
 function navLink([route,label,ico]){return `<a href="#${route}" class="nav-link ${activeRoute(state.route)===route?'active':''}" ${activeRoute(state.route)===route?'aria-current="page"':''}>${icon(ico)}<span>${esc(label)}</span>${route==='announcements'?'<span class="badge-count" data-announcement-count hidden></span>':''}${route==='pr-approvals'&&state.purchasing?.counts?.approvals?`<span class="badge-count">${Number(state.purchasing.counts.approvals)}</span>`:''}</a>`;}
 function workspaceSwitch(){
@@ -118,7 +120,7 @@ function passwordForm(required=false){
   form.dataset.password='true';if(required){form.querySelectorAll('[data-close]').forEach(b=>b.remove());form.addEventListener('cancel',e=>e.preventDefault());}
 }
 async function loginPage(){
-  navigation.invalidate();state.me=null;state.permissions=[];closeDetails();closeBell();resetPurchasingState();resetAnnouncementSummary();state.bellShown=false;document.querySelectorAll('dialog').forEach(d=>d.close());document.title='Masuk — SPH-Portal';
+  navigation.invalidate();state.me=null;state.permissions=[];state.items=[];state.trainingCalendarItems=[];state.trainingSelectedDay=null;closeDetails();closeBell();resetPurchasingState();resetAnnouncementSummary();state.bellShown=false;document.querySelectorAll('dialog').forEach(d=>d.close());document.title='Masuk — SPH-Portal';
   app.innerHTML=`<div class="login-page"><section class="login-brand-panel"><a class="brand" href="/"><img src="/app/assets/mark.svg" alt="Logo Badan Pengelola Besakih" width="42" height="42"><div><div class="brand-name">SPH-Portal</div><div class="brand-subtitle">SDM & Operasional</div></div></a><div class="login-story"><div class="eyebrow">Portal internal BP Besakih</div><h1>Bersama merawat kawasan suci.</h1><p>Satu ruang untuk mengelola tim, mengembangkan pelayanan, dan menjaga kawasan Besakih.</p></div><besakih-photo-slideshow></besakih-photo-slideshow></section><section class="login-form-panel"><div class="login-form-box"><div class="eyebrow">Selamat datang kembali</div><h2>Masuk ke portal</h2><p>Gunakan akun yang diberikan oleh administrator.</p><form id="login-form"><label class="field"><span>Username</span><input name="username" autocomplete="username" placeholder="Masukkan username" required maxlength="64"></label><label class="field"><span>Password</span><input name="password" type="password" autocomplete="current-password" placeholder="Masukkan password" required maxlength="128"></label><p class="form-error" role="alert"></p><button class="button primary" type="submit">Masuk ke portal ${icon('arrow')}</button></form><button class="button text" data-action="recover">Pulihkan password</button><p class="login-footer">Akses terbatas untuk pengguna yang diberi izin.<br>© ${new Date().getFullYear()} Badan Pengelola Besakih</p></div></section></div>`;
   document.querySelector('#login-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.target,button=form.querySelector('[type=submit]');button.disabled=true;form.querySelector('.form-error').textContent='';try{const values=Object.fromEntries(new FormData(form));form.querySelector('[name=password]').value='';await post('auth/login',values);state.me=await api('auth/me');state.permissions=state.me.permissions;await navigate();}catch(err){form.querySelector('.form-error').textContent=err.message;button.disabled=false;}});
 }
@@ -128,7 +130,33 @@ document.addEventListener('click',async event=>{
     if(action==='recover'){formDialog('Pulihkan password',`<label class="field full"><span>Kredensial sekali pakai dari administrator</span><input name="token" required autocomplete="off"></label><label class="field full"><span>Password baru</span><input type="password" name="new_password" required minlength="6" maxlength="128" autocomplete="new-password"></label>`,async b=>{await post('auth/reset',b);toast('Password berhasil dipulihkan. Silakan masuk.');},{note:'Hubungi administrator untuk verifikasi identitas dan meminta kredensial pemulihan. Kredensial berlaku 30 menit.'});return;}
     if(action==='theme'){const current=document.documentElement.dataset.theme;applyTheme(current==='dark'?'light':'dark');localStorage.setItem('besakih-theme',document.documentElement.dataset.theme);return;}
     if(action==='mobile-menu'||action==='mobile-close'){document.querySelector('.sidebar')?.classList.toggle('open',action==='mobile-menu');document.querySelector('.mobile-backdrop')?.classList.toggle('open',action==='mobile-menu');return;}
-    if(action==='switch-hr'||action==='switch-security'||action==='switch-purchasing'){state.module=action.slice(7);const route={hr:'dashboard',security:'security',purchasing:'purchasing'}[state.module];if(location.hash===`#${route}`)await navigate();else location.hash=route;return;}
+    if(action==='switch-hr'||action==='switch-security'||action==='switch-purchasing'){state.module=action.slice(7);const route={hr:hasHrDashboard()?'dashboard':'training',security:'security',purchasing:'purchasing'}[state.module];if(location.hash===`#${route}`)await navigate();else location.hash=route;return;}
+    if(action==='training-view'){state.trainingView=el.dataset.view;document.querySelector('#main').innerHTML=trainingPage();return;}
+    if(['training-prev','training-next','training-today'].includes(action)){
+      const previous={year:state.trainingYear,month:state.trainingMonth,selectedDay:state.trainingSelectedDay};
+      if(action==='training-today'){const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Makassar'}).format(new Date());state.trainingYear=Number(today.slice(0,4));state.trainingMonth=Number(today.slice(5,7))-1;state.trainingSelectedDay=today;}
+      else {const delta=action==='training-next'?1:-1;if(state.trainingView==='year')state.trainingYear+=delta;else {const date=new Date(Date.UTC(state.trainingYear,state.trainingMonth+delta,1));state.trainingYear=date.getUTCFullYear();state.trainingMonth=date.getUTCMonth();}state.trainingSelectedDay=null;}
+      el.disabled=true;
+      try{
+        if(state.trainingYear!==previous.year)state.trainingCalendarItems=(await api(`training/calendar?year=${state.trainingYear}`)).items;
+        document.querySelector('#main').innerHTML=trainingPage();
+      }catch(error){Object.assign(state,{trainingYear:previous.year,trainingMonth:previous.month,trainingSelectedDay:previous.selectedDay});throw error;}
+      finally{el.disabled=false;}
+      return;
+    }
+    if(action==='training-day'){
+      const day=el.dataset.date;
+      state.trainingYear=Number(day.slice(0,4));state.trainingMonth=Number(day.slice(5,7))-1;state.trainingSelectedDay=day;state.trainingView='month';
+      document.querySelector('#main').innerHTML=trainingPage();
+      document.querySelector('.training-agenda')?.scrollIntoView({block:'nearest',behavior:'smooth'});
+      return;
+    }
+    if(action==='training-calendar-event'){
+      const item=state.trainingCalendarItems.find(event=>event.id===el.dataset.id);
+      if(item)showTrainingCalendarEvent(item,state.items.some(record=>record.id===item.id));
+      return;
+    }
+    if(action==='training-open-private'){el.closest('dialog')?.close();await openDetail('training',el.dataset.id);return;}
     if(action.startsWith('go-')){const route={'go-employees':'employees','go-roster':'roster','go-config':'roster-settings'}[action];if(route)location.hash=route;return;}
     if(await handleBriefingAction(action,el))return;
     if(action==='export-patroli'||action==='export-coaching'){openReportExport(action==='export-patroli'?'patroli':'coaching');return;}
