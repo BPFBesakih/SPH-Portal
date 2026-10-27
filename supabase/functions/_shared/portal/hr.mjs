@@ -292,6 +292,16 @@ export async function hrRoutes(c) {
     }
   }
   if (p[0] === 'training') {
+    if (m === 'GET' && id === 'calendar' && !action) {
+      assert(user?.id && user.status === 'ACTIVE', 'Sesi pengguna tidak aktif.', 403);
+      const year = Number(url.searchParams.get('year'));
+      assert(Number.isInteger(year) && year >= 2000 && year <= 2100, 'Tahun kalender tidak valid.');
+      const from = new Date(`${year}-01-01T00:00:00+08:00`).toISOString();
+      const until = new Date(`${year + 1}-01-01T00:00:00+08:00`).toISOString();
+      return {
+        items: await all(db, 'SELECT id,title,starts_at,ends_at,location,description,status FROM training_events WHERE deleted_at IS NULL AND starts_at<? AND ends_at>? ORDER BY starts_at,id', until, from)
+      };
+    }
     if (m === 'GET' && !id) {
       assert(await has(db, user, 'hr.training.read'), 'Akses ditolak.', 403);
       return {
@@ -377,6 +387,23 @@ export async function hrRoutes(c) {
         });
         await audit(db, user, 'UPDATE', 'training_events', id, {
           status: row.status
+        });
+        return row;
+      });
+      if (m === 'PATCH' && action === 'details') return await tx(db, async () => {
+        assert(await trainingAllowed(db, user, 'manage', event), 'Akses ditolak.', 403);
+        const start = instant(b.starts_at), end = instant(b.ends_at);
+        assert(end > start, 'Waktu selesai harus setelah waktu mulai.');
+        const values = {
+          title: text(b.title),
+          starts_at: start,
+          ends_at: end,
+          location: optional(b.location),
+          description: optional(b.description)
+        };
+        const row = await update(db, 'training_events', id, b.row_version, values);
+        await audit(db, user, 'UPDATE_DETAILS', 'training_events', id, {
+          changed_fields: Object.keys(values)
         });
         return row;
       });
