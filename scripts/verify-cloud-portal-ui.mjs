@@ -31,6 +31,11 @@ async function fixture({signedIn=true,required=false,roleEditor=false,grantEdito
  const units=['Badan Pengelola Besakih','Bisnis & Pengembangan Usaha','Operasional & Pelayanan','Pengelolaan Lingkungan & Keamanan Kawasan Besakih','Satuan Pengawas Internal & Manajemen Risiko','Sekretariat'].map((name,index)=>({id:`document-unit-${index}`,name}));
  const documents=[{id:'fixture-document',document_code:'SOP-001',title:'SOP Keamanan Kawasan',category:'SOP_SECURITY',unit_name:units[3].name,row_version:1,active_version:'1.0',effective_on:'2026-10-19',versions:[],targets:[]}];
  const training={id:'fixture-training',title:'Pelatihan Layanan',topic:'Layanan',organizer_org_unit_id:'fixture-unit',organizer_name:'Sekretariat',status:'PLANNED',starts_at:'2099-01-01T01:00:00Z',ends_at:'2099-01-01T03:00:00Z',location:'Besakih',row_version:1,participants:employees.slice(0,1).map(e=>({...e,id:`participant-${e.id}`,employee_id:e.id,attendance_status:'NOT_RECORDED'})),materials:[],documentation:[],certificates:[]};
+ const calendarItems=[
+  {id:'calendar-planned',title:'Pelatihan K3',status:'PLANNED',starts_at:'2026-10-18T01:00:00Z',ends_at:'2026-10-18T03:00:00Z',location:'Wantilan',description:'Rencana pelatihan K3'},
+  {id:'calendar-done',title:'Evaluasi Pelayanan',status:'COMPLETED',starts_at:'2026-10-18T02:00:00Z',ends_at:'2026-10-18T04:00:00Z',location:'Ruang SDM',description:'Telah dilaksanakan'},
+  {id:'calendar-cancelled',title:'Kegiatan Batal',status:'CANCELLED',starts_at:'2026-10-20T01:00:00Z',ends_at:'2026-10-20T03:00:00Z',location:'Besakih',description:'Batal'}
+ ];
  const systemRole={id:'fixture-system-role',code:'SUPER_ADMIN',name:'Super Admin',is_system:1,is_active:1,row_version:1,permissions:[...permissions]};
  const grantRole={id:'fixture-employee-role',code:'EMPLOYEE',name:'Pegawai',is_active:1,is_system:0,permissions:['hr.employees.read']};
  const users=[{...me.user,grants:accountGrants}];
@@ -49,6 +54,7 @@ async function fixture({signedIn=true,required=false,roleEditor=false,grantEdito
    else if(grantEditor&&url.pathname===`/api/users/${me.user.id}/grants`&&req.method()==='POST'){const sent=req.postDataJSON();users[0].grants=sent.grants.map((g,index)=>({...g,id:`fixture-grant-${index}`,role_name:g.role_id===grantRole.id?grantRole.name:'Petugas Keamanan'}));users[0].row_version++;body={ok:true};}
    else if(url.pathname==='/api/users')body={items:users};
    else if(url.pathname==='/api/lookups')body={employees,units:documentsAccess?units:grantEditor?[{id:'fixture-unit',name:'Sekretariat'}]:[],posts:grantEditor?[{id:'fixture-post',name:'Pos Fiktif'}]:[]};
+   else if(url.pathname==='/api/training/calendar')body={items:url.searchParams.get('year')==='2099'?[{id:training.id,title:training.title,status:training.status,starts_at:training.starts_at,ends_at:training.ends_at,location:training.location,description:null}]:url.searchParams.get('year')==='2026'?calendarItems:[]};
    else if(trainingAccess&&url.pathname==='/api/training')body={items:[{...training,participant_count:training.participants.length}]};
    else if(trainingAccess&&url.pathname===`/api/training/${training.id}`)body=training;
    else if(trainingAccess&&url.pathname===`/api/training/${training.id}/participants`&&req.method()==='POST'){
@@ -319,11 +325,28 @@ try{
  ];
  const participantForm=async(options={})=>{
   const f=await fixture({trainingAccess:true,employees:trainingEmployees,initialHash:'training',...options});
+  await f.page.getByRole('button',{name:'Daftar kegiatan',exact:true}).click();
   await f.page.getByRole('button',{name:/Pelatihan Layanan/}).click();
   await f.page.getByRole('button',{name:'Tambah peserta',exact:true}).click();
   const form=f.page.getByRole('dialog',{name:'Tambah peserta',exact:true});await form.waitFor();
   return {...f,form,search:form.getByRole('searchbox',{name:'Cari nama atau nomor pegawai',exact:true})};
  };
+ await check('calendar is readable by signed-in accounts without private training permission',async()=>{
+  const f=await fixture({initialHash:'training',clock:true});
+  await f.page.getByRole('heading',{name:'Kegiatan & Pelatihan',exact:true}).waitFor();
+  assert(f.calls.some(c=>c.path==='/api/training/calendar'));
+  assert.equal(f.calls.some(c=>c.path==='/api/training'),false);
+  await f.page.locator('[data-action=training-day][data-date="2026-10-18"]').first().click();
+  await f.page.getByRole('button',{name:/Pelatihan K3/}).click();
+  const summary=f.page.getByRole('dialog',{name:'Pelatihan K3',exact:true});
+  await summary.getByText('Rencana pelatihan K3').waitFor();
+  assert.equal(await summary.getByRole('button',{name:'Buka detail kegiatan'}).count(),0);
+  await summary.getByRole('button',{name:'Tutup'}).click();
+  await f.page.getByRole('button',{name:'Tahunan',exact:true}).click();
+  assert.equal(await f.page.locator('.training-mini-month').count(),12);
+  assert.equal(await f.page.locator('.training-dot.cancelled').count()>0,true);
+  assert.equal(f.calls.some(c=>c.path==='/api/training/fixture-training'),false);
+ });
  await check('participant search preserves choices across queries, supports removal and submits one batch',async()=>{
   const f=await participantForm();assert.equal(await f.form.getByRole('checkbox').count(),3);
   assert.equal(await f.form.getByText('Peserta Terdaftar',{exact:true}).count(),0);
