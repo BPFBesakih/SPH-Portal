@@ -23,7 +23,11 @@ export const resourceActions = {
   'purchasing.vendors': ['read', 'manage', 'sensitive'],
   'purchasing.budget': ['read', 'manage'],
   'purchasing.reports': ['read', 'export'],
-  'purchasing.settings': ['manage']
+  'purchasing.settings': ['manage'],
+  'merchandise.catalog': ['read', 'manage', 'costs'],
+  'merchandise.stock': ['read', 'record', 'adjust'],
+  'merchandise.sales': ['read', 'create', 'void'],
+  'merchandise.reports': ['read', 'export']
 };
 export const purchasingRoleCodes = {
   PURCHASE_REQUESTER: ['Pemohon Pengadaan', ['purchasing.requests.create', 'purchasing.requests.read']],

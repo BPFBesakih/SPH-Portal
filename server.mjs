@@ -17,6 +17,7 @@ import {announcementRoutes} from './lib/announcements.mjs';
 import {dashboard,lookups} from './lib/read-models.mjs';
 import {upload,download,attach} from './lib/files.mjs';
 import {purchasingRoutes,purchasingPendingCount} from './lib/purchasing.mjs';
+import {merchandiseRoutes} from './lib/merchandise.mjs';
 
 const root=fileURLToPath(new URL('.',import.meta.url));
 function cookie(name,value,httpOnly=true,maxAge=8*3600){return `${name}=${value}; Path=/; SameSite=Strict; Max-Age=${maxAge}${httpOnly?'; HttpOnly':''}${process.env.COOKIE_SECURE==='true'?'; Secure':''}`;}
@@ -90,6 +91,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(p[0]==='auth'&&p[1]==='logout'&&method==='POST'){run(db,'UPDATE auth_sessions SET revoked_at=? WHERE id=?',now(),user.session.id);res.setHeader('Set-Cookie',[cookie('besakih_session','',true,0),cookie('besakih_csrf','',false,0)]);send({ok:true});return;}
       if(p[0]==='auth'&&p[1]==='password'&&method==='POST'){await changePassword(db,user,body);send({ok:true});return;}
       assert(!user.must_change_password,'Anda wajib mengganti password sementara terlebih dahulu.',428);
+      if(p[0]==='merchandise'){const result=merchandiseRoutes({db,user,p,method,body,url});assert(result!==undefined,'Alamat API tidak ditemukan.',404);send(result);return;}
       if(p[0]==='dashboard'&&method==='GET'){send(dashboard(db,user,url.searchParams.get('module')||'hr',url.searchParams.get('as_of')||undefined));return;}
       if(p[0]==='lookups'&&method==='GET'){send(lookups(db,user,url.searchParams.get('purpose')||'employees',url.searchParams.get('session_id')));return;}
       if(p[0]==='exports'&&method==='GET'){
