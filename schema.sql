@@ -289,3 +289,24 @@ CREATE TABLE IF NOT EXISTS coaching_form_submissions (
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, UNIQUE(form_id,response_id));
 CREATE UNIQUE INDEX IF NOT EXISTS coaching_one_active_link ON coaching_links(is_active) WHERE is_active=1;
 CREATE INDEX IF NOT EXISTS coaching_files_session_idx ON coaching_files(coaching_session_id);
+
+-- Merchandise: stok NULL berarti belum pernah dihitung oleh petugas.
+CREATE TABLE IF NOT EXISTS merchandise_products (
+ id TEXT PRIMARY KEY, sku TEXT NOT NULL UNIQUE, name TEXT NOT NULL, buy_price INTEGER NOT NULL CHECK(buy_price>=0), sell_price INTEGER NOT NULL CHECK(sell_price>=0),
+ stock_qty INTEGER CHECK(stock_qty IS NULL OR stock_qty>=0), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS merchandise_sales (
+ id TEXT PRIMARY KEY, sale_no TEXT NOT NULL UNIQUE, sold_on TEXT NOT NULL, payment_method TEXT NOT NULL CHECK(payment_method IN('TUNAI','QRIS','TRANSFER','LAINNYA')),
+ status TEXT NOT NULL DEFAULT 'COMPLETED' CHECK(status IN('COMPLETED','VOID')), total INTEGER NOT NULL CHECK(total>=0), cost_total INTEGER NOT NULL CHECK(cost_total>=0),
+ note TEXT, void_reason TEXT, voided_at TEXT, voided_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id));
+CREATE INDEX IF NOT EXISTS merchandise_sales_date_idx ON merchandise_sales(sold_on,status);
+CREATE TABLE IF NOT EXISTS merchandise_sale_items (
+ id TEXT PRIMARY KEY, sale_id TEXT NOT NULL REFERENCES merchandise_sales(id), product_id TEXT NOT NULL REFERENCES merchandise_products(id), sku TEXT NOT NULL, product_name TEXT NOT NULL,
+ quantity INTEGER NOT NULL CHECK(quantity>0), unit_price INTEGER NOT NULL CHECK(unit_price>=0), unit_cost INTEGER NOT NULL CHECK(unit_cost>=0), subtotal INTEGER NOT NULL CHECK(subtotal>=0),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, UNIQUE(sale_id,product_id));
+CREATE TABLE IF NOT EXISTS merchandise_stock_movements (
+ id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES merchandise_products(id), sale_id TEXT REFERENCES merchandise_sales(id), kind TEXT NOT NULL CHECK(kind IN('INITIAL','IN','ADJUST','SALE','VOID')),
+ quantity_delta INTEGER NOT NULL, balance_before INTEGER, balance_after INTEGER NOT NULL CHECK(balance_after>=0), reason TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id));
+CREATE INDEX IF NOT EXISTS merchandise_stock_product_idx ON merchandise_stock_movements(product_id,created_at);
