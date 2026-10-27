@@ -1,5 +1,5 @@
 import {createRequestQueue} from './request-queue.js';
-export const state={me:null,module:'hr',route:'dashboard',items:[],lookups:{},dashboard:null,periods:[],periodId:null,revision:null,revisionId:null,configKey:'posts',date:null,filter:'',unit:'',category:'',page:1,permissions:[]};
+export const state={me:null,module:'hr',route:'dashboard',items:[],lookups:{},dashboard:null,periods:[],periodId:null,revision:null,revisionId:null,configKey:'posts',date:null,filter:'',unit:'',category:'',page:1,permissions:[],trainingView:'month',trainingYear:null,trainingMonth:null,trainingSelectedDay:null,trainingCalendarItems:[]};
 export const permitted=code=>state.permissions.includes(code);
 const enqueue=createRequestQueue();
 export function api(path,options={}){

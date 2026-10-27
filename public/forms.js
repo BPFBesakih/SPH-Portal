@@ -1,7 +1,7 @@
 import {openQuickReportSettings} from './quick-report-management.js';
 import {openFieldReport} from './field-reports.js';
 import {state,api,post,patch,refresh,permitted,uploadFile} from './api.js';
-import {esc,icon,options,choices,field,formDialog,dialog,toast,localToday,localNow,toUTC,formatDate,labels} from './ui.js';
+import {esc,icon,options,choices,field,formDialog,dialog,toast,localToday,localNow,toUTC,toWitaInput,formatDate,labels} from './ui.js';
 import {openDetail,closeDetails} from './details.js';
 import {employeePickerField,setupEmployeePicker} from './employee-picker.js';
 import {trainingParticipantPickerField,setupTrainingParticipantPicker} from './training-participant-picker.js';
@@ -51,6 +51,13 @@ export async function handleFormAction(action,el) {
   if(action==='activate-version'){const v=d.versions.find(v=>v.id===el.dataset.id);formDialog('Aktifkan versi dokumen',`<p class="full muted text-small">Versi ${esc(v.version_label)} menjadi satu-satunya versi berlaku. Versi yang sebelumnya aktif akan diarsipkan.</p>`,async()=>{await post(`documents/${d.id}/activate`,{version_id:v.id,row_version:v.row_version});await saved('documents',d.id,'Versi dokumen sudah berlaku.');},{submit:'Aktifkan versi'});return true;}
   if(action==='new-training') {
     const l=await lookups('training');formDialog('Buat kegiatan atau pelatihan',field('Judul kegiatan atau pelatihan','title')+field('Topik','topic')+field('Unit penyelenggara','organizer_org_unit_id','select',nameOptions(l,'units'))+field('Nama penyelenggara','organizer_name','text','',optional)+fieldTime('Mulai','starts_at')+fieldTime('Selesai','ends_at')+field('Lokasi','location')+field('Deskripsi','description','textarea','',optional),async b=>{const t=await post('training',{...b,starts_at:toUTC(b.starts_at),ends_at:toUTC(b.ends_at)});await saved('training',t.id);});return true;
+  }
+  if(action==='edit-training'){
+    if(!d?.can_upload_documentation)throw new Error('Anda tidak memiliki izin mengubah kegiatan ini.');
+    formDialog('Ubah rincian kegiatan',field('Judul kegiatan atau pelatihan','title','text',d.title)+fieldTime('Mulai','starts_at',toWitaInput(d.starts_at))+fieldTime('Selesai','ends_at',toWitaInput(d.ends_at))+field('Lokasi','location','text',d.location||'',optional)+field('Deskripsi','description','textarea',d.description||'',optional),async b=>{
+      await patch(`training/${d.id}/details`,{...b,starts_at:toUTC(b.starts_at),ends_at:toUTC(b.ends_at),row_version:d.row_version});
+      await saved('training',d.id,'Rincian kegiatan berhasil diperbarui.');
+    },{note:'Waktu kegiatan menggunakan WITA. Perubahan jadwal tercatat dalam riwayat aktivitas.'});return true;
   }
   if(action==='training-status'){formDialog('Ubah status kegiatan atau pelatihan',field('Status','status','select',choices(['PLANNED','COMPLETED','CANCELLED'],d.status)),async b=>{await patch(`training/${d.id}`,{...b,row_version:d.row_version});await saved('training',d.id);});return true;}
   if(action==='delete-training') {
