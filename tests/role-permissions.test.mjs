@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {renderRolePermissionGroups} from '../public/role-permissions.js';
 
 const actions={
@@ -35,4 +36,16 @@ test('nama kode dan label dari katalog izin di-escape',()=>{
   const html=renderRolePermissionGroups([{resource:'another.feature',action:'<img>',code:'another.feature.<img>'}]);
   assert(!html.includes('<img>'));
   assert(html.includes('&lt;img&gt;'));
+});
+
+test('entrypoint Cloudflare memakai bundle terbaru yang memuat seluruh kelompok izin Bisnis',()=>{
+  const root=new URL('../site-info/dist/',import.meta.url);
+  const html=readFileSync(new URL('app/index.html',root),'utf8');
+  const manifest=JSON.parse(readFileSync(new URL('portal-static/manifest.json',root),'utf8'));
+  assert.match(manifest.javascript,/^\/portal-static\/portal-[a-f0-9]{12}\.js$/);
+  assert(html.includes(`src="${manifest.javascript}"`),'HTML masih menunjuk ke bundle lama');
+  const bundle=readFileSync(new URL(`.${manifest.javascript}`,root),'utf8');
+  for(const resource of Object.keys(actions))assert(bundle.includes(resource),`${resource} tidak ada di bundle`);
+  assert(bundle.includes('Bisnis: katalog dan harga merchandise'),'Form izin Bisnis belum masuk bundle');
+  assert(bundle.includes('Daftar izin di server tidak lengkap'),'Perlindungan izin tersembunyi belum masuk bundle');
 });
