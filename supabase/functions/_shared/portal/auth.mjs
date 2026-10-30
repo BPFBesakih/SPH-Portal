@@ -11,6 +11,7 @@ export const resourceActions = {
   'hr.training': ['read', 'manage', 'participants', 'download'],
   'hr.coaching': ['read', 'create', 'update', 'manage'],
   'hr.briefings': ['read', 'manage'],
+  'hr.leaves': ['read', 'export'],
   'security.config': ['read', 'manage'],
   'security.roster': ['read', 'generate', 'edit', 'publish', 'acknowledge', 'export'],
   'security.logbook': ['read', 'create', 'update', 'download'],
