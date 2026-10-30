@@ -9,7 +9,7 @@ Impor produksi disahkan pengguna dan diterapkan pada **30 Oktober 2026, 10:02:19
 - portal.leave_year_balances menyimpan saldo per pegawai/tahun; portal.leave_balance_events menyimpan 152 kejadian pembukaan.
 - portal.leave_effective_balances menegakkan periode berlaku dan menampilkan nol untuk pegawai nonaktif atau THL, walaupun proses pemeliharaan belum berjalan.
 - Seluruh tabel baru memakai RLS dan tanpa akses langsung bagi anon, authenticated, maupun service_role; view memakai security_invoker. Fungsi privat juga tanpa akses panggil bagi role aplikasi.
-- Belum ada endpoint, menu, dashboard, atau alur pengajuan modul Cuti yang diterbitkan dalam pekerjaan impor ini. Data saldo sudah tersimpan di database produksi; integrasi UI/API mengikuti pekerjaan modul Cuti selanjutnya.
+- Tahap impor ini dilanjutkan dengan menu, dashboard, kalender, pengajuan, persetujuan atasan langsung, dan laporan pada [modul Cuti tahunan](CUTI.md). Data saldo awal dipertahankan sebagai dasar transaksi aplikasi.
 
 ## Aturan tahunan yang diaktifkan
 

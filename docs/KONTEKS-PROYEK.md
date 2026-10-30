@@ -1,10 +1,12 @@
 # Konteks lengkap proyek SPH-Portal
 
-**Diperbarui: 26 Oktober 2026 (UTC+8).** Dokumen ini merangkum produk, keputusan, arsitektur, rilis, kondisi operasional, pekerjaan lokal, dan tindak lanjut dalam satu berkas yang dapat dibaca tanpa percakapan sebelumnya. Ini ringkasan konteks terverifikasi, bukan salinan seluruh percakapan atau jaminan semua alur produksi sudah diuji.
+**Diperbarui: 30 Oktober 2026 (UTC+8).** Dokumen ini merangkum produk, keputusan, arsitektur, rilis, kondisi operasional, pekerjaan lokal, dan tindak lanjut dalam satu berkas yang dapat dibaca tanpa percakapan sebelumnya. Ini ringkasan konteks terverifikasi, bukan salinan seluruh percakapan atau jaminan semua alur produksi sudah diuji.
 
 Tambahan 26 Oktober: **Briefing Pagi (Wewarah Semeng) sudah dirilis ke produksi**. Menu tersedia di semua ruang kerja; rekap/foto mengikuti unit penempatan utama aktif pegawai dan SDM mengelola sesuai scope. Rilis produksi 26 Oktober 2026, 09.53 WITA: Cloudflare Pages deployment `21fbc84d-7cf1-41b7-abe0-3b1d1cf8b52d` berhasil pada source `1dda71adaf33f2734e15063c78545a818540af18`. `portal-api` versi 20 mempertahankan baseline aktif versi 19 dengan tujuh perubahan terarah; `briefing-native` versi 1 aktif. Migrasi `morning_briefings` tercatat sebagai `20261026015021`. Satu tautan formulir sudah diaktifkan secara privat. Halaman dan context produksi HTTP 200; health 200; tautan salah 404; origin asing 403; kiriman tidak lengkap 422; daftar dan tautan rekap tanpa login 401. Ketiga tabel baru memakai RLS dan tidak memiliki grants langsung ke klien. Tidak ada briefing/foto uji yang dibuat; fingerprint 69 akun tetap sama. Kamera pada HP nyata dan pengisian oleh pegawai tetap perlu uji pengguna. Rincian ada di [BRIEFING-PAGI.md](BRIEFING-PAGI.md).
 
 ## 1. Ringkasan terkini
+
+Tambahan 30 Oktober: modul **Cuti tahunan** terhubung ke 152 saldo awal pegawai non-THL (781 hari). Menu Cuti mencakup pengajuan hari kerja pilihan pegawai, persetujuan hanya atasan langsung, reservasi/pemotongan saldo, pembatalan, kalender sesuai scope, dashboard, riwayat dan laporan Excel/PDF. Backend portal-api versi 24 mempertahankan baseline produksi versi 22 dan menambahkan route Cuti. Rincian serta batas kebijakan ada pada [CUTI.md](CUTI.md).
 
 SPH-Portal adalah aplikasi internal **Badan Pengelola Fasilitas Kawasan Suci Pura Agung Besakih**, untuk SDM, Keamanan, Pengadaan, informasi internal, serta administrasi akun. Antarmuka memakai Bahasa Indonesia, pendekatan Material Design 3, palet Tridatu (marun, putih, hitam, aksen emas), tampilan responsif dan tema gelap. Waktu operasional aplikasi adalah **Asia/Makassar (WITA, UTC+8)**.
 

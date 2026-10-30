@@ -1,8 +1,9 @@
 import {briefingRoutes} from './briefings.mjs';
+import {leaveRoutes} from './leaves.mjs';
 import {quickReportManagement} from './quick-reports.mjs';
 import {Buffer} from 'node:buffer';
 import {createHash} from 'node:crypto';
-import {all,one,audit,assert,AppError,get} from './db.mjs';
+import {all,one,audit,assert,AppError,get,today} from './db.mjs';
 import {safeUser,grants,announcementsManager,has,can,postContext} from './auth.mjs';
 import {hrRoutes,employees} from './hr.mjs';
 import {securityRoutes} from './security.mjs';
@@ -19,6 +20,7 @@ export async function routeOperation({db,user,path,method,body={},query=''}){
  const p=path.split('/');const url=new URL(`https://portal.invalid/?${query}`);
  if(path==='portal/me'&&method==='GET')return {user:safeUser(user),name:user.employee_id?(await get(db,'employees',user.employee_id)).full_name:user.username,permissions:[...new Set((await grants(db,user)).map(g=>g.code))],announcements_manage:await announcementsManager(db,user),purchasing_pending:await purchasingPendingCount(db,user),demo:false};
  assert(!user.must_change_password,'Anda wajib mengganti password sementara terlebih dahulu.',428);
+ if(p[0]==='leaves')return leaveRoutes({db,user,p,method,body,url},{assert,can,has,audit,today});
  if(path==='dashboard'&&method==='GET')return dashboard(db,user,url.searchParams.get('module')||'hr',url.searchParams.get('as_of')||undefined);
  if(path==='lookups'&&method==='GET')return lookups(db,user,url.searchParams.get('purpose')||'employees',url.searchParams.get('session_id'));
  if(p[0]==='exports'&&method==='GET'){
