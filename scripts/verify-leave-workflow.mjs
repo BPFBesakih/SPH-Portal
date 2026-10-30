@@ -15,6 +15,12 @@ let testSource=source.replace(/import \{ withSupabase \} from "npm:@supabase\/se
 assert.notEqual(testSource,source);assert(!testSource.includes('"npm:'));
 testSource+='\nexport {routeOperation,grants};export function setFixtureDay(value){today=()=>value;}';
 const gateway=await import('data:text/javascript;base64,'+Buffer.from(testSource).toString('base64'));
+const formSource=readFileSync(resolve(root,'supabase/deploy/leave-form/index.ts'),'utf8')
+ .replace(/import \{ withSupabase \} from "npm:@supabase\/server@1";/,'const withSupabase=(options,handler)=>handler;')
+ .replace(/import postgres from "npm:postgres@3.4.7";/,'const postgres=()=>{throw new Error("External database forbidden in test");};');
+assert(!formSource.includes('"npm:'));
+const formGateway=await import('data:text/javascript;base64,'+Buffer.from(formSource+'\nexport {publicLeaveForm,takeLeaveFormSlot};export function setFormFixtureDay(value){today=()=>value;}').toString('base64'));
+formGateway.setFormFixtureDay('2026-10-30');
 gateway.setFixtureDay('2026-10-30');
 await pool.unsafe(`CREATE SCHEMA portal;
  CREATE TABLE public.app_users(id uuid PRIMARY KEY,username text,status text,employee_id text,must_change_password integer DEFAULT 0,row_version integer DEFAULT 1);
@@ -52,7 +58,7 @@ for(const key of ['employee','peer','boss','director','outsider','thl','sdm','un
  await pool.unsafe("INSERT INTO portal.user_roles(user_id,role_id,scope_kind) SELECT $1,id,'ALL' FROM public.app_roles WHERE code=$2",[id,role]);
  actors[key]={id,username:'fixture-'+key,employee_id,status:'ACTIVE',must_change_password:0,request_id:'fixture-'+randomUUID(),row_version:1};
 }
-for(const file of ['20261030020112_leave_balances_and_annual_maintenance.sql','20261030033354_leave_requests_and_supervisor_approval.sql']){
+for(const file of ['20261030020112_leave_balances_and_annual_maintenance.sql','20261030033354_leave_requests_and_supervisor_approval.sql','20261030040715_leave_employee_form_links.sql']){
  const migration=readFileSync(resolve(root,'supabase/migrations',file),'utf8').replace(/^\s*BEGIN;\s*$/gm,'').replace(/^\s*COMMIT;\s*$/gm,'');
  await pool.begin(sql=>sql.unsafe(migration));
 }
@@ -64,6 +70,7 @@ async function seedBalances(){
   await pool.unsafe("INSERT INTO portal.leave_year_balances(employee_id,balance_year,origin,granted_days,remaining_days,effective_from,expires_on,source_batch_id) VALUES($1,2026,'OPENING',$2,$2,'2026-10-30','2027-04-01','fixture-batch')",['e-'+key,days]);
 }
 await seedBalances();
+await pool.unsafe("INSERT INTO public.app_permissions(code,module_code,resource,action,description) VALUES('hr.employees.update','hr','employees','update','Fixture'); INSERT INTO public.app_role_permissions SELECT r.id,p.id FROM public.app_roles r CROSS JOIN public.app_permissions p WHERE r.code='SDM' AND p.code='hr.employees.update'");
 const invoke=(key,path='leaves',method='GET',body={},query='')=>pool.begin(async sql=>{
  await sql.unsafe('SET LOCAL search_path=portal,pg_catalog');
  if(method!=='GET')await sql.unsafe('SELECT pg_advisory_xact_lock(734829610160009)');
@@ -71,10 +78,14 @@ const invoke=(key,path='leaves',method='GET',body={},query='')=>pool.begin(async
  return gateway.routeOperation({db,user:{...actors[key]},path,method,body,query});
 });
 const query=async(sql,args=[])=>(await pool.unsafe(sql,args))[0];
+const formInvoke=(action,body)=>pool.begin(async sql=>{
+ await sql.unsafe('SET LOCAL search_path=portal,pg_catalog');await sql.unsafe('SELECT pg_advisory_xact_lock(734829610160009)');
+ return formGateway.publicLeaveForm({inTransaction:true,query:(s,a=[])=>sql.unsafe(s,a)},action,body,randomUUID());
+});
 const checks=[];const check=async(name,work)=>{await work();checks.push(name);console.log('PASS '+name);};
 const send=(key,dates,reason='Keperluan contoh',client_key=randomUUID())=>invoke(key,'leaves','POST',{dates,reason,client_key});
 const find=async(key,id)=>(await invoke(key)).requests.find(r=>r.id===id);
-const decision=async(key,id,action='approve',note='',verified=true)=>{const r=await find(key,id);return invoke(key,'leaves/'+id+'/decision','POST',{decision:action,note,row_version:r.row_version,verified_work_dates:verified});};
+const decision=async(key,id,action='approve',note='',verified=true)=>{const r=await find(key,id);return invoke(key,'leaves/'+id+'/decision','POST',{decision:action,note,row_version:r.row_version,verified_work_dates:verified,verified_identity:verified});};
 const cancel=async(key,id)=>{const r=await find(key,id);return invoke(key,'leaves/'+id+'/cancel','POST',{row_version:r.row_version,note:'Perubahan rencana contoh'});};
 await check('normal employee sees own balance, SDM sees organization, calendar has no private reasons',async()=>{
  assert.equal((await invoke('employee')).balances.length,1);assert.equal((await invoke('employee')).balances[0].available_days,5);
@@ -147,6 +158,58 @@ await check('report export is scoped and protected; another unit cannot read bal
  await assert.rejects(()=>invoke('outsider','leaves/history','GET',{},'employee_id=e-employee'),e=>e.status===403);
  assert((await invoke('employee','leaves/history')).items.some(r=>r.event_type==='CONSUMPTION'));
 });
+await check('only authorized SDM can issue personal links; THL, inactive and missing supervisor are denied',async()=>{
+ await assert.rejects(()=>invoke('employee','leaves/form-links','POST',{employee_id:'e-employee',action:'issue'}),e=>e.status===403);
+ await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-thl',action:'issue'}),e=>e.status===403);
+ await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-inactive',action:'issue'}),e=>e.status===403);
+ await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-director',action:'issue'}),e=>e.status===422);
+ const grant=await query('SELECT id FROM portal.user_roles WHERE user_id=$1',[actors.sdm.id]);
+ await pool.unsafe("UPDATE portal.user_roles SET scope_kind='ASSIGNED_UNITS' WHERE id=$1",[grant.id]);
+ await pool.unsafe("INSERT INTO portal.user_role_units VALUES($1,'unit-a',0)",[grant.id]);
+ await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-outsider',action:'issue'}),e=>e.status===403);
+ await invoke('sdm','leaves/form-links','POST',{employee_id:'e-employee',action:'issue'});
+ await pool.unsafe("DELETE FROM portal.user_role_units WHERE user_role_id=$1",[grant.id]);await pool.unsafe("UPDATE portal.user_roles SET scope_kind='ALL' WHERE id=$1",[grant.id]);
+});
+let publicToken;
+await check('link binds identity and redacts employee numbers, peer names, requests and reasons',async()=>{
+ const issued=await invoke('sdm','leaves/form-links','POST',{employee_id:'e-employee',action:'issue'});publicToken=issued.token;
+ assert(/^[a-f0-9]{64}$/.test(publicToken));
+ const ctx=await formInvoke('context',{token:publicToken,employee_id:'e-peer'});assert.equal(ctx.name,'Pegawai Contoh A');
+ for(const value of ['FIXTURE-','Alasan privat','requests','e-peer','Pegawai Contoh B'])assert(!JSON.stringify(ctx).includes(value));
+ assert(!(await invoke('sdm','leaves/form-links')).items.some(r=>JSON.stringify(r).includes(publicToken)));
+ await assert.rejects(()=>formInvoke('context',{token:'0'.repeat(64)}),e=>e.status===404);
+ const preview=await formInvoke('preview',{token:publicToken,dates:['2026-11-01']});assert.deepEqual(preview.conflicts,['2026-11-01']);assert(!JSON.stringify(preview).includes('Pegawai Contoh B'));
+});
+await check('public requests reserve once, ignore forged IDs and require direct boss identity verification',async()=>{
+ const payload={token:publicToken,dates:['2026-11-15'],reason:'Formulir contoh',client_key:randomUUID(),employee_id:'e-peer',user_id:actors.peer.id};
+ const r=await formInvoke('submit',payload),again=await formInvoke('submit',payload);assert.equal(r.reference,again.reference);
+ const stored=await find('boss',r.reference);assert.equal(stored.employee_id,'e-employee');assert.equal(stored.created_by,null);assert.equal(stored.submission_source,'FORM');
+ assert.equal((await invoke('employee')).balances[0].available_days,4);
+ await assert.rejects(()=>formInvoke('submit',{...payload,reason:'Different'}),e=>e.status===409);
+ await assert.rejects(()=>invoke('sdm','leaves/'+stored.id+'/decision','POST',{decision:'approve',row_version:1,verified_work_dates:true,verified_identity:true}),e=>e.status===403);
+ await assert.rejects(()=>invoke('boss','leaves/'+stored.id+'/decision','POST',{decision:'approve',row_version:1,verified_work_dates:true}),e=>e.status===422);
+ await decision('boss',stored.id);await cancel('employee',stored.id);await decision('boss',stored.id,'approve-cancel');
+ assert.equal((await invoke('employee')).balances[0].available_days,5);
+});
+await check('concurrent public forms share portal reservations and cannot overdraw',async()=>{
+ const results=await Promise.allSettled([formInvoke('submit',{token:publicToken,dates:['2026-11-16','2026-11-17','2026-11-18'],reason:'Contoh A',client_key:randomUUID()}),send('employee',['2026-11-19','2026-11-20','2026-11-21'])]);
+ assert.equal(results.filter(r=>r.status==='fulfilled').length,1);const r=results.find(r=>r.status==='fulfilled').value;await cancel('employee',r.reference||r.id);
+});
+await check('rotation, revocation, expiry and current employment status invalidate personal links',async()=>{
+ const next=await invoke('sdm','leaves/form-links','POST',{employee_id:'e-employee',action:'issue'});
+ await assert.rejects(()=>formInvoke('context',{token:publicToken}),e=>e.status===404);publicToken=next.token;
+ await pool.unsafe("UPDATE portal.employees SET is_active=0 WHERE id='e-employee'");await assert.rejects(()=>formInvoke('context',{token:publicToken}),e=>e.status===403);
+ await pool.unsafe("UPDATE portal.employees SET is_active=1 WHERE id='e-employee'; UPDATE portal.leave_form_links SET created_at=now()-interval '100 days',expires_at=now()-interval '1 day' WHERE employee_id='e-employee' AND revoked_at IS NULL");
+ await assert.rejects(()=>formInvoke('context',{token:publicToken}),e=>e.status===404);
+ const last=await invoke('sdm','leaves/form-links','POST',{employee_id:'e-employee',action:'issue'});
+ await invoke('sdm','leaves/form-links','POST',{employee_id:'e-employee',action:'revoke'});
+ await assert.rejects(()=>formInvoke('submit',{token:last.token,dates:['2026-11-22'],reason:'No',client_key:randomUUID()}),e=>e.status===404);
+});
+await check('public rate limits persist separately and reject excess attempts',async()=>{
+ const hits=[];for(let i=0;i<16;i++)hits.push(await pool.begin(async sql=>{await sql.unsafe('SET LOCAL search_path=portal,pg_catalog');return formGateway.takeLeaveFormSlot({query:(s,a=[])=>sql.unsafe(s,a)},'127.0.0.1','submit');}));
+ assert.equal(hits.filter(Boolean).length,15);assert.equal(hits.at(-1),false);
+ const row=await query('SELECT id FROM portal.leave_form_rate_limits LIMIT 1');assert(!row.id.includes('127.0.0.1'));
+});
 await check('year-aware reservations use expiring carry first and a new-year bucket for April',async()=>{
  gateway.setFixtureDay('2027-01-01');await clock('2027-01-01');await pool.unsafe('SELECT portal.run_leave_year_maintenance()');
  const preview=await invoke('employee','leaves/preview','POST',{dates:['2027-01-03','2027-04-02']});
@@ -173,6 +236,8 @@ const server=createServer(async(req,res)=>{
    if(url.pathname==='/api/auth/me'){
     const permissions=await pool.begin(async sql=>{await sql.unsafe('SET LOCAL search_path=portal,pg_catalog');return [...new Set((await gateway.grants({query:(s,a)=>sql.unsafe(s,a)},actors[key])).map(g=>g.code))];});
     result={user:actors[key],name:'Akun Contoh '+key,permissions,csrfToken:'fixture-only',announcements_manage:false,purchasing_pending:0};
+   }else if(url.pathname.startsWith('/api/leave-form/')){
+    let raw='';for await(const chunk of req)raw+=chunk;result=await formInvoke(url.pathname.split('/').at(-1),JSON.parse(raw));
    }else if(url.pathname.startsWith('/api/leaves')){
     let raw='';for await(const chunk of req)raw+=chunk;
     result=await invoke(key,url.pathname.slice(5),req.method,raw?JSON.parse(raw):{},url.search.slice(1));
@@ -180,7 +245,8 @@ const server=createServer(async(req,res)=>{
    else result={items:[]};
    res.end(JSON.stringify(result));return;
   }
-  let file=resolve(root,'public','.'+(url.pathname==='/'?'/index.html':decodeURIComponent(url.pathname)));
+  const pathname=url.pathname==='/cuti/'?'/leave-form.html':url.pathname.startsWith('/app/')?url.pathname.slice(4):url.pathname==='/'?'/index.html':decodeURIComponent(url.pathname);
+  let file=resolve(root,'public','.'+pathname);
   if(!file.startsWith(resolve(root,'public'))||!existsSync(file)){res.writeHead(404);res.end('not found');return;}
   res.setHeader('Content-Type',types[extname(file)]||'application/octet-stream');res.end(readFileSync(file));
  }catch(error){res.writeHead(error.status||422,{'Content-Type':'application/json'});res.end(JSON.stringify({error:error.message}));}

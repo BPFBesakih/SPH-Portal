@@ -2,7 +2,7 @@
 var eligible = (e) => Boolean(e?.is_active === 1 && ["Pegawai Kontrak (PKWT)", "Pegawai Probation"].includes(e.employment_status));
 var uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
-  const { assert: assert2, can: can2, has: has2, audit: audit2, today: today2 } = services;
+  const { assert: assert2, can: can2, has: has2, audit: audit2, today: today2, formLink } = services;
   db.authorizationCache ??= /* @__PURE__ */ new Map();
   const q = (sql, ...values) => db.query(sql, values), one2 = async (sql, ...values) => (await q(sql, ...values))[0];
   const day = today2(), stamp = () => (/* @__PURE__ */ new Date()).toISOString(), id = p[1], action = p[2];
@@ -86,6 +86,35 @@ async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
     return { dates: dates2, allocations, approver: { id: boss.id, name: boss.full_name }, conflicts: await conflicts(dates2) };
   };
   const locked = () => q("SELECT pg_advisory_xact_lock(hashtextextended('portal.leave_year_maintenance',0))");
+  const manageLink = async (e) => Boolean(!formLink && e && await can2(db, user, "hr.employees.update", { employee_id: e.id, org_unit_id: e.org_unit_id }));
+  if (id === "form-links") {
+    assert2(!formLink, "Akses ditolak.", 403);
+    if (method === "GET") {
+      const allowed = [];
+      for (const e2 of employees2) if (await manageLink(e2)) allowed.push(e2.id);
+      assert2(allowed.length, "Hanya pengelola data pegawai yang dapat mengelola tautan.", 403);
+      return { items: allowed.length ? await q("SELECT id,employee_id,created_at::text created_at,expires_at::text expires_at FROM leave_form_links WHERE employee_id=ANY($1::text[]) AND revoked_at IS NULL AND expires_at>now()", allowed) : [] };
+    }
+    assert2(method === "POST", "Alamat tidak ditemukan.", 404);
+    const e = byId.get(body.employee_id);
+    assert2(await manageLink(e), "Hanya pengelola data pegawai yang dapat mengelola tautan.", 403);
+    await locked();
+    assert2(["issue", "revoke"].includes(body.action), "Tindakan tautan tidak valid.");
+    if (body.action === "issue") {
+      assert2(eligible(e), "THL atau pegawai nonaktif tidak memperoleh formulir cuti.", 403);
+      supervisor(e);
+    }
+    await q("UPDATE leave_form_links SET revoked_at=now() WHERE employee_id=$1 AND revoked_at IS NULL", e.id);
+    if (body.action === "revoke") {
+      await audit2(db, user, "LEAVE_FORM_REVOKED", "employees", e.id);
+      return { ok: true };
+    }
+    const bytes = crypto.getRandomValues(new Uint8Array(32)), token = [...bytes].map((x) => x.toString(16).padStart(2, "0")).join("");
+    const digest2 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map((x) => x.toString(16).padStart(2, "0")).join("");
+    const linkId = crypto.randomUUID(), link = await one2("INSERT INTO leave_form_links(id,employee_id,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '90 days') RETURNING expires_at::text expires_at", linkId, e.id, digest2, user.id);
+    await audit2(db, user, "LEAVE_FORM_ISSUED", "leave_form_links", linkId, { employee_id: e.id, expires_at: link.expires_at });
+    return { token, expires_at: link.expires_at, name: e.full_name };
+  }
   if (method === "GET" && !id) {
     const year2 = Number(url.searchParams.get("year") || day.slice(0, 4));
     assert2(Number.isInteger(year2) && year2 >= 2026 && year2 <= 2100, "Tahun laporan tidak valid.");
@@ -112,6 +141,7 @@ async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
         used_days: buckets.filter((b) => b.balance_year === year2).reduce((n, b) => n + b.consumed_days, 0)
       };
     });
+    for (const b of balances) b.can_manage_form_link = await manageLink(byId.get(b.employee_id));
     const rows = visibleIds.length ? await q(`SELECT to_jsonb(r)||jsonb_build_object('dates',
      (SELECT jsonb_agg(work_date::text ORDER BY work_date) FROM leave_request_days WHERE request_id=r.id)) row
     FROM leave_requests r WHERE employee_id=ANY($1::text[])
@@ -148,7 +178,7 @@ async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
       balances,
       requests,
       calendar: calendar.map((r2) => ({ ...r2, name: byId.get(r2.employee_id)?.full_name, unit_name: byId.get(r2.employee_id)?.unit_name })),
-      capabilities: { can_request: eligible(me) && Boolean(boss), can_export: await has2(db, user, "hr.leaves.export"), can_manage_reports: visibleEmployees.some((e) => e.id !== user.employee_id && reportAccess.get(e.id)) },
+      capabilities: { can_request: eligible(me) && Boolean(boss), can_export: await has2(db, user, "hr.leaves.export"), can_manage_form_links: !formLink && await has2(db, user, "hr.employees.update"), can_manage_reports: visibleEmployees.some((e) => e.id !== user.employee_id && reportAccess.get(e.id)) },
       rules: { annual_credit: 12, next_credit_year: Math.max(2027, Number(day.slice(0, 4)) + 1), prior_year_valid_through: "31 Maret", approval: "Atasan langsung" }
     };
   }
@@ -177,16 +207,16 @@ async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
     const reason = clean(body.reason, "Alasan cuti");
     const canonical = JSON.stringify({ dates: Array.isArray(body.dates) ? [...body.dates].sort() : body.dates, reason });
     const hash2 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)))].map((x) => x.toString(16).padStart(2, "0")).join("");
-    const prior = (await one2("SELECT to_jsonb(r) row FROM leave_requests r WHERE created_by=$1 AND client_key=$2", user.id, body.client_key))?.row;
+    const prior = (await one2(formLink ? "SELECT to_jsonb(r) row FROM leave_requests r WHERE source_form_link_id=$1 AND client_key=$2" : "SELECT to_jsonb(r) row FROM leave_requests r WHERE created_by=$1 AND client_key=$2", formLink?.id || user.id, body.client_key))?.row;
     if (prior) {
       assert2(prior.payload_hash === hash2, "Kunci pengiriman sudah dipakai untuk isi berbeda.", 409);
       return { id: prior.id, status: prior.status, duplicate: true };
     }
     const planned = await plan(body.dates), requestId = crypto.randomUUID(), now2 = stamp();
-    await q(`INSERT INTO leave_requests(id,employee_id,approver_employee_id,first_date,last_date,day_count,reason,client_key,payload_hash,created_by,created_at,updated_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`, requestId, me.id, planned.approver.id, planned.dates[0], planned.dates.at(-1), planned.dates.length, reason, body.client_key, hash2, user.id, now2);
+    await q(`INSERT INTO leave_requests(id,employee_id,approver_employee_id,first_date,last_date,day_count,reason,client_key,payload_hash,created_by,created_at,updated_at,submission_source,source_form_link_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13)`, requestId, me.id, planned.approver.id, planned.dates[0], planned.dates.at(-1), planned.dates.length, reason, body.client_key, hash2, user.id, now2, formLink ? "FORM" : "PORTAL", formLink?.id || null);
     for (const a of planned.allocations) await q("INSERT INTO leave_request_days(request_id,employee_id,work_date,balance_year,state) VALUES($1,$2,$3,$4,'PENDING')", requestId, me.id, a.date, a.balance_year);
-    await audit2(db, user, "LEAVE_SUBMITTED", "leave_requests", requestId, { days: planned.dates.length, approver_employee_id: planned.approver.id, conflict_days: planned.conflicts.length });
+    await audit2(db, user, "LEAVE_SUBMITTED", "leave_requests", requestId, { days: planned.dates.length, approver_employee_id: planned.approver.id, conflict_days: planned.conflicts.length, submission_source: formLink ? "FORM" : "PORTAL", source_form_link_id: formLink?.id || null });
     return { id: requestId, status: "PENDING", conflicts: planned.conflicts };
   }
   const r = await request(id), dates = await requestDays(id);
@@ -218,6 +248,7 @@ async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
     return result2;
   }
   assert2(body.verified_work_dates === true, "Atasan wajib memverifikasi tanggal hari kerja atau pembatalan sebelum menyetujui.");
+  assert2(r.submission_source !== "FORM" || body.verified_identity === true, "Atasan wajib memverifikasi identitas pemohon dari formulir sebelum menyetujui.");
   assert2(eligible(byId.get(r.employee_id)), "Status pegawai tidak lagi memenuhi syarat.", 409);
   if (cancellation) assert2(dates.every((d) => d.work_date >= day), "Cuti sudah berlangsung. Pembatalan memerlukan rekonsiliasi SDM.", 409);
   const byYear = /* @__PURE__ */ new Map();
@@ -246,7 +277,7 @@ async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
   }
   await q("UPDATE leave_request_days SET state=$1 WHERE request_id=$2", cancellation ? "RELEASED" : "APPROVED", r.id);
   const result = await setStatus2(cancellation ? "CANCELLED" : "APPROVED", note, true);
-  await audit2(db, user, cancellation ? "LEAVE_CANCELLATION_APPROVED" : "LEAVE_APPROVED", "leave_requests", r.id, { days: r.day_count, work_dates_verified: true }, note || "");
+  await audit2(db, user, cancellation ? "LEAVE_CANCELLATION_APPROVED" : "LEAVE_APPROVED", "leave_requests", r.id, { days: r.day_count, work_dates_verified: true, identity_verified: r.submission_source === "FORM" }, note || "");
   return result;
 }
 

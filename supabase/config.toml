@@ -1,6 +1,10 @@
 [functions.portal-api]
 verify_jwt = false
 
+# Server-secret gateway; a revocable employee-bound token authorizes form submissions.
+[functions.leave-form]
+verify_jwt = false
+
 [functions.portal-login]
 verify_jwt = false
 

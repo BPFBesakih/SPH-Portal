@@ -2,6 +2,20 @@
 
 Menu **Cuti** tersedia di semua ruang kerja setelah login, melalui https://bpbesakih.com/app/#leaves. Saldo awal 2026 mengikuti impor yang sudah disahkan: 152 pegawai aktif non-THL, 781 hari. Dokumen dan snapshot individu tetap privat; aplikasi memakai ID pegawai.
 
+## Formulir pegawai tanpa login
+
+SDM membuka **Cuti → Formulir pegawai**, memilih nama (dilengkapi unit dan nomor pegawai untuk membedakan nama yang sama), lalu memilih **Buat / ganti tautan** dan **Salin tautan**. Bagikan tautan hanya kepada pegawai tersebut. Halaman formulir berada di `/cuti/` dan membutuhkan token pribadi di fragmen tautan; tautan umum tanpa token tidak menampilkan daftar pegawai.
+
+Tautan terikat pada satu ID pegawai, berlaku 90 hari, dan bisa dinonaktifkan atau diganti melalui dialog yang sama. Token acak 256 bit hanya ditampilkan ketika dibuat; database menyimpan SHA-256, sehingga tautan lengkap tidak dapat dibaca kembali. Membuat tautan pengganti mematikan tautan lama. SDM hanya dapat mengelola pegawai dalam cakupan izin `hr.employees.update` miliknya. THL, pegawai nonaktif, dan pegawai tanpa atasan tunggal tidak bisa diberi tautan baru.
+
+Pegawai membuka tautan, melihat identitas dan saldo sendiri, memilih tanggal hari kerja, mengisi alasan, memeriksa preview, lalu mengirim ke atasan langsung. Formulir tidak membutuhkan akun portal dan tidak menerima pilihan ID pegawai dari browser. Tidak ada akses melalui tautan ke daftar pegawai, alasan rekan, laporan, keputusan, atau pengelolaan tautan. Peringatan benturan hanya menyebut tanggal. Pengajuan masuk ke daftar persetujuan portal dan mengikuti reservasi serta pemotongan saldo yang sama. Nomor pengajuan ditampilkan setelah berhasil dikirim; mengulang kiriman yang sama tidak menggandakan pengajuan.
+
+Pengajuan ditandai `FORM` dengan `created_by=NULL` dan ID tautan asal, sehingga pemilik tautan tidak dicatat sebagai pengguna portal yang sudah terautentikasi. Atasan wajib memverifikasi identitas pemohon serta tanggal hari kerjanya; server menolak persetujuan tanpa kedua konfirmasi tersebut. Hanya atasan langsung tetap dapat memutuskan. Pengajuan yang telah masuk tidak dibatalkan oleh pencabutan tautan. Perubahan atau pembatalan mengikuti alur akun portal yang sudah ada atau koordinasi dengan atasan; tautan formulir hanya untuk pengajuan.
+
+Jalur publik Cloudflare `/api/leave-form/{context,preview,submit}` memverifikasi origin, tipe/ukuran isi, dan IP ingress, lalu meneruskan permintaan menggunakan kredensial server ke Edge Function `leave-form`. Fungsi memverifikasi kredensial server dan token pegawai, membaca status/atasan terkini, membatasi percobaan (120 konteks, 60 preview, 15 kiriman per IP per 10 menit), serta memakai transaksi dan lock yang sama dengan portal. Tabel tautan dan pembatas percobaan memakai RLS tanpa akses langsung role aplikasi. Kredensial dan token tidak masuk ke audit atau laporan.
+
+Migrasi: `20261030040715_leave_employee_form_links.sql`. Build: `scripts/build-leave-form.mjs`, kemudian `scripts/build-portal-assets.mjs`; perubahan layanan cuti tetap dipaketkan melalui builder gateway terbatas. Pengujian: 239 tes regresi/transport, 18 skenario transaksi PostgreSQL, 9 skenario UI portal, serta 8 skenario UI formulir desktop/ponsel. Seluruh pengujian kiriman menggunakan data sintetis pada database loopback terpisah.
+
 ## Pengajuan dan persetujuan
 
 1. Pegawai membuka Cuti, memilih **Ajukan cuti**, lalu menentukan rentang tanggal.
