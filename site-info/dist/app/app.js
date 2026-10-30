@@ -8,6 +8,7 @@ import {showTrainingCalendarEvent} from './training-calendar.js';
 import {handleFormAction} from './forms.js';
 import {bindBriefings,handleBriefingAction} from './briefings.js';
 import {bindLeavesPage,handleLeaveAction,resetLeaves} from './leaves.js';
+import {loadLeaveNotifications,invalidateLeaveNotifications,resetLeaveNotifications,leaveNoticeCount,leaveNoticeKeys,leaveNotices} from './leave-notifications.js';
 import {openCoachingShareLink} from './coaching-link-management.js';
 import {openReportExport} from './report-exports.js';
 import {openDetail,closeDetails} from './details.js';
@@ -29,7 +30,7 @@ const hasModule=module=>module==='hr'?Boolean(state.me):module==='purchasing'?st
 const visible=([,,,permission])=>permission==='training-calendar'?Boolean(state.me):['announcements','briefings','leaves'].includes(permission)?true:permission.startsWith('purchasing:')?purchasingAllowed(permission.slice(11)):permission.endsWith('.')?state.permissions.some(p=>p.startsWith(permission)):permitted(permission)||(permission==='hr.coaching.read'&&permitted('hr.coaching.manage'));
 function currentRoute(){const r=location.hash.slice(1).split('?')[0];if(r==='pr-verify')return r;const active=activeRoute(r),entry=[...navs.hr,...navs.security,...navs.purchasing,...navs.merchandise,...commonNav,...adminNav].find(n=>n[0]===active),isPurchasing=purchasingRoutes.includes(r),isMerchandise=merchandiseRoutes.includes(r),isHr=['dashboard','employees','organization','imports','documents','training','coaching'].includes(r),isSecurity=['security','roster','roster-settings','logbook','incidents','sop'].includes(r);return pageTitles[r]&&entry&&visible(entry)&&(!isHr||hasModule('hr'))&&(!isSecurity||hasModule('security'))&&(!isPurchasing||hasModule('purchasing'))&&(!isMerchandise||hasModule('merchandise'))?r:(hasHrDashboard()?'dashboard':hasModule('security')?'security':hasModule('purchasing')?'purchasing':hasModule('merchandise')?'merchandise':permitted('admin.users.read')?'accounts':permitted('admin.roles.read')?'roles':'training');}
 function activeRoute(route){return ['organization','imports'].includes(route)?'employees':route==='roster-settings'?'roster':route;}
-function navLink([route,label,ico]){return `<a href="#${route}" class="nav-link ${activeRoute(state.route)===route?'active':''}" ${activeRoute(state.route)===route?'aria-current="page"':''}>${icon(ico)}<span>${esc(label)}</span>${route==='announcements'?'<span class="badge-count" data-announcement-count hidden></span>':''}${route==='pr-approvals'&&state.purchasing?.counts?.approvals?`<span class="badge-count">${Number(state.purchasing.counts.approvals)}</span>`:''}</a>`;}
+function navLink([route,label,ico]){return `<a href="#${route}" class="nav-link ${activeRoute(state.route)===route?'active':''}" ${activeRoute(state.route)===route?'aria-current="page"':''}>${icon(ico)}<span>${esc(label)}</span>${route==='announcements'?'<span class="badge-count" data-announcement-count hidden></span>':''}${route==='leaves'?`<span class="badge-count" data-leave-count ${leaveNoticeCount()?'':'hidden'}>${leaveNoticeCount()}</span>`:''}${route==='pr-approvals'&&state.purchasing?.counts?.approvals?`<span class="badge-count">${Number(state.purchasing.counts.approvals)}</span>`:''}</a>`;}
 function workspaceSwitch(){
   const hr=hasModule('hr'),security=hasModule('security'),purchasing=hasModule('purchasing'),merchandise=hasModule('merchandise'),workspaces=[hr,security,purchasing,merchandise].filter(Boolean).length,module=state.module;
   return `<div class="workspace-switch ${workspaces>3?'four':workspaces>2?'three':''}" aria-label="Pilih modul">${hr?`<button data-action="switch-hr" class="${module==='hr'?'active':''}">${icon('people')} SDM</button>`:''}${security?`<button data-action="switch-security" class="${module==='security'?'active':''}">${icon('shield')} Keamanan</button>`:''}${purchasing?`<button data-action="switch-purchasing" class="${module==='purchasing'?'active':''}">${icon('building')} Pengadaan</button>`:''}${merchandise?`<button data-action="switch-merchandise" class="${module==='merchandise'?'active':''}">${icon('folder')} Bisnis</button>`:''}</div>`;
@@ -57,6 +58,7 @@ function refreshBackgroundSummaries(route){
   const session=state.me,update=()=>{if(state.me===session)refreshSummaryUI();};
   if(route!=='announcements')loadAnnouncementSummary({background:true}).then(update).catch(()=>{});
   if(needsPurchasingOverview())loadPurchasingOverview({background:true}).then(update).catch(()=>{});
+  loadLeaveNotifications({background:true}).then(update).catch(()=>{});
 }
 function navigate(){return navigation.run(async isCurrent=>{
   if(!state.me){await loginPage();return;}
@@ -83,7 +85,7 @@ function navigate(){return navigation.run(async isCurrent=>{
 });}
 // Lonceng: jumlah informasi belum dibaca + tindakan Pengadaan yang menunggu akun ini.
 function bellItems(){
-  const items=hasModule('purchasing')?purchasingNotices():[];const unread=unreadAnnouncementCount();
+  const items=[...(hasModule('purchasing')?purchasingNotices():[]),...leaveNotices()];const unread=unreadAnnouncementCount();
   if(unread)items.push({route:'announcements',count:unread,title:'Informasi internal belum dibaca',note:'Pengumuman yang masih berlaku',ico:'bell'});
   return items;
 }
@@ -93,17 +95,32 @@ function openBell(){
   closeBell();const bell=document.querySelector('[data-action=notifications]');if(!bell)return;
   const items=bellItems(),panel=document.createElement('div');panel.className='bell-panel';panel.setAttribute('role','dialog');panel.setAttribute('aria-label','Notifikasi');
   panel.innerHTML=`<header><strong>Notifikasi</strong><button type="button" class="icon-button" data-bell-close aria-label="Tutup notifikasi">${icon('close')}</button></header>${items.length?items.map(i=>`<a class="bell-item" href="#${i.route}">${icon(i.ico)}<span><strong>${esc(i.title)}</strong><small>${esc(i.note)}</small></span><span class="badge-count">${i.count}</span></a>`).join(''):'<p class="bell-empty">Tidak ada notifikasi baru.</p>'}<a class="bell-footer" href="#announcements">Buka Informasi Internal ${icon('arrow')}</a>`;
-  document.body.append(panel);const r=bell.getBoundingClientRect();panel.style.top=`${Math.round(r.bottom+8)}px`;panel.style.right=`${Math.max(12,Math.round(window.innerWidth-r.right))}px`;
+  document.body.append(panel);const r=bell.getBoundingClientRect();panel.style.top=`${Math.round(r.bottom+8)}px`;panel.style.right=`${Math.min(Math.max(12,Math.round(window.innerWidth-r.right)),Math.max(12,window.innerWidth-panel.getBoundingClientRect().width-12))}px`;
   bell.setAttribute('aria-expanded','true');panel.querySelector('a,button')?.focus();
 }
 // Sekali per sesi browser: buka lonceng otomatis bila ada PR yang menunggu tindakan akun ini.
 function remindOnce(){
+  if(!state.me)return;
+  if(leaveNoticeCount()){
+   const keys=leaveNoticeKeys(),leaveKey=`besakih-leave-notice-${state.me.user.id}`;let seen=state.leaveNoticeSeen||[];
+   try{const saved=JSON.parse(sessionStorage.getItem(leaveKey)||'[]');if(Array.isArray(saved))seen=saved;}catch{}
+   if(keys.some(key=>!seen.includes(key))){
+    state.leaveNoticeSeen=keys;try{sessionStorage.setItem(leaveKey,JSON.stringify(keys));}catch{}
+    if(document.querySelector('dialog[open]')||document.activeElement?.matches('input,textarea,select'))toast(`${leaveNoticeCount()} persetujuan cuti menunggu Anda. Buka ikon lonceng untuk memeriksanya.`);
+    else openBell();
+   }
+  }
   if(!hasModule('purchasing')||!purchasingNotices().length)return;const key=`besakih-bell-${state.me.user.id}`;
   try{if(sessionStorage.getItem(key))return;sessionStorage.setItem(key,'1');}catch{if(state.bellShown)return;}
   state.bellShown=true;openBell();
 }
 document.addEventListener('badges-changed',syncBell);
-document.addEventListener('click',e=>{const panel=document.querySelector('.bell-panel');if(!panel)return;if(e.target.closest('[data-bell-close]')||e.target.closest('.bell-panel a')||(!e.target.closest('.bell-panel')&&!e.target.closest('[data-action=notifications]')))closeBell();});
+document.addEventListener('leave-notices-changed',()=>{document.querySelectorAll('[data-leave-count]').forEach(el=>{el.textContent=leaveNoticeCount();el.hidden=!leaveNoticeCount();});syncBell();remindOnce();});
+function pollLeaveNotifications(force=false){if(state.me&&!state.me.user.must_change_password&&!document.hidden)loadLeaveNotifications({background:true,force:force===true}).catch(()=>{});}
+setInterval(pollLeaveNotifications,30000);
+window.addEventListener('focus',()=>pollLeaveNotifications(true));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollLeaveNotifications(true);});
+document.addEventListener('click',e=>{const panel=document.querySelector('.bell-panel');if(!panel)return;const link=e.target.closest('.bell-panel a');if(link?.hash==='#leaves?tab=approvals'&&location.hash===link.hash)document.dispatchEvent(new Event('refresh-app'));if(e.target.closest('[data-bell-close]')||link||(!e.target.closest('.bell-panel')&&!e.target.closest('[data-action=notifications]')))closeBell();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.bell-panel')){closeBell();document.querySelector('[data-action=notifications]')?.focus();}});
 window.addEventListener('resize',closeBell);
 function bindPage(){
@@ -124,7 +141,7 @@ function passwordForm(required=false){
   form.dataset.password='true';if(required){form.querySelectorAll('[data-close]').forEach(b=>b.remove());form.addEventListener('cancel',e=>e.preventDefault());}
 }
 async function loginPage(){
-  navigation.invalidate();state.me=null;state.permissions=[];state.items=[];state.trainingCalendarItems=[];state.trainingSelectedDay=null;closeDetails();closeBell();resetPurchasingState();resetLeaves();resetAnnouncementSummary();state.bellShown=false;document.querySelectorAll('dialog').forEach(d=>d.close());document.title='Masuk — SPH-Portal';
+  navigation.invalidate();state.me=null;state.permissions=[];state.items=[];state.trainingCalendarItems=[];state.trainingSelectedDay=null;closeDetails();closeBell();resetPurchasingState();resetLeaves();resetLeaveNotifications();resetAnnouncementSummary();state.bellShown=false;state.leaveNoticeSeen=null;document.querySelectorAll('dialog').forEach(d=>d.close());document.title='Masuk — SPH-Portal';
   app.innerHTML=`<div class="login-page"><section class="login-brand-panel"><a class="brand" href="/"><img src="/app/assets/mark.svg" alt="Logo Badan Pengelola Besakih" width="42" height="42"><div><div class="brand-name">SPH-Portal</div><div class="brand-subtitle">SDM & Operasional</div></div></a><div class="login-story"><div class="eyebrow">Portal internal BP Besakih</div><h1>Bersama merawat kawasan suci.</h1><p>Satu ruang untuk mengelola tim, mengembangkan pelayanan, dan menjaga kawasan Besakih.</p></div><besakih-photo-slideshow></besakih-photo-slideshow></section><section class="login-form-panel"><div class="login-form-box"><div class="eyebrow">Selamat datang kembali</div><h2>Masuk ke portal</h2><p>Gunakan akun yang diberikan oleh administrator.</p><form id="login-form"><label class="field"><span>Username</span><input name="username" autocomplete="username" placeholder="Masukkan username" required maxlength="64"></label><label class="field"><span>Password</span><input name="password" type="password" autocomplete="current-password" placeholder="Masukkan password" required maxlength="128"></label><p class="form-error" role="alert"></p><button class="button primary" type="submit">Masuk ke portal ${icon('arrow')}</button></form><button class="button text" data-action="recover">Pulihkan password</button><p class="login-footer">Akses terbatas untuk pengguna yang diberi izin.<br>© ${new Date().getFullYear()} Badan Pengelola Besakih</p></div></section></div>`;
   document.querySelector('#login-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.target,button=form.querySelector('[type=submit]');button.disabled=true;form.querySelector('.form-error').textContent='';try{const values=Object.fromEntries(new FormData(form));form.querySelector('[name=password]').value='';await post('auth/login',values);state.me=await api('auth/me');state.permissions=state.me.permissions;await navigate();}catch(err){form.querySelector('.form-error').textContent=err.message;button.disabled=false;}});
 }
@@ -183,7 +200,7 @@ document.addEventListener('click',async event=>{
     const original=el.disabled;el.disabled=true;try{await handleFormAction(action,el);}finally{el.disabled=original;}
   }catch(err){toast(err.message,true);}
 });
-document.addEventListener('data-changed',()=>{invalidateAnnouncementSummary();invalidatePurchasingOverview();});
+document.addEventListener('data-changed',()=>{invalidateAnnouncementSummary();invalidatePurchasingOverview();invalidateLeaveNotifications();pollLeaveNotifications();});
 document.addEventListener('refresh-app',()=>{invalidateAnnouncementSummary();invalidatePurchasingOverview();navigate();});document.addEventListener('session-ended',()=>loginPage());window.addEventListener('hashchange',()=>{closeDetails();closeBell();navigate();});
 const preferred=localStorage.getItem('besakih-theme');applyTheme(preferred==='dark'?'dark':'light');
 document.querySelector('.skip-link').addEventListener('click',event=>{event.preventDefault();(document.querySelector('#main')||document.querySelector('#login-form input'))?.focus();});

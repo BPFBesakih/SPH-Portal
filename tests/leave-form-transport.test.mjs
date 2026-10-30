@@ -17,6 +17,10 @@ test('cross-origin and cross-site requests never reach the server function',asyn
  assert.equal((await handleLeaveForm(request({}, {Origin:'https://attacker.test'}),env,fail)).status,403);
  assert.equal((await handleLeaveForm(request({}, {'Sec-Fetch-Site':'cross-site'}),env,fail)).status,403);
 });
+test('shared directory response exposes only form choices and never balances, full identifiers or reasons',async()=>{
+ const response=await handleLeaveForm(request(),env,async()=>Response.json({ok:true,result:{shared:true,today:'2026-10-30',employees:[{id:'opaque-choice',full_name:'Contoh',position_name:'Staf · Unit A',unit_name:'Unit A',can_request:true,approver:'Atasan',employee_no:'PRIVATE-NUMBER',available_days:9,requests:[{reason:'PRIVATE-REASON'}]}],share_token:'PRIVATE-TOKEN'}}));
+ assert.equal(response.status,200);const value=await response.json();assert(value.shared);assert.equal(value.employees.length,1);assert(!JSON.stringify(value).includes('PRIVATE'));assert(!JSON.stringify(value).includes('available_days'));
+});
 test('invalid token, method and content type are rejected before upstream',async()=>{
  const fail=()=>{throw new Error('Must not call upstream');};
  assert.equal((await handleLeaveForm(request({token:''}),env,fail)).status,404);

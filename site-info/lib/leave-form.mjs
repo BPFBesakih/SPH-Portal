@@ -7,7 +7,7 @@ export async function handleLeaveForm(request,env,fetchImpl=globalThis.fetch.bin
   if(request.method!=='POST')return respond({error:'Gunakan formulir cuti.'},405);
   const origin=new URL(env.PORTAL_ORIGIN);if(origin.protocol!=='https:'||origin.origin!==env.PORTAL_ORIGIN)throw new Error('Invalid origin');
   const allowed=[origin.origin];if(env.PORTAL_LEGACY_ORIGIN)allowed.push(new URL(env.PORTAL_LEGACY_ORIGIN).origin);
-  if(!allowed.includes(url.origin)||request.headers.get('Origin')!==url.origin||request.headers.get('Sec-Fetch-Site')==='cross-site')return respond({error:'Buka formulir melalui tautan pribadi dari SDM.'},403);
+  if(!allowed.includes(url.origin)||request.headers.get('Origin')!==url.origin||request.headers.get('Sec-Fetch-Site')==='cross-site')return respond({error:'Buka formulir melalui tautan dari SDM.'},403);
   if(!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))return respond({error:'Isi permintaan tidak valid.'},415);
   const ip=request.headers.get('CF-Connecting-IP');if(!ip||ip.length>45||!/^[a-f0-9:.]+$/i.test(ip))return respond({error:'Jalur pengiriman tidak valid.'},400);
   const reader=request.body?.getReader();if(!reader)return respond({error:'Isi permintaan kosong.'},400);
@@ -15,7 +15,7 @@ export async function handleLeaveForm(request,env,fetchImpl=globalThis.fetch.bin
   try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>24576){await reader.cancel();return respond({error:'Isi formulir terlalu besar.'},413);}chunks.push(value);}}finally{reader.releaseLock();}
   const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
   let body;try{body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{return respond({error:'Isi permintaan tidak valid.'},400);}
-  if(!body||typeof body!=='object'||Array.isArray(body)||typeof body.token!=='string'||!/^[a-f0-9]{64}$/.test(body.token))return respond({error:'Tautan tidak aktif. Minta tautan pribadi kepada SDM.'},404);
+  if(!body||typeof body!=='object'||Array.isArray(body)||typeof body.token!=='string'||!/^[a-f0-9]{64}$/.test(body.token))return respond({error:'Tautan tidak aktif. Minta tautan formulir kepada SDM.'},404);
   const base=new URL(env.SUPABASE_URL);if(base.protocol!=='https:'||!base.hostname.endsWith('.supabase.co')||base.username||base.password||!env.SUPABASE_SECRET_KEY)throw new Error('Invalid configuration');
   const upstream=await fetchImpl(`${base.origin}/functions/v1/leave-form`,{method:'POST',redirect:'manual',headers:{apikey:env.SUPABASE_SECRET_KEY,'Content-Type':'application/json','x-region':'ap-southeast-1'},body:JSON.stringify({operation:action,client_ip:ip,body}),signal:AbortSignal.timeout(25000)});
   const data=await upstream.json();
@@ -23,6 +23,10 @@ export async function handleLeaveForm(request,env,fetchImpl=globalThis.fetch.bin
   if(data.ok!==true||!data.result||typeof data.result!=='object')throw new Error('Invalid response');
   const r=data.result;
   if(action==='context'){
+   if(r.shared===true){
+    if(!Array.isArray(r.employees)||typeof r.today!=='string')throw new Error('Invalid shared context');
+    return respond({shared:true,today:r.today,expires_at:r.expires_at,employees:r.employees.map(e=>({id:e.id,full_name:e.full_name,unit_name:e.unit_name,position_name:e.position_name,approver:e.approver||null,can_request:e.can_request===true}))});
+   }
    if(typeof r.name!=='string'||typeof r.today!=='string'||!Number.isInteger(r.available_days))throw new Error('Invalid context');
    return respond({today:r.today,name:r.name,unit_name:r.unit_name||'',position_name:r.position_name||'',available_days:r.available_days,reserved_days:r.reserved_days||0,approver:r.approver||null,can_request:r.can_request===true,expires_at:r.expires_at});
   }

@@ -8,6 +8,17 @@ export async function leaveRoutes({db,user,p,method,body={},url},services){
  const q=(sql,...values)=>db.query(sql,values),one=async(sql,...values)=>(await q(sql,...values))[0];
  const day=today(),stamp=()=>new Date().toISOString(),id=p[1],action=p[2];
  assert(!user.must_change_password,'Ganti password awal terlebih dahulu.',428);
+ if(id==='notifications'&&method==='GET'){
+  const rows=user.employee_id?await q(`SELECT r.id,r.status,r.row_version FROM leave_requests r
+   JOIN employees e ON e.id=r.employee_id JOIN employees boss ON boss.id=$1 AND boss.is_active=1
+   WHERE r.approver_employee_id=$1 AND r.employee_id<>$1 AND r.status IN ('PENDING','CANCELLATION_PENDING')
+    AND (SELECT count(*) FROM employee_placements ep WHERE ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=$2 AND (ep.valid_to IS NULL OR ep.valid_to>=$2))=1
+    AND EXISTS(SELECT 1 FROM employee_placements ep WHERE ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=$2 AND (ep.valid_to IS NULL OR ep.valid_to>=$2) AND ep.supervisor_employee_id=$1)
+   ORDER BY r.id`,user.employee_id,day):[];
+  const signature=rows.length?[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(rows))))].map(x=>x.toString(16).padStart(2,'0')).join(''):'';
+  const keys=await Promise.all(rows.map(async r=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(`${r.id}:${r.status}:${r.row_version}`)))].map(x=>x.toString(16).padStart(2,'0')).join('')));
+  return {total:rows.length,pending:rows.filter(r=>r.status==='PENDING').length,cancellations:rows.filter(r=>r.status==='CANCELLATION_PENDING').length,signature,keys};
+ }
  const validDate=value=>{
   assert(typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value,'Tanggal tidak valid.');
   return value;
@@ -74,6 +85,20 @@ export async function leaveRoutes({db,user,p,method,body={},url},services){
  };
  const locked=()=>q("SELECT pg_advisory_xact_lock(hashtextextended('portal.leave_year_maintenance',0))");
  const manageLink=async e=>Boolean(!formLink&&e&&await can(db,user,'hr.employees.update',{employee_id:e.id,org_unit_id:e.org_unit_id}));
+ const manageShared=Boolean(!formLink&&await can(db,user,'hr.employees.update',{}));
+ if(id==='shared-form'){
+  assert(manageShared,'Tautan semua pegawai hanya dapat dikelola SDM dengan cakupan seluruh organisasi.',403);
+  const current=()=>one('SELECT id,share_token token,expires_at::text expires_at FROM leave_shared_form_links WHERE revoked_at IS NULL AND expires_at>now()');
+  if(method==='GET')return {link:await current()||null};
+  assert(method==='POST'&&['issue','revoke'].includes(body.action),'Tindakan tautan tidak valid.');await locked();
+  await q('UPDATE leave_shared_form_links SET revoked_at=now() WHERE revoked_at IS NULL');
+  if(body.action==='revoke'){await audit(db,user,'LEAVE_SHARED_FORM_REVOKED','leave_shared_form_links','all');return {ok:true};}
+  const token=[...crypto.getRandomValues(new Uint8Array(32))].map(x=>x.toString(16).padStart(2,'0')).join('');
+  const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token)))].map(x=>x.toString(16).padStart(2,'0')).join('');
+  const linkId=crypto.randomUUID();await q("INSERT INTO leave_shared_form_links(id,token_hash,share_token,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '90 days')",linkId,hash,token,user.id);
+  await audit(db,user,'LEAVE_SHARED_FORM_ISSUED','leave_shared_form_links',linkId,{audience:'ALL_ELIGIBLE_EMPLOYEES'});
+  return {link:await current()};
+ }
  if(id==='form-links'){
   assert(!formLink,'Akses ditolak.',403);
   if(method==='GET'){
@@ -129,7 +154,7 @@ export async function leaveRoutes({db,user,p,method,body={},url},services){
   return {today:day,year,me:me?{id:me.id,name:me.full_name,eligible:eligible(me),employment_status:me.employment_status}:null,
    approver:boss?{name:boss.full_name,id:boss.id}:null,balances,requests,
    calendar:calendar.map(r=>({...r,name:byId.get(r.employee_id)?.full_name,unit_name:byId.get(r.employee_id)?.unit_name})),
-   capabilities:{can_request:eligible(me)&&Boolean(boss),can_export:await has(db,user,'hr.leaves.export'),can_manage_form_links:!formLink&&await has(db,user,'hr.employees.update'),can_manage_reports:visibleEmployees.some(e=>e.id!==user.employee_id&&reportAccess.get(e.id))},
+   capabilities:{can_request:eligible(me)&&Boolean(boss),can_export:await has(db,user,'hr.leaves.export'),can_manage_shared_form:manageShared,can_manage_form_links:!formLink&&await has(db,user,'hr.employees.update'),can_manage_reports:visibleEmployees.some(e=>e.id!==user.employee_id&&reportAccess.get(e.id))},
    rules:{annual_credit:12,next_credit_year:Math.max(2027,Number(day.slice(0,4))+1),prior_year_valid_through:'31 Maret',approval:'Atasan langsung'}};
  }
  if(method==='GET'&&id==='history'){
@@ -153,13 +178,13 @@ export async function leaveRoutes({db,user,p,method,body={},url},services){
   const reason=clean(body.reason,'Alasan cuti');
   const canonical=JSON.stringify({dates:Array.isArray(body.dates)?[...body.dates].sort():body.dates,reason});
   const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical)))].map(x=>x.toString(16).padStart(2,'0')).join('');
-  const prior=(await one(formLink?'SELECT to_jsonb(r) row FROM leave_requests r WHERE source_form_link_id=$1 AND client_key=$2':'SELECT to_jsonb(r) row FROM leave_requests r WHERE created_by=$1 AND client_key=$2',formLink?.id||user.id,body.client_key))?.row;
+  const prior=(await (formLink?.shared?one('SELECT to_jsonb(r) row FROM leave_requests r WHERE source_shared_form_link_id=$1 AND employee_id=$2 AND client_key=$3',formLink.id,me?.id,body.client_key):one(formLink?'SELECT to_jsonb(r) row FROM leave_requests r WHERE source_form_link_id=$1 AND client_key=$2':'SELECT to_jsonb(r) row FROM leave_requests r WHERE created_by=$1 AND client_key=$2',formLink?.id||user.id,body.client_key)))?.row;
   if(prior){assert(prior.payload_hash===hash,'Kunci pengiriman sudah dipakai untuk isi berbeda.',409);return {id:prior.id,status:prior.status,duplicate:true};}
   const planned=await plan(body.dates),requestId=crypto.randomUUID(),now=stamp();
-  await q(`INSERT INTO leave_requests(id,employee_id,approver_employee_id,first_date,last_date,day_count,reason,client_key,payload_hash,created_by,created_at,updated_at,submission_source,source_form_link_id)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13)`,requestId,me.id,planned.approver.id,planned.dates[0],planned.dates.at(-1),planned.dates.length,reason,body.client_key,hash,user.id,now,formLink?'FORM':'PORTAL',formLink?.id||null);
+  await q(`INSERT INTO leave_requests(id,employee_id,approver_employee_id,first_date,last_date,day_count,reason,client_key,payload_hash,created_by,created_at,updated_at,submission_source,source_form_link_id,source_shared_form_link_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,$14)`,requestId,me.id,planned.approver.id,planned.dates[0],planned.dates.at(-1),planned.dates.length,reason,body.client_key,hash,user.id,now,formLink?'FORM':'PORTAL',formLink&&!formLink.shared?formLink.id:null,formLink?.shared?formLink.id:null);
   for(const a of planned.allocations)await q("INSERT INTO leave_request_days(request_id,employee_id,work_date,balance_year,state) VALUES($1,$2,$3,$4,'PENDING')",requestId,me.id,a.date,a.balance_year);
-  await audit(db,user,'LEAVE_SUBMITTED','leave_requests',requestId,{days:planned.dates.length,approver_employee_id:planned.approver.id,conflict_days:planned.conflicts.length,submission_source:formLink?'FORM':'PORTAL',source_form_link_id:formLink?.id||null});
+  await audit(db,user,'LEAVE_SUBMITTED','leave_requests',requestId,{days:planned.dates.length,approver_employee_id:planned.approver.id,conflict_days:planned.conflicts.length,submission_source:formLink?'FORM':'PORTAL',source_form_link_id:formLink&&!formLink.shared?formLink.id:null,source_shared_form_link_id:formLink?.shared?formLink.id:null});
   return {id:requestId,status:'PENDING',conflicts:planned.conflicts};
  }
  const r=await request(id),dates=await requestDays(id);

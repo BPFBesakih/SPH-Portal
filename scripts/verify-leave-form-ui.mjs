@@ -12,14 +12,14 @@ const actor=async role=>{await page.goto(base+'/__fixture/actor?role='+role);awa
 let anonymous;
 try{
  await actor('sdm');await page.getByRole('button',{name:'Formulir pegawai',exact:true}).click();
- const modal=page.locator('dialog').last();await modal.locator('#leave-link-person').selectOption('e-employee');await modal.locator('#leave-link-issue').click();
+ const modal=page.locator('dialog').last();await modal.locator('#leave-shared-issue').click();
  const link=modal.locator('#leave-link-url');await link.waitFor();const url=await link.inputValue();assert(url.includes('/cuti/#token='));
- assert((await modal.innerText()).includes('90 hari'));check('SDM generates an employee-specific form link without exposing it in the report');
+ assert((await modal.innerText()).includes('90 hari'));check('SDM generates one shared form link for all employees');
  anonymous=await browser.newContext({viewport:{width:1100,height:1000}});const formPage=await anonymous.newPage();formPage.on('pageerror',e=>errors.push(e.message));
- await formPage.goto(base+'/cuti/');await formPage.getByRole('heading',{name:'Formulir belum dapat dibuka'}).waitFor();check('unbound link explains how to obtain a personal form without exposing the employee directory');
- await formPage.goto(url);await formPage.reload();await formPage.getByRole('heading',{name:'Rencana cuti'}).waitFor();
+ await formPage.goto(base+'/cuti/');await formPage.getByRole('heading',{name:'Formulir belum dapat dibuka'}).waitFor();check('an active shared token is required before any directory is displayed');
+ await formPage.goto(url);await formPage.reload();await formPage.getByRole('combobox').fill('Pegawai Contoh A');await formPage.getByRole('option').filter({hasText:'Pegawai Contoh A'}).click();await formPage.getByRole('heading',{name:'Rencana cuti'}).waitFor();
  assert((await formPage.locator('.person').innerText()).includes('Pegawai Contoh A'));assert(!(await formPage.locator('body').innerText()).includes('FIXTURE-'));
- assert.equal((await anonymous.cookies()).length,0);check('personal form opens without a portal account or session cookie');
+ assert.equal((await anonymous.cookies()).length,0);assert.equal(await formPage.locator('.balance').count(),0);check('employee selects their name without login and private balances stay hidden');
  const form=formPage.locator('#request');await form.locator('[name=from]').fill('2026-11-10');await form.locator('[name=to]').fill('2026-11-11');await form.locator('#show-dates').click();
  assert.equal(await form.locator('[name=work_date]:checked').count(),0);await form.locator('[name=reason]').fill('Keperluan keluarga contoh dari formulir');await form.locator('[name=confirmed]').check();
  await form.locator('#review').click();await formPage.getByText('Tampilkan tanggal dan centang minimal satu hari kerja.').waitFor();
@@ -29,9 +29,11 @@ try{
  await formPage.setViewportSize({width:390,height:844});assert(await formPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await formPage.screenshot({path:resolve(out,'form-mobile.png'),fullPage:true});check('form and date selection fit mobile without horizontal scrolling');
  await form.locator('[name=reason]').fill('Alasan diperbarui');assert(await form.locator('#send').isHidden());await form.locator('#review').click();await form.locator('#send').waitFor({state:'visible'});await form.locator('#send').click();
  await formPage.getByRole('heading',{name:'Pengajuan cuti diterima'}).waitFor();const reference=await formPage.locator('.reference').innerText();assert(/^[a-f0-9-]{36}$/.test(reference));check('edited request requires another review and receives a submission receipt');
+ const second=await anonymous.newPage();await second.goto(url);await second.getByRole('combobox').fill('Pegawai Contoh B');await second.getByRole('option').filter({hasText:'Pegawai Contoh B'}).click();
+ await second.locator('[name=from]').fill('2026-11-12');await second.locator('[name=to]').fill('2026-11-12');await second.locator('#show-dates').click();await second.locator('[name=work_date]').check();await second.locator('[name=reason]').fill('Contoh pegawai kedua');await second.locator('[name=confirmed]').check();await second.locator('#review').click();await second.locator('#send').waitFor({state:'visible'});await second.locator('#send').click();await second.getByRole('heading',{name:'Pengajuan cuti diterima'}).waitFor();assert.notEqual(await second.locator('.reference').innerText(),reference);check('a second employee submits through exactly the same shared URL');
  await actor('boss');await page.getByRole('tab',{name:/Persetujuan saya/}).click();await page.locator(`[data-action=leave-detail][data-id="${reference}"]`).click();await page.getByText(/Dikirim melalui formulir tanpa login/).waitFor();await page.getByRole('button',{name:'Setujui',exact:true}).click();
  const decision=page.locator('dialog').last();assert((await decision.innerText()).includes('identitas pemohon'));await decision.locator('[name=verified]').check();await decision.getByRole('button',{name:'Setujui',exact:true}).click();await decision.waitFor({state:'detached'});check('direct supervisor sees form provenance and verifies identity plus work dates');
- await actor('sdm');await page.getByRole('button',{name:'Formulir pegawai',exact:true}).click();const links=page.locator('dialog').last();await links.locator('#leave-link-person').selectOption('e-employee');await links.locator('#leave-link-revoke').click();await links.getByText('Belum ada tautan aktif.').waitFor();
- await formPage.goto(url);await formPage.reload();await formPage.getByRole('heading',{name:'Formulir belum dapat dibuka'}).waitFor();check('SDM revokes the link while submitted requests remain available for normal processing');
+ await actor('sdm');await page.getByRole('button',{name:'Formulir pegawai',exact:true}).click();const links=page.locator('dialog').last();assert.equal(await links.locator('#leave-link-url').inputValue(),url);await links.locator('#leave-shared-revoke').click();await links.getByText('Belum ada tautan bersama yang aktif.').waitFor();
+ await formPage.goto(url);await formPage.reload();await formPage.getByRole('heading',{name:'Formulir belum dapat dibuka'}).waitFor();check('SDM can copy an existing shared link again and revoke it without losing submitted requests');
  assert.deepEqual(errors,[]);writeFileSync(resolve(out,'form-ui-results.json'),JSON.stringify({passed:checks.length,checks,production_mutations:false},null,2));
 }finally{await anonymous?.close();await manager.close();await browser.close();}

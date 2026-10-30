@@ -13,11 +13,31 @@ export async function takeLeaveFormSlot(db,ip,action){
 }
 export async function publicLeaveForm(db,action,body,requestId){
  assert(['context','preview','submit'].includes(action),'Alamat tidak ditemukan.',404);
- assert(typeof body.token==='string'&&/^[a-f0-9]{64}$/.test(body.token),'Tautan tidak aktif. Minta tautan pribadi kepada SDM.',404);
- const [link]=await db.query('SELECT id,employee_id,expires_at::text expires_at FROM leave_form_links WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE',[await formDigest(body.token)]);
+ assert(typeof body.token==='string'&&/^[a-f0-9]{64}$/.test(body.token),'Tautan tidak aktif. Minta tautan formulir kepada SDM.',404);
+ const hash=await formDigest(body.token);
+ let [link]=await db.query('SELECT id,employee_id,expires_at::text expires_at FROM leave_form_links WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE',[hash]);
+ if(!link){[link]=await db.query('SELECT id,expires_at::text expires_at FROM leave_shared_form_links WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE',[hash]);if(link)link.shared=true;}
  assert(link,'Tautan tidak aktif atau kedaluwarsa. Minta tautan baru kepada SDM.',404);
  assert(!body.website,'Permintaan tidak valid.');
- // Identity always comes from the server-side link. Never accept an employee/user ID supplied by the browser.
+ if(link.shared&&action==='context'){
+  const rows=await db.query(`SELECT e.id,e.full_name,right(e.employee_no,4) suffix,p.name position_name,u.name unit_name,
+   ep.supervisor_employee_id,boss.full_name approver,boss.is_active boss_active FROM employees e
+   LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=$1 AND (ep.valid_to IS NULL OR ep.valid_to>=$1)
+   LEFT JOIN positions p ON p.id=ep.position_id LEFT JOIN org_units u ON u.id=p.org_unit_id LEFT JOIN employees boss ON boss.id=ep.supervisor_employee_id
+   WHERE e.is_active=1 AND e.employment_status IN ('Pegawai Kontrak (PKWT)','Pegawai Probation') ORDER BY e.full_name,e.id`,[today()]);
+  const groups=new Map();for(const row of rows){const list=groups.get(row.id)||[];list.push(row);groups.set(row.id,list);}
+  const people=[...groups.values()].map(list=>({...list[0],single:list.length===1}));
+  return {shared:true,today:today(),expires_at:link.expires_at,employees:people.map(e=>({id:e.id,full_name:e.full_name,unit_name:e.unit_name||'',
+   position_name:[e.position_name,e.unit_name,...(people.filter(p=>p.full_name===e.full_name).length>1?['ID berakhir '+e.suffix]:[])].filter(Boolean).join(' · '),
+   approver:e.approver||null,can_request:e.single&&e.boss_active===1&&e.supervisor_employee_id!==e.id}))};
+ }
+ if(link.shared){
+  assert(typeof body.employee_id==='string','Pilih nama pegawai dari hasil pencarian.');
+  const [employee]=await db.query("SELECT id FROM employees WHERE id=$1 AND is_active=1 AND employment_status IN ('Pegawai Kontrak (PKWT)','Pegawai Probation')",[body.employee_id]);
+  assert(employee,'Pegawai tidak tersedia untuk cuti tahunan.',403);link.employee_id=employee.id;
+ }
+ // Personal links bind identity; shared links record the selected active employee as self-reported.
+ // Neither pathway impersonates an authenticated account. Direct supervisors must verify identity.
  const user={id:null,employee_id:link.employee_id,must_change_password:0,request_id:requestId};
  const ctx={db,user,p:['leaves',...(action==='preview'?['preview']:[])],method:action==='context'?'GET':'POST',
   body:{dates:body.dates,reason:body.reason,client_key:body.client_key},url:new URL('https://internal.invalid/leaves')};
