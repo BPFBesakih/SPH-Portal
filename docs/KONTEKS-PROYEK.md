@@ -8,6 +8,8 @@ Tambahan 26 Oktober: **Briefing Pagi (Wewarah Semeng) sudah dirilis ke produksi*
 
 Tambahan 30 Oktober: modul **Cuti tahunan** terhubung ke 152 saldo awal pegawai non-THL (781 hari). Menu Cuti mencakup pengajuan hari kerja pilihan pegawai, persetujuan hanya atasan langsung, reservasi/pemotongan saldo, pembatalan, kalender sesuai scope, dashboard, riwayat dan laporan Excel/PDF. Backend portal-api versi 24 mempertahankan baseline produksi versi 22 dan menambahkan route Cuti. Rincian serta batas kebijakan ada pada [CUTI.md](CUTI.md).
 
+Lanjutan 30 Oktober: tersedia **Formulir pegawai** pada menu Cuti untuk SDM. SDM membuat tautan pribadi `/cuti/#token=...` yang terikat pada satu pegawai, berlaku 90 hari, dan bisa dicabut/diganti. Pegawai mengisi tanpa login; identitas dari token dan status/atasan terkini diperiksa server. Pengajuan masuk ke alur saldo yang sama dengan penanda sumber formulir; atasan langsung wajib memverifikasi identitas serta hari kerja sebelum menyetujui. Token hanya disimpan sebagai hash, tidak diterbitkan dalam source/audit/laporan. Backend `portal-api` versi 25 dan Edge Function terpisah `leave-form` versi 1 menerima kredensial server melalui Cloudflare; jalur privat portal tetap membutuhkan sesi. Rincian penggunaan dan verifikasi ada pada [CUTI.md](CUTI.md).
+
 SPH-Portal adalah aplikasi internal **Badan Pengelola Fasilitas Kawasan Suci Pura Agung Besakih**, untuk SDM, Keamanan, Pengadaan, informasi internal, serta administrasi akun. Antarmuka memakai Bahasa Indonesia, pendekatan Material Design 3, palet Tridatu (marun, putih, hitam, aksen emas), tampilan responsif dan tema gelap. Waktu operasional aplikasi adalah **Asia/Makassar (WITA, UTC+8)**.
 
 | Bagian | Status yang tercatat |

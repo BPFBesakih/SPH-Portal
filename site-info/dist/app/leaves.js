@@ -28,7 +28,7 @@ function renderLeavesPage(){
  if(data.me&&!data.me.eligible)notice=`<div class="notice">${icon('info')}<p>Status ${esc(data.me.employment_status)} tidak memperoleh cuti tahunan. Kalender tetap mengikuti cakupan akses.</p></div>`;
  else if(data.me&&!data.approver)notice=`<div class="notice warning">${icon('people')}<p>Atasan langsung belum ditetapkan secara tunggal. Hubungi SDM agar pengajuan dapat dikirim kepada atasan yang benar.</p></div>`;
  else if(!data.me&&!manager)notice=`<div class="notice">${icon('people')}<p>Akun ini belum terhubung dengan profil pegawai. Hubungi SDM untuk menggunakan pengajuan pribadi.</p></div>`;
- return `<div class="page-heading"><div><h1>Cuti</h1><p>Saldo, pengajuan, dan kalender tim. Persetujuan hanya oleh atasan langsung.</p></div><div class="actions">${data.capabilities.can_export?button('Ekspor laporan','leave-export','download','outlined'):''}${data.capabilities.can_request?button('Ajukan cuti','leave-new','plus'):''}</div></div>
+ return `<div class="page-heading"><div><h1>Cuti</h1><p>Saldo, pengajuan, dan kalender tim. Persetujuan hanya oleh atasan langsung.</p></div><div class="actions">${data.capabilities.can_manage_form_links?button('Formulir pegawai','leave-form-links','document','outlined'):''}${data.capabilities.can_export?button('Ekspor laporan','leave-export','download','outlined'):''}${data.capabilities.can_request?button('Ajukan cuti','leave-new','plus'):''}</div></div>
  ${notice}<div class="leave-tabs" role="tablist" aria-label="Bagian modul cuti">${visibleTabs.map(([key,label])=>`<button role="tab" aria-selected="${tab===key}" class="chip ${tab===key?'active':''}" data-action="leave-tab" data-tab="${key}">${esc(label)}</button>`).join('')}</div>
  <div id="leave-content">${tab==='dashboard'?dashboard(mine,manager):tab==='balances'?balances():tab==='calendar'?calendar():requests(tab)}</div>
  <footer class="page-footer"><span>SPH Portal · Cuti tahunan</span><span>Waktu operasional WITA</span></footer>`;
@@ -110,6 +110,7 @@ function showRequest(r){
  const modal=dialog('Detail pengajuan cuti',`<div class="leave-detail-head">${status(r)}<strong>${esc(r.employee_name)}</strong><span>${r.day_count} hari kerja · ${esc(r.approver_name)}</span></div>
  <h3>Tanggal hari kerja</h3><p>${r.dates.map(d=>esc(formatDate(d))).join(', ')}</p>
  ${r.conflicts?.length?`<div class="notice warning"><p><strong>Cuti bersamaan dalam satu unit.</strong> ${r.conflicts.map(c=>esc(c.name)+' ('+esc(formatDate(c.date))+')').join(', ')}. Peringatan ini tidak melarang persetujuan.</p></div>`:''}
+ ${r.submission_source==='FORM'?'<div class="notice"><p>Dikirim melalui formulir tanpa login. Atasan wajib memastikan pengajuan benar berasal dari pegawai ini sebelum menyetujui.</p></div>':''}
  <h3>Alasan</h3><p class="detail-prose">${esc(r.reason)}</p>
  ${r.cancellation_reason?`<h3>Alasan pembatalan</h3><p class="detail-prose">${esc(r.cancellation_reason)}</p>`:''}
  ${r.decision_note?`<h3>Catatan atasan</h3><p class="detail-prose">${esc(r.decision_note)}</p>`:''}
@@ -122,15 +123,38 @@ function showRequest(r){
 function decide(r,decision){
  const approve=decision.startsWith('approve'),cancel=decision.includes('cancel');
  formDialog(approve?(cancel?'Setujui pembatalan':'Setujui cuti'):'Tolak permintaan',`<p class="form-note full">${esc(r.employee_name)} · ${r.day_count} hari kerja: ${r.dates.map(d=>esc(formatDate(d))).join(', ')}</p>
- ${approve?field(cancel?'Saya memverifikasi pembatalan sebelum cuti berlangsung.':'Saya telah memverifikasi tanggal pilihan sebagai hari kerja pegawai.','verified','checkbox',false,'required'):''}
+ ${approve?field(r.submission_source==='FORM'?'Saya telah memastikan identitas pemohon dan memverifikasi '+(cancel?'pembatalan sebelum cuti berlangsung.':'tanggal pilihan sebagai hari kerja pegawai.'):cancel?'Saya memverifikasi pembatalan sebelum cuti berlangsung.':'Saya telah memverifikasi tanggal pilihan sebagai hari kerja pegawai.','verified','checkbox',false,'required'):''}
  ${field(approve?'Catatan (opsional)':'Alasan penolakan','note','textarea','',approve?'optional maxlength="2000"':'maxlength="2000"')}`,async b=>{
-  await post(`leaves/${r.id}/decision`,{decision,row_version:r.row_version,note:b.note,verified_work_dates:b.verified===true});
+  await post(`leaves/${r.id}/decision`,{decision,row_version:r.row_version,note:b.note,verified_work_dates:b.verified===true,verified_identity:b.verified===true});
   document.querySelectorAll('[data-leave-detail]').forEach(d=>d.close());toast('Keputusan tersimpan.');await reload();
  },{submit:approve?'Setujui':'Tolak',wide:true});
 }
 async function history(employeeId){
  const result=await api(`leaves/history?employee_id=${encodeURIComponent(employeeId)}`);
  dialog('Riwayat saldo · '+result.employee_name,table(['Tanggal','Tahun','Perubahan','Sebelum','Sesudah','Kejadian'],result.items.map(r=>`<tr><td>${formatDate(r.created_at)}</td><td>${r.balance_year}</td><td>${r.delta_days>0?'+':''}${r.delta_days}</td><td>${r.before_days}</td><td>${r.after_days}</td><td>${esc(eventNames[r.event_type]||r.event_type)}</td></tr>`)),{wide:true});
+}
+async function manageFormLinks(){
+ const result=await api('leaves/form-links'),people=data.balances.filter(r=>r.can_manage_form_link&&r.eligible);
+ const modal=dialog('Formulir pengajuan pegawai',`<p>Pilih pegawai, lalu buat tautan pribadi yang dapat diisi tanpa login. Bagikan hanya kepada pegawai yang bersangkutan. Tautan berlaku 90 hari; mengganti tautan menonaktifkan tautan sebelumnya.</p>
+ <label class="field"><span>Pegawai</span><select id="leave-link-person">${people.map(r=>`<option value="${esc(r.employee_id)}">${esc(r.name)} · ${esc(r.unit_name||'Belum ditempatkan')} · ${esc(r.employee_no)}</option>`).join('')}</select></label>
+ <p id="leave-link-status" class="muted"></p><p id="leave-link-error" role="alert" class="form-error"></p>
+ <div id="leave-link-result"></div><div class="actions"><button type="button" class="button primary" id="leave-link-issue">Buat / ganti tautan</button><button type="button" class="button outlined" id="leave-link-revoke">Nonaktifkan tautan</button></div>`,{wide:true});
+ const select=modal.querySelector('select'),info=modal.querySelector('#leave-link-status'),out=modal.querySelector('#leave-link-result'),error=modal.querySelector('#leave-link-error');
+ let links=result.items;
+ const paint=()=>{const link=links.find(l=>l.employee_id===select.value);info.textContent=link?'Tautan aktif sampai '+formatDate(link.expires_at)+'.':'Belum ada tautan aktif.';out.innerHTML='';error.textContent='';modal.querySelector('#leave-link-revoke').disabled=!link;};
+ select.addEventListener('change',paint);paint();
+ for(const action of ['issue','revoke'])modal.querySelector('#leave-link-'+action).addEventListener('click',async e=>{
+  modal.querySelector('#leave-link-issue').disabled=true;modal.querySelector('#leave-link-revoke').disabled=true;error.textContent='';select.disabled=true;
+  try{
+   const employeeId=select.value,r=await post('leaves/form-links',{employee_id:employeeId,action});
+   links=links.filter(l=>l.employee_id!==employeeId);if(action==='issue')links.push({employee_id:employeeId,expires_at:r.expires_at});paint();
+   if(action==='issue'){
+    const url=new URL('/cuti/',location.origin);url.hash='token='+r.token;
+    out.innerHTML=`<label class="field"><span>Tautan pribadi · ${esc(r.name)}</span><input id="leave-link-url" readonly value="${esc(url.href)}"></label><button type="button" class="button outlined" id="leave-link-copy">Salin tautan</button><p class="muted">Simpan atau bagikan sekarang. Tautan lengkap tidak disimpan dan tidak dapat ditampilkan kembali.</p>`;
+    out.querySelector('#leave-link-copy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(url.href);toast('Tautan tersalin.');}catch{out.querySelector('input').select();toast('Pilih dan salin tautan dari kolom di atas.');}});
+   }else toast('Tautan dinonaktifkan. Pengajuan yang sudah masuk tetap diproses oleh atasan.');
+  }catch(err){error.textContent=err.message;}finally{modal.querySelector('#leave-link-issue').disabled=false;modal.querySelector('#leave-link-revoke').disabled=!links.some(l=>l.employee_id===select.value);select.disabled=false;}
+ });
 }
 const columns={
  balances:[['name','Nama pegawai'],['employee_no','Nomor pegawai'],['unit_name','Unit'],['balance_year','Tahun asal'],['granted_days','Diberikan'],['consumed_days','Terpakai'],['expired_days','Kedaluwarsa'],['reserved_days','Ditahan'],['remaining_days','Sisa buku'],['available_days','Tersedia']],
@@ -172,6 +196,7 @@ export async function handleLeaveAction(action,element){
  const r=data.requests.find(r=>r.id===element.dataset.id);
  if(action==='leave-tab'){tab=element.dataset.tab;repaint();}
  else if(action==='leave-new')newRequest();
+ else if(action==='leave-form-links')await manageFormLinks();
  else if(action==='leave-detail'&&r)showRequest(r);
  else if(action==='leave-decision'&&r)decide(r,element.dataset.decision);
  else if(action==='leave-cancel'&&r)formDialog(r.status==='PENDING'?'Batalkan pengajuan':'Minta pembatalan cuti',field('Alasan pembatalan','note','textarea','','maxlength="2000"'),async b=>{await post(`leaves/${r.id}/cancel`,{row_version:r.row_version,note:b.note});document.querySelectorAll('[data-leave-detail]').forEach(d=>d.close());toast(r.status==='PENDING'?'Pengajuan dibatalkan.':'Permintaan pembatalan dikirim ke atasan.');await reload();});
