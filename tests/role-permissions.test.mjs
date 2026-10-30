@@ -31,6 +31,10 @@ test('izin resource baru tidak tersembunyi atau terhapus ketika formulir role di
   assert(html.includes('approve'));
   assert(html.includes('value="future.feature.approve" checked disabled'));
 });
+test('izin cuti tampil dengan label Kontrol Cuti yang seragam',()=>{
+ const html=renderRolePermissionGroups(['read','export','manage'].map(action=>({resource:'hr.leaves',action,code:'hr.leaves.'+action})),['hr.leaves.read']);
+ assert(html.includes('<h3>Kontrol Cuti</h3>'));assert(!html.includes('<h3>hr.leaves</h3>'));assert(html.includes('value="hr.leaves.read" checked'));
+});
 
 test('nama kode dan label dari katalog izin di-escape',()=>{
   const html=renderRolePermissionGroups([{resource:'another.feature',action:'<img>',code:'another.feature.<img>'}]);

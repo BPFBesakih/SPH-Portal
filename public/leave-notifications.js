@@ -6,4 +6,4 @@ export const invalidateLeaveNotifications=()=>summary.invalidate();
 export function resetLeaveNotifications(){summary.reset();state.leaveNotifications=null;}
 export const leaveNoticeCount=()=>state.leaveNotifications?.total||0;
 export const leaveNoticeKeys=()=>state.leaveNotifications?.keys||[];
-export function leaveNotices(){return leaveNoticeCount()?[{route:'leaves?tab=approvals',count:leaveNoticeCount(),title:'Cuti menunggu persetujuan Anda',note:'Pengajuan cuti dan pembatalan bawahan langsung',ico:'calendar'}]:[];}
+export function leaveNotices(){return leaveNoticeCount()?[{route:'leaves?tab=approvals',count:leaveNoticeCount(),title:'Cuti menunggu persetujuan Anda',note:'Pengajuan dan pembatalan pada tahap persetujuan Anda',ico:'calendar'}]:[];}

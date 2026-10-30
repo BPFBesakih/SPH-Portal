@@ -21,6 +21,7 @@ try{
   const list=await (await page.request.get(base+'/api/leaves')).json(),r=list.requests.find(r=>r.id===submitted.id);
   const approved=await page.request.post(base+'/api/leaves/'+r.id+'/decision',{data:{decision:'approve',row_version:r.row_version,verified_work_dates:true}});
   assert(approved.ok());
+  await actor('director');const finalList=await (await page.request.get(base+'/api/leaves')).json(),final=finalList.requests.find(x=>x.id===submitted.id);assert((await page.request.post(base+'/api/leaves/'+final.id+'/decision',{data:{decision:'approve',row_version:final.row_version,verified_work_dates:true}})).ok());
  }
  await actor('employee');
  await page.getByRole('button',{name:'Ajukan cuti',exact:true}).click();
@@ -35,7 +36,7 @@ try{
  assert((await form.locator('#leave-preview').innerText()).includes('2 hari kerja'));
  await form.locator('#leave-send').click();await form.waitFor({state:'detached'});
  await page.getByRole('tab',{name:'Pengajuan saya',exact:true}).click();
- await page.getByText('Menunggu atasan',{exact:true}).waitFor();
+ await page.getByText(/^Menunggu atasan/).waitFor();
  check('employee selects work dates explicitly, previews and submits a request');
  await actor('boss');await page.getByRole('tab',{name:/Persetujuan saya/}).click();
  await page.getByRole('button',{name:'Lihat',exact:true}).first().click();
@@ -44,18 +45,20 @@ try{
  let modal=page.locator('dialog').last();
  await modal.locator('[name=verified]').check();await modal.locator('[name=note]').fill('Tanggal kerja sudah diverifikasi.');
  await modal.getByRole('button',{name:'Setujui',exact:true}).click();await modal.waitFor({state:'detached'});
- check('direct supervisor verifies work dates and approves in the UI');
+ check('direct supervisor completes stage one while final approval remains pending');
+ await actor('director');await page.getByRole('tab',{name:/Persetujuan saya/}).click();await page.getByRole('button',{name:'Lihat',exact:true}).first().click();await page.getByRole('button',{name:'Setujui',exact:true}).click();modal=page.locator('dialog').last();await modal.locator('[name=verified]').check();await modal.getByRole('button',{name:'Setujui',exact:true}).click();await modal.waitFor({state:'detached'});check('second-level supervisor gives final approval in the UI');
  await actor('employee');await page.getByRole('tab',{name:'Pengajuan saya',exact:true}).click();
  await page.getByText('Disetujui',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Lihat',exact:true}).first().click();
  await page.getByRole('button',{name:'Minta pembatalan',exact:true}).click();
  modal=page.locator('dialog').last();await modal.locator('[name=note]').fill('Rencana berubah sebelum cuti.');
  await modal.getByRole('button',{name:'Simpan',exact:true}).click();await modal.waitFor({state:'detached'});
- await page.getByText('Menunggu pembatalan',{exact:true}).waitFor();
+ await page.getByText(/^Menunggu pembatalan/).waitFor();
  await actor('boss');await page.getByRole('tab',{name:/Persetujuan saya/}).click();
  await page.getByRole('button',{name:'Lihat',exact:true}).first().click();await page.getByRole('button',{name:'Setujui pembatalan',exact:true}).click();
  modal=page.locator('dialog').last();await modal.locator('[name=verified]').check();await modal.getByRole('button',{name:'Setujui',exact:true}).click();await modal.waitFor({state:'detached'});
- check('cancellation waits for supervisor approval and completes through the UI');
+ await actor('director');await page.getByRole('tab',{name:/Persetujuan saya/}).click();await page.getByRole('button',{name:'Lihat',exact:true}).first().click();await page.getByRole('button',{name:'Setujui pembatalan',exact:true}).click();modal=page.locator('dialog').last();await modal.locator('[name=verified]').check();await modal.getByRole('button',{name:'Setujui',exact:true}).click();await modal.waitFor({state:'detached'});
+ check('cancellation completes only after both supervisors approve through the UI');
  await actor('sdm');await page.getByRole('tab',{name:'Saldo pegawai',exact:true}).click();
  assert.equal(await page.locator('#leave-balance-list tbody tr').count(),6);
  await page.locator('#leave-eligible').uncheck();assert.equal(await page.locator('#leave-balance-list tbody tr').count(),8);

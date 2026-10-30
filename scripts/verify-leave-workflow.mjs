@@ -13,7 +13,7 @@ const source=readFileSync(resolve(root,'supabase/deploy/portal-api/index.ts'),'u
 let testSource=source.replace(/import \{ withSupabase \} from "npm:@supabase\/server@1";/,'const withSupabase=(options,handler)=>{if(options.auth!=="secret")throw new Error("Gateway authentication changed");return handler;};')
  .replace(/import postgres from "npm:postgres@3.4.7";/,'const postgres=()=>{throw new Error("External database forbidden in test");};');
 assert.notEqual(testSource,source);assert(!testSource.includes('"npm:'));
-testSource+='\nexport {routeOperation,grants};export function setFixtureDay(value){today=()=>value;}';
+testSource+='\nexport {routeOperation,grants,guardLeaveRoleChanges};export function setFixtureDay(value){today=()=>value;}';
 const gateway=await import('data:text/javascript;base64,'+Buffer.from(testSource).toString('base64'));
 const formSource=readFileSync(resolve(root,'supabase/deploy/leave-form/index.ts'),'utf8')
  .replace(/import \{ withSupabase \} from "npm:@supabase\/server@1";/,'const withSupabase=(options,handler)=>handler;')
@@ -24,7 +24,7 @@ formGateway.setFormFixtureDay('2026-10-30');
 gateway.setFixtureDay('2026-10-30');
 await pool.unsafe(`CREATE SCHEMA portal;
  CREATE TABLE public.app_users(id uuid PRIMARY KEY,username text,status text,employee_id text,must_change_password integer DEFAULT 0,row_version integer DEFAULT 1);
- CREATE TABLE public.app_roles(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),code text UNIQUE,is_active integer DEFAULT 1);
+ CREATE TABLE public.app_roles(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),code text UNIQUE,name text,description text,is_system boolean DEFAULT false,is_active integer DEFAULT 1);
  CREATE TABLE public.app_permissions(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),code text UNIQUE,module_code text,resource text,action text,description text);
  CREATE TABLE public.app_role_permissions(role_id uuid REFERENCES public.app_roles(id),permission_id uuid REFERENCES public.app_permissions(id),PRIMARY KEY(role_id,permission_id));
  CREATE VIEW portal.roles AS SELECT * FROM public.app_roles;CREATE VIEW portal.permissions AS SELECT * FROM public.app_permissions;CREATE VIEW portal.role_permissions AS SELECT * FROM public.app_role_permissions;
@@ -58,7 +58,8 @@ for(const key of ['employee','peer','boss','director','outsider','thl','sdm','un
  await pool.unsafe("INSERT INTO portal.user_roles(user_id,role_id,scope_kind) SELECT $1,id,'ALL' FROM public.app_roles WHERE code=$2",[id,role]);
  actors[key]={id,username:'fixture-'+key,employee_id,status:'ACTIVE',must_change_password:0,request_id:'fixture-'+randomUUID(),row_version:1};
 }
-for(const file of ['20261030020112_leave_balances_and_annual_maintenance.sql','20261030033354_leave_requests_and_supervisor_approval.sql','20261030040715_leave_employee_form_links.sql','20261030060840_leave_shared_forms.sql']){
+await pool.unsafe("INSERT INTO portal.positions VALUES('pos-head','unit-a','Kepala Bidang Contoh'),('pos-leader','unit-a','Kepala Badan'); UPDATE portal.employee_placements SET position_id='pos-head' WHERE employee_id='e-boss'; UPDATE portal.employee_placements SET position_id='pos-leader' WHERE employee_id='e-director'; UPDATE portal.employee_placements SET supervisor_employee_id='e-director' WHERE employee_id='e-otherboss'");
+for(const file of ['20261030020112_leave_balances_and_annual_maintenance.sql','20261030033354_leave_requests_and_supervisor_approval.sql','20261030040715_leave_employee_form_links.sql','20261030060840_leave_shared_forms.sql','20261030074231_leave_control_and_approval_stages.sql']){
  const migration=readFileSync(resolve(root,'supabase/migrations',file),'utf8').replace(/^\s*BEGIN;\s*$/gm,'').replace(/^\s*COMMIT;\s*$/gm,'');
  await pool.begin(sql=>sql.unsafe(migration));
 }
@@ -70,6 +71,8 @@ async function seedBalances(){
   await pool.unsafe("INSERT INTO portal.leave_year_balances(employee_id,balance_year,origin,granted_days,remaining_days,effective_from,expires_on,source_batch_id) VALUES($1,2026,'OPENING',$2,$2,'2026-10-30','2027-04-01','fixture-batch')",['e-'+key,days]);
 }
 await seedBalances();
+await pool.unsafe('INSERT INTO portal.leave_controller_accounts(user_id) VALUES($1)',[actors.sdm.id]);
+await pool.unsafe("INSERT INTO portal.user_roles(user_id,role_id,scope_kind) SELECT $1,id,'ALL' FROM public.app_roles WHERE code='LEAVE_CONTROLLER'",[actors.sdm.id]);
 await pool.unsafe("INSERT INTO public.app_permissions(code,module_code,resource,action,description) VALUES('hr.employees.update','hr','employees','update','Fixture'); INSERT INTO public.app_role_permissions SELECT r.id,p.id FROM public.app_roles r CROSS JOIN public.app_permissions p WHERE r.code='SDM' AND p.code='hr.employees.update'");
 const invoke=(key,path='leaves',method='GET',body={},query='')=>pool.begin(async sql=>{
  await sql.unsafe('SET LOCAL search_path=portal,pg_catalog');
@@ -86,11 +89,27 @@ const checks=[];const check=async(name,work)=>{await work();checks.push(name);co
 const send=(key,dates,reason='Keperluan contoh',client_key=randomUUID())=>invoke(key,'leaves','POST',{dates,reason,client_key});
 const find=async(key,id)=>(await invoke(key)).requests.find(r=>r.id===id);
 const decision=async(key,id,action='approve',note='',verified=true)=>{const r=await find(key,id);return invoke(key,'leaves/'+id+'/decision','POST',{decision:action,note,row_version:r.row_version,verified_work_dates:verified,verified_identity:verified});};
+const complete=async(id,action='approve')=>{for(let i=0;i<2;i++){const r=await find('sdm',id);if(!['PENDING','CANCELLATION_PENDING'].includes(r.status))return r;const actor=Object.keys(actors).find(key=>actors[key].employee_id===r.approver_employee_id);assert(actor);await decision(actor,id,action);}return find('sdm',id);};
 const cancel=async(key,id)=>{const r=await find(key,id);return invoke(key,'leaves/'+id+'/cancel','POST',{row_version:r.row_version,note:'Perubahan rencana contoh'});};
 await check('normal employee sees own balance, SDM sees organization, calendar has no private reasons',async()=>{
  assert.equal((await invoke('employee')).balances.length,1);assert.equal((await invoke('employee')).balances[0].available_days,5);
  assert.equal((await invoke('sdm')).balances.length,8);assert.equal((await invoke('unlinked')).balances.length,0);
  assert(!JSON.stringify((await invoke('peer')).calendar).includes('reason'));
+});
+await check('Kontrol Cuti is limited to configured accounts and Super Admin even when another role gains leave permissions',async()=>{
+ await pool.unsafe("INSERT INTO portal.user_roles(user_id,role_id,scope_kind) SELECT $1,id,'ALL' FROM public.app_roles WHERE code='BISNIS_PIMPINAN'",[actors.outsider.id]);
+ await pool.unsafe("INSERT INTO public.app_role_permissions SELECT r.id,p.id FROM public.app_roles r CROSS JOIN public.app_permissions p WHERE r.code='BISNIS_PIMPINAN' AND p.resource='hr.leaves'");
+ const outsider=await invoke('outsider');assert.equal(outsider.capabilities.can_manage_reports,false);assert.equal(outsider.capabilities.can_export,false);assert.equal(outsider.capabilities.can_manage_shared_form,false);assert.equal(outsider.balances.length,1);
+ await assert.rejects(()=>invoke('outsider','leaves/shared-form'),e=>e.status===403);
+ await assert.rejects(()=>invoke('outsider','leaves/export-audit','POST',{employee_ids:['e-outsider']}),e=>e.status===403);
+ const roleId=(await query("SELECT id FROM public.app_roles WHERE code='LEAVE_CONTROLLER'")).id;
+ await assert.rejects(()=>invoke('sdm','users/'+actors.outsider.id+'/grants','POST',{grants:[{role_id:roleId,scope_kind:'ALL'}]}),e=>e.status===403);
+ await assert.rejects(()=>invoke('sdm','roles','POST',{code:'UNRESTRICTED_ROLE',permissions:['hr.leaves.read']}),e=>e.status===403);
+ await pool.begin(async sql=>{await sql.unsafe('SET LOCAL search_path=portal,pg_catalog');await gateway.guardLeaveRoleChanges({db:{query:(s,a=[])=>sql.unsafe(s,a)},p:['users',actors.sdm.id,'grants'],method:'POST',body:{grants:[{role_id:roleId}]}},assert);});
+ await pool.unsafe("INSERT INTO portal.user_roles(user_id,role_id,scope_kind) SELECT $1,id,'ALL' FROM public.app_roles WHERE code='SUPER_ADMIN'",[actors.unlinked.id]);
+ assert((await invoke('unlinked')).capabilities.can_manage_shared_form);await pool.unsafe('DELETE FROM portal.user_roles WHERE user_id=$1 AND role_id=(SELECT id FROM public.app_roles WHERE code=\'SUPER_ADMIN\')',[actors.unlinked.id]);
+ await pool.unsafe("DELETE FROM public.app_role_permissions WHERE role_id=(SELECT id FROM public.app_roles WHERE code='BISNIS_PIMPINAN')");
+ await pool.unsafe("DELETE FROM portal.user_roles WHERE user_id=$1 AND role_id=(SELECT id FROM public.app_roles WHERE code='BISNIS_PIMPINAN')",[actors.outsider.id]);
 });
 await check('THL, duplicate dates, unknown future credits and missing supervisor are rejected',async()=>{
  await assert.rejects(()=>send('thl',['2026-11-01']),e=>e.status===403);
@@ -106,29 +125,32 @@ await check('explicit weekend work date is reserved without consuming and repeat
  assert.equal((await send('employee',['2026-11-01'],'Alasan privat contoh',key)).id,first.id);
  await assert.rejects(()=>send('employee',['2026-11-01'],'Isi berbeda',key),e=>e.status===409);
 });
-await check('only direct supervisor decides: SDM and higher supervisor cannot bypass, verification required',async()=>{
+await check('only the active approval stage decides; control role and future approvers cannot bypass verification',async()=>{
  await assert.rejects(()=>decision('sdm',first.id),e=>e.status===403);
  await assert.rejects(()=>decision('director',first.id),e=>e.status===403);
  await assert.rejects(()=>decision('boss',first.id,'approve','',false),e=>e.status===422);
  await assert.rejects(()=>decision('boss',first.id,'reject'),e=>e.status===422);
 });
 await check('failed debit rolls back request status, funds and audit',async()=>{
+ await decision('boss',first.id);
+ assert.equal((await invoke('boss','leaves/notifications')).total,0);assert.equal((await invoke('director','leaves/notifications')).total,1);
+ assert.equal((await query("SELECT remaining_days FROM portal.leave_year_balances WHERE employee_id='e-employee' AND balance_year=2026")).remaining_days,5);
  await pool.unsafe("ALTER TABLE portal.leave_balance_events ADD CONSTRAINT fixture_debit_fail CHECK(event_type<>'CONSUMPTION')");
- await assert.rejects(()=>decision('boss',first.id));
+ await assert.rejects(()=>decision('director',first.id));
  assert.equal((await find('employee',first.id)).status,'PENDING');
  assert.equal((await query("SELECT remaining_days FROM portal.leave_year_balances WHERE employee_id='e-employee' AND balance_year=2026")).remaining_days,5);
  assert.equal((await query("SELECT count(*)::int n FROM portal.audit_events WHERE action='LEAVE_APPROVED'")).n,0);
  await pool.unsafe('ALTER TABLE portal.leave_balance_events DROP CONSTRAINT fixture_debit_fail');
 });
-await check('supervisor approval consumes exactly once and stale decisions cannot debit again',async()=>{
- const r=await find('boss',first.id);await decision('boss',first.id);
+await check('final-stage approval consumes exactly once and stale decisions cannot debit again',async()=>{
+ const r=await find('director',first.id);await decision('director',first.id);
  assert.equal((await find('employee',first.id)).status,'APPROVED');
  assert.equal((await query("SELECT remaining_days FROM portal.leave_year_balances WHERE employee_id='e-employee' AND balance_year=2026")).remaining_days,4);
  await assert.rejects(()=>invoke('boss','leaves/'+first.id+'/decision','POST',{decision:'approve',row_version:r.row_version,verified_work_dates:true}),e=>e.status===409);
 });
 await check('approved team overlap warns but is allowed; peer calendar exposes no reason or request details',async()=>{
  const preview=await invoke('peer','leaves/preview','POST',{dates:['2026-11-01']});assert.equal(preview.conflicts.length,1);
- const peer=await send('peer',['2026-11-01']);await decision('boss',peer.id);
+ const peer=await send('peer',['2026-11-01']);await complete(peer.id);
  const peerView=await invoke('peer');assert(peerView.calendar.some(r=>r.employee_id==='e-employee'));assert(!peerView.requests.some(r=>r.id===first.id));
  assert((await find('boss',first.id)).conflicts.some(c=>c.name==='Pegawai Contoh B'));
  assert(!JSON.stringify(peerView).includes('Alasan privat contoh'));assert.equal((await invoke('outsider')).calendar.length,0);
@@ -136,7 +158,7 @@ await check('approved team overlap warns but is allowed; peer calendar exposes n
 await check('approved cancellation waits for direct supervisor and restores once',async()=>{
  await cancel('employee',first.id);assert.equal((await find('employee',first.id)).status,'CANCELLATION_PENDING');
  assert.equal((await query("SELECT remaining_days FROM portal.leave_year_balances WHERE employee_id='e-employee' AND balance_year=2026")).remaining_days,4);
- await decision('boss',first.id,'approve-cancel');
+ await complete(first.id,'approve-cancel');
  assert.equal((await find('employee',first.id)).status,'CANCELLED');
  assert.equal((await query("SELECT remaining_days FROM portal.leave_year_balances WHERE employee_id='e-employee' AND balance_year=2026")).remaining_days,5);
 });
@@ -158,12 +180,47 @@ await check('report export is scoped and protected; another unit cannot read bal
  await assert.rejects(()=>invoke('outsider','leaves/history','GET',{},'employee_id=e-employee'),e=>e.status===403);
  assert((await invoke('employee','leaves/history')).items.some(r=>r.event_type==='CONSUMPTION'));
 });
+await check('department head goes directly to Pimpinan with one approval and one cancellation decision',async()=>{
+ const planned=await invoke('boss','leaves/preview','POST',{dates:['2026-11-27']});assert.deepEqual(planned.approvers.map(a=>a.id),['e-director']);
+ const r=await send('boss',['2026-11-27']);await assert.rejects(()=>decision('boss',r.id),e=>e.status===403);await decision('director',r.id);assert.equal((await find('boss',r.id)).status,'APPROVED');
+ await cancel('boss',r.id);await decision('director',r.id,'approve-cancel');assert.equal((await find('boss',r.id)).status,'CANCELLED');
+});
+await check('rejection at either stage releases reservations without consuming balance',async()=>{
+ const a=await send('employee',['2026-11-28']);await decision('boss',a.id,'reject','Contoh penolakan tahap pertama');
+ assert.equal((await find('employee',a.id)).status,'REJECTED');
+ const b=await send('employee',['2026-11-28']);await decision('boss',b.id);assert.equal((await find('employee',b.id)).current_step,2);
+ await decision('director',b.id,'reject','Contoh penolakan tahap kedua');assert.equal((await find('employee',b.id)).status,'REJECTED');
+ assert.equal((await invoke('employee')).balances[0].available_days,5);assert.equal((await query('SELECT count(*)::int n FROM portal.leave_balance_events WHERE event_key=$1',['APPROVE:'+b.id+':2026'])).n,0);
+});
+await check('cancellation requires both stages, rejected cancellation preserves debit, retry refunds exactly once',async()=>{
+ const r=await send('employee',['2026-11-29']);await complete(r.id);await cancel('employee',r.id);await decision('boss',r.id,'approve-cancel');
+ assert.equal((await find('employee',r.id)).status,'CANCELLATION_PENDING');assert.equal((await query("SELECT remaining_days FROM portal.leave_year_balances WHERE employee_id='e-employee' AND balance_year=2026")).remaining_days,4);
+ await decision('director',r.id,'reject-cancel','Tetap menggunakan cuti');assert.equal((await find('employee',r.id)).status,'APPROVED');await cancel('employee',r.id);await complete(r.id,'approve-cancel');
+ const final=await find('employee',r.id);assert.equal(final.status,'CANCELLED');assert.equal(final.approval_cycle,3);assert.equal(final.approval_steps.length,6);
+ assert.equal((await query('SELECT count(*)::int n FROM portal.leave_balance_events WHERE event_key=$1',['CANCEL:'+r.id+':2026'])).n,1);
+});
+await check('changing the second supervisor blocks stale routing after first approval',async()=>{
+ const r=await send('employee',['2026-11-30']);await decision('boss',r.id);
+ await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id='e-otherboss' WHERE employee_id='e-boss'");
+ await assert.rejects(()=>invoke('director','leaves/'+r.id+'/decision','POST',{decision:'approve',row_version:2,verified_work_dates:true}),e=>e.status===403);
+ assert.equal((await invoke('director','leaves/notifications')).total,0);await cancel('employee',r.id);await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id='e-director' WHERE employee_id='e-boss'");
+});
+await check('existing pending requests without step history adopt both stages on the first decision',async()=>{
+ const r=await send('employee',['2026-12-01']);await pool.unsafe('DELETE FROM portal.leave_approval_steps WHERE request_id=$1',[r.id]);
+ await decision('boss',r.id);const after=await find('employee',r.id);assert.equal(after.current_step,2);assert.equal(after.approval_steps.length,2);assert.equal(after.approval_steps[0].state,'APPROVED');
+ await decision('director',r.id);await cancel('employee',r.id);await complete(r.id,'approve-cancel');
+});
+await check('missing or cyclic second supervisor prevents submission without guessing a substitute',async()=>{
+ await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id=NULL WHERE employee_id='e-boss'");await assert.rejects(()=>send('employee',['2026-12-02']),e=>e.status===422);
+ await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id='e-employee' WHERE employee_id='e-boss'");await assert.rejects(()=>send('employee',['2026-12-02']),e=>e.status===422);
+ await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id='e-director' WHERE employee_id='e-boss'");
+});
 await check('only authorized SDM can issue personal links; THL, inactive and missing supervisor are denied',async()=>{
  await assert.rejects(()=>invoke('employee','leaves/form-links','POST',{employee_id:'e-employee',action:'issue'}),e=>e.status===403);
  await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-thl',action:'issue'}),e=>e.status===403);
  await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-inactive',action:'issue'}),e=>e.status===403);
  await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-director',action:'issue'}),e=>e.status===422);
- const grant=await query('SELECT id FROM portal.user_roles WHERE user_id=$1',[actors.sdm.id]);
+ const grant=await query("SELECT ur.id FROM portal.user_roles ur JOIN public.app_roles r ON r.id=ur.role_id WHERE ur.user_id=$1 AND r.code='LEAVE_CONTROLLER'",[actors.sdm.id]);
  await pool.unsafe("UPDATE portal.user_roles SET scope_kind='ASSIGNED_UNITS' WHERE id=$1",[grant.id]);
  await pool.unsafe("INSERT INTO portal.user_role_units VALUES($1,'unit-a',0)",[grant.id]);
  await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-outsider',action:'issue'}),e=>e.status===403);
@@ -178,14 +235,14 @@ await check('leave notifications contain only current direct-supervisor work, in
  assert.equal((await invoke('director','leaves/notifications')).total,0);
  await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id='e-director' WHERE employee_id='e-employee'");assert.equal((await invoke('boss','leaves/notifications')).total,0);assert.equal((await invoke('director','leaves/notifications')).total,0);
  await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id='e-boss' WHERE employee_id='e-employee'");
- await decision('boss',a.id);assert.equal((await invoke('boss','leaves/notifications')).total,0);
+ await complete(a.id);assert.equal((await invoke('boss','leaves/notifications')).total,0);
  await cancel('employee',a.id);const c=await invoke('boss','leaves/notifications');assert.equal(c.cancellations,1);assert.notEqual(c.signature,n.signature);
- await decision('boss',a.id,'approve-cancel');assert.equal((await invoke('boss','leaves/notifications')).total,0);
+ await complete(a.id,'approve-cancel');assert.equal((await invoke('boss','leaves/notifications')).total,0);
 });
 let sharedToken;
 await check('one shared link is managed only by organization-wide SDM and can be copied again',async()=>{
  await assert.rejects(()=>invoke('employee','leaves/shared-form'),e=>e.status===403);
- const grant=await query('SELECT id FROM portal.user_roles WHERE user_id=$1',[actors.sdm.id]);await pool.unsafe("UPDATE portal.user_roles SET scope_kind='SELF' WHERE id=$1",[grant.id]);
+ const grant=await query("SELECT ur.id FROM portal.user_roles ur JOIN public.app_roles r ON r.id=ur.role_id WHERE ur.user_id=$1 AND r.code='LEAVE_CONTROLLER'",[actors.sdm.id]);await pool.unsafe("UPDATE portal.user_roles SET scope_kind='SELF' WHERE id=$1",[grant.id]);
  await assert.rejects(()=>invoke('sdm','leaves/shared-form','POST',{action:'issue'}),e=>e.status===403);await pool.unsafe("UPDATE portal.user_roles SET scope_kind='ALL' WHERE id=$1",[grant.id]);
  const result=await invoke('sdm','leaves/shared-form','POST',{action:'issue'});sharedToken=result.link.token;assert.equal((await invoke('sdm','leaves/shared-form')).link.token,sharedToken);
 });
@@ -228,7 +285,7 @@ await check('public requests reserve once, ignore forged IDs and require direct 
  await assert.rejects(()=>formInvoke('submit',{...payload,reason:'Different'}),e=>e.status===409);
  await assert.rejects(()=>invoke('sdm','leaves/'+stored.id+'/decision','POST',{decision:'approve',row_version:1,verified_work_dates:true,verified_identity:true}),e=>e.status===403);
  await assert.rejects(()=>invoke('boss','leaves/'+stored.id+'/decision','POST',{decision:'approve',row_version:1,verified_work_dates:true}),e=>e.status===422);
- await decision('boss',stored.id);await cancel('employee',stored.id);await decision('boss',stored.id,'approve-cancel');
+ await complete(stored.id);await cancel('employee',stored.id);await complete(stored.id,'approve-cancel');
  assert.equal((await invoke('employee')).balances[0].available_days,5);
 });
 await check('concurrent public forms share portal reservations and cannot overdraw',async()=>{
@@ -254,7 +311,7 @@ await check('year-aware reservations use expiring carry first and a new-year buc
  gateway.setFixtureDay('2027-01-01');await clock('2027-01-01');await pool.unsafe('SELECT portal.run_leave_year_maintenance()');
  const preview=await invoke('employee','leaves/preview','POST',{dates:['2027-01-03','2027-04-02']});
  assert.deepEqual(preview.allocations.map(r=>r.balance_year),[2026,2027]);
- const r=await send('employee',['2027-01-03','2027-04-02']);await decision('boss',r.id);await cancel('employee',r.id);await decision('boss',r.id,'approve-cancel');
+ const r=await send('employee',['2027-01-03','2027-04-02']);await complete(r.id);await cancel('employee',r.id);await complete(r.id,'approve-cancel');
  gateway.setFixtureDay('2027-04-01');await clock('2027-04-01');await pool.unsafe('SELECT portal.run_leave_year_maintenance()');
  assert.equal((await invoke('employee','leaves/preview','POST',{dates:['2027-04-02']})).allocations[0].balance_year,2027);
 });
