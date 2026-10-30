@@ -1,0 +1,29 @@
+import assert from 'node:assert/strict';
+import {mkdirSync,writeFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url),{chromium}=require('C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const root=resolve(import.meta.dirname,'..'),out=resolve(root,'test-results/leave-live');mkdirSync(out,{recursive:true});
+const browser=await chromium.launch({headless:true,executablePath:resolve(root,'../tmp/playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe')});
+const ctx=await browser.newContext({viewport:{width:1440,height:1000}}),employee=await browser.newContext(),page=await ctx.newPage(),errors=[],checks=[];
+const base='http://127.0.0.1:3187';page.on('pageerror',e=>errors.push(e.message));
+const check=name=>{checks.push(name);console.log('PASS '+name);};
+const read=async()=>{const r=await page.request.get(base+'/api/leaves/notifications');assert(r.ok());return r.json();};
+const poll=async()=>{await page.evaluate(()=>window.dispatchEvent(new Event('focus')));};
+try{
+ await page.clock.install();
+ await page.goto(base+'/__fixture/actor?role=boss');await page.goto(base+'/#announcements');await page.getByRole('heading',{name:'Informasi Internal',exact:true}).waitFor();
+ const baseline=(await read()).total;await page.keyboard.press('Escape');
+ await employee.request.get(base+'/__fixture/actor?role=employee');
+ const sent=await employee.request.post(base+'/api/leaves',{data:{dates:['2026-11-19'],reason:'Contoh notifikasi',client_key:crypto.randomUUID()}});assert(sent.ok());const r=await sent.json();
+ await page.clock.runFor(30000);await page.locator('[data-leave-count]').filter({hasText:String(baseline+1)}).waitFor();await page.locator('.bell-panel').waitFor();
+ assert.equal(await page.locator('[data-bell-count]').innerText(),String(baseline+1));check('30-second polling updates bell, Cuti badge and popup while another menu is open');
+ await page.screenshot({path:resolve(out,'leave-notifications-desktop.png'),fullPage:true});
+ await page.keyboard.press('Escape');await poll();await page.waitForTimeout(150);assert.equal(await page.locator('.bell-panel').count(),0);check('the same outstanding requests do not repeatedly open the popup');
+ await page.getByRole('button',{name:'Buka notifikasi'}).click();await page.locator('.bell-panel a[href="#leaves?tab=approvals"]').click();await page.getByRole('tab',{name:/Persetujuan saya/}).waitFor();assert.equal(await page.getByRole('tab',{name:/Persetujuan saya/}).getAttribute('aria-selected'),'true');check('notification opens the approvals tab directly');
+ await page.locator(`[data-action=leave-detail][data-id="${r.id}"]`).click();await page.getByRole('button',{name:'Setujui',exact:true}).click();let modal=page.locator('dialog').last();await modal.locator('[name=verified]').check();await modal.getByRole('button',{name:'Setujui',exact:true}).click();await modal.waitFor({state:'detached'});await poll();await page.waitForFunction(n=>document.querySelector('[data-leave-count]')?.textContent===String(n),baseline);assert.equal(await page.locator('.bell-panel').count(),0);check('approving reduces the badge and does not reopen the popup for older pending requests');
+ const list=await (await employee.request.get(base+'/api/leaves')).json(),approved=list.requests.find(x=>x.id===r.id);
+ const cancellation=await employee.request.post(base+'/api/leaves/'+r.id+'/cancel',{data:{row_version:approved.row_version,note:'Contoh pembatalan'}});assert(cancellation.ok());await page.keyboard.press('Escape');await poll();await page.locator('.bell-panel').waitFor();await page.waitForFunction(n=>document.querySelector('[data-leave-count]')?.textContent===String(n),baseline+1);check('a new cancellation request raises the count and triggers a new popup');
+ await page.keyboard.press('Escape');await page.setViewportSize({width:390,height:844});await page.waitForTimeout(450);await page.getByRole('button',{name:'Buka notifikasi'}).click();assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert(await page.locator('.bell-panel').evaluate(e=>{const r=e.getBoundingClientRect();return r.left>=10&&r.right<=innerWidth-10;}));await page.screenshot({path:resolve(out,'leave-notifications-mobile.png'),fullPage:true});check('notification popup stays fully within the mobile viewport');
+ assert.deepEqual(errors,[]);writeFileSync(resolve(out,'notifications-ui-results.json'),JSON.stringify({passed:checks.length,checks,production_mutations:false},null,2));
+}finally{await employee.close();await ctx.close();await browser.close();}

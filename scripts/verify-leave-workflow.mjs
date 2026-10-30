@@ -58,7 +58,7 @@ for(const key of ['employee','peer','boss','director','outsider','thl','sdm','un
  await pool.unsafe("INSERT INTO portal.user_roles(user_id,role_id,scope_kind) SELECT $1,id,'ALL' FROM public.app_roles WHERE code=$2",[id,role]);
  actors[key]={id,username:'fixture-'+key,employee_id,status:'ACTIVE',must_change_password:0,request_id:'fixture-'+randomUUID(),row_version:1};
 }
-for(const file of ['20261030020112_leave_balances_and_annual_maintenance.sql','20261030033354_leave_requests_and_supervisor_approval.sql','20261030040715_leave_employee_form_links.sql']){
+for(const file of ['20261030020112_leave_balances_and_annual_maintenance.sql','20261030033354_leave_requests_and_supervisor_approval.sql','20261030040715_leave_employee_form_links.sql','20261030060840_leave_shared_forms.sql']){
  const migration=readFileSync(resolve(root,'supabase/migrations',file),'utf8').replace(/^\s*BEGIN;\s*$/gm,'').replace(/^\s*COMMIT;\s*$/gm,'');
  await pool.begin(sql=>sql.unsafe(migration));
 }
@@ -169,6 +169,46 @@ await check('only authorized SDM can issue personal links; THL, inactive and mis
  await assert.rejects(()=>invoke('sdm','leaves/form-links','POST',{employee_id:'e-outsider',action:'issue'}),e=>e.status===403);
  await invoke('sdm','leaves/form-links','POST',{employee_id:'e-employee',action:'issue'});
  await pool.unsafe("DELETE FROM portal.user_role_units WHERE user_role_id=$1",[grant.id]);await pool.unsafe("UPDATE portal.user_roles SET scope_kind='ALL' WHERE id=$1",[grant.id]);
+});
+await check('leave notifications contain only current direct-supervisor work, including cancellation and resolved requests',async()=>{
+ for(const role of ['employee','sdm','director','unlinked','outsider'])assert.equal((await invoke(role,'leaves/notifications')).total,0);
+ const a=await send('employee',['2026-11-25']);
+ const n=await invoke('boss','leaves/notifications');assert.equal(n.total,1);assert.equal(n.pending,1);assert.equal(n.cancellations,0);assert(/^[a-f0-9]{64}$/.test(n.signature));
+ assert(!JSON.stringify(n).includes('employee'));assert(!JSON.stringify(n).includes(a.id));
+ assert.equal((await invoke('director','leaves/notifications')).total,0);
+ await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id='e-director' WHERE employee_id='e-employee'");assert.equal((await invoke('boss','leaves/notifications')).total,0);assert.equal((await invoke('director','leaves/notifications')).total,0);
+ await pool.unsafe("UPDATE portal.employee_placements SET supervisor_employee_id='e-boss' WHERE employee_id='e-employee'");
+ await decision('boss',a.id);assert.equal((await invoke('boss','leaves/notifications')).total,0);
+ await cancel('employee',a.id);const c=await invoke('boss','leaves/notifications');assert.equal(c.cancellations,1);assert.notEqual(c.signature,n.signature);
+ await decision('boss',a.id,'approve-cancel');assert.equal((await invoke('boss','leaves/notifications')).total,0);
+});
+let sharedToken;
+await check('one shared link is managed only by organization-wide SDM and can be copied again',async()=>{
+ await assert.rejects(()=>invoke('employee','leaves/shared-form'),e=>e.status===403);
+ const grant=await query('SELECT id FROM portal.user_roles WHERE user_id=$1',[actors.sdm.id]);await pool.unsafe("UPDATE portal.user_roles SET scope_kind='SELF' WHERE id=$1",[grant.id]);
+ await assert.rejects(()=>invoke('sdm','leaves/shared-form','POST',{action:'issue'}),e=>e.status===403);await pool.unsafe("UPDATE portal.user_roles SET scope_kind='ALL' WHERE id=$1",[grant.id]);
+ const result=await invoke('sdm','leaves/shared-form','POST',{action:'issue'});sharedToken=result.link.token;assert.equal((await invoke('sdm','leaves/shared-form')).link.token,sharedToken);
+});
+await check('shared context lists active non-THL names with no private balances, requests or full employee numbers',async()=>{
+ const ctx=await formInvoke('context',{token:sharedToken});assert(ctx.shared);assert(ctx.employees.some(e=>e.id==='e-employee'));assert(ctx.employees.some(e=>e.id==='e-peer'));
+ assert(!ctx.employees.some(e=>['e-thl','e-inactive'].includes(e.id)));for(const value of ['FIXTURE-','available_days','reserved_days','reason','requests','share_token'])assert(!JSON.stringify(ctx).includes(value));
+ await assert.rejects(()=>formInvoke('submit',{token:sharedToken,employee_id:'e-thl',client_key:randomUUID(),dates:['2026-11-26'],reason:'No'}),e=>e.status===403);
+ await assert.rejects(()=>formInvoke('preview',{token:sharedToken,employee_id:'unknown',dates:['2026-11-26']}),e=>e.status===403);
+ await pool.unsafe("INSERT INTO portal.employees VALUES('e-zero','ZERO-0000','Pegawai Saldo Nol','Pegawai Kontrak (PKWT)',1,'2020-01-01',NULL); INSERT INTO portal.employee_placements VALUES('placement-zero','e-zero','pos-a','e-boss','2020-01-01',NULL,1); UPDATE portal.employees SET full_name='Pegawai Contoh A' WHERE id='e-peer'");
+ const updated=await formInvoke('context',{token:sharedToken});assert(updated.employees.some(e=>e.id==='e-zero'));const duplicates=updated.employees.filter(e=>e.full_name==='Pegawai Contoh A');assert.equal(duplicates.length,2);assert.notEqual(duplicates[0].position_name,duplicates[1].position_name);assert(duplicates.every(e=>e.position_name.includes('ID berakhir')));
+ await pool.unsafe("DELETE FROM portal.employee_placements WHERE employee_id='e-zero'; DELETE FROM portal.employees WHERE id='e-zero'; UPDATE portal.employees SET full_name='Pegawai Contoh B' WHERE id='e-peer'");
+});
+await check('same shared form submits for two selected employees with isolated retries, holds, attribution and identity checks',async()=>{
+ const key=randomUUID(),payload={token:sharedToken,employee_id:'e-employee',dates:['2026-11-26'],reason:'Contoh bersama',client_key:key};
+ const a=await formInvoke('submit',payload),b=await formInvoke('submit',{...payload,employee_id:'e-peer'});assert.notEqual(a.reference,b.reference);assert.equal((await formInvoke('submit',payload)).reference,a.reference);
+ const stored=await find('boss',a.reference);assert.equal(stored.submission_source,'FORM');assert(stored.source_shared_form_link_id);assert.equal(stored.source_form_link_id,null);assert.equal(stored.created_by,null);
+ assert.equal((await invoke('boss','leaves/notifications')).total,2);
+ await assert.rejects(()=>invoke('boss','leaves/'+stored.id+'/decision','POST',{decision:'approve',row_version:1,verified_work_dates:true}),e=>e.status===422);
+ await cancel('employee',a.reference);await cancel('peer',b.reference);assert.equal((await invoke('boss','leaves/notifications')).total,0);
+});
+await check('shared link rotation and revocation block the old link without changing existing requests',async()=>{
+ const next=await invoke('sdm','leaves/shared-form','POST',{action:'issue'});await assert.rejects(()=>formInvoke('context',{token:sharedToken}),e=>e.status===404);
+ sharedToken=next.link.token;await invoke('sdm','leaves/shared-form','POST',{action:'revoke'});await assert.rejects(()=>formInvoke('context',{token:sharedToken}),e=>e.status===404);
 });
 let publicToken;
 await check('link binds identity and redacts employee numbers, peer names, requests and reasons',async()=>{

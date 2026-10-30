@@ -14,6 +14,7 @@ const units=()=>[...new Map(data.balances.filter(r=>r.unit_id).map(r=>[r.unit_id
 const stat=(label,value,note)=>`<div class="stat-card"><div class="stat-top"><span>${esc(label)}</span>${icon('calendar')}</div><div class="stat-value">${number(value)}</div><p class="muted">${esc(note)}</p></div>`;
 export async function loadLeavesPage(){
  if(owner!==state.me){resetLeaves();owner=state.me;}
+ if(new URLSearchParams(location.hash.split('?')[1]||'').get('tab')==='approvals')tab='approvals';
  const current=state.me,result=await api(`leaves?year=${year}`);
  if(current!==state.me)throw new Error('Sesi berubah.');
  data=result;return renderLeavesPage();
@@ -134,6 +135,24 @@ async function history(employeeId){
  dialog('Riwayat saldo · '+result.employee_name,table(['Tanggal','Tahun','Perubahan','Sebelum','Sesudah','Kejadian'],result.items.map(r=>`<tr><td>${formatDate(r.created_at)}</td><td>${r.balance_year}</td><td>${r.delta_days>0?'+':''}${r.delta_days}</td><td>${r.before_days}</td><td>${r.after_days}</td><td>${esc(eventNames[r.event_type]||r.event_type)}</td></tr>`)),{wide:true});
 }
 async function manageFormLinks(){
+ if(!data.capabilities.can_manage_shared_form)return managePersonalLinks();
+ let link=(await api('leaves/shared-form')).link;
+ const modal=dialog('Satu formulir untuk semua pegawai',`<p>Bagikan satu tautan ini kepada seluruh pegawai. Pegawai mencari dan memilih namanya sendiri, kemudian mengisi pengajuan tanpa login. THL tidak memperoleh cuti. Atasan langsung memverifikasi identitas dan hari kerja sebelum menyetujui.</p>
+ <p id="leave-shared-status" class="muted"></p><div id="leave-shared-result"></div><p id="leave-shared-error" class="form-error" role="alert"></p><div class="actions"><button type="button" class="button primary" id="leave-shared-issue"></button><button type="button" class="button outlined" id="leave-shared-revoke">Nonaktifkan tautan</button></div><p class="muted">Tautan berlaku 90 hari. Mengganti tautan menonaktifkan tautan bersama sebelumnya. Tautan pribadi lama tetap dapat digunakan sampai masa berlakunya habis atau dinonaktifkan.</p>`,{wide:true});
+ const issue=modal.querySelector('#leave-shared-issue'),revoke=modal.querySelector('#leave-shared-revoke'),out=modal.querySelector('#leave-shared-result'),error=modal.querySelector('#leave-shared-error');
+ const paint=()=>{
+  issue.textContent=link?'Ganti tautan bersama':'Buat tautan bersama';revoke.disabled=!link;
+  modal.querySelector('#leave-shared-status').textContent=link?'Tautan aktif sampai '+formatDate(link.expires_at)+'.':'Belum ada tautan bersama yang aktif.';
+  out.innerHTML=link?`<label class="field"><span>Tautan formulir semua pegawai</span><input id="leave-link-url" readonly value="${esc(new URL('/cuti/',location.origin).href+'#token='+link.token)}"></label><button type="button" class="button outlined" id="leave-link-copy">Salin tautan bersama</button>`:'';
+  out.querySelector('#leave-link-copy')?.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(out.querySelector('input').value);toast('Tautan bersama tersalin.');}catch{out.querySelector('input').select();toast('Pilih dan salin tautan dari kolom di atas.');}});
+ };
+ paint();
+ for(const action of ['issue','revoke'])modal.querySelector('#leave-shared-'+action).addEventListener('click',async()=>{
+  issue.disabled=true;revoke.disabled=true;error.textContent='';
+  try{const result=await post('leaves/shared-form',{action});link=result.link||null;paint();toast(action==='issue'?'Tautan bersama siap dibagikan.':'Tautan bersama dinonaktifkan.');}catch(err){error.textContent=err.message;}finally{issue.disabled=false;revoke.disabled=!link;}
+ });
+}
+async function managePersonalLinks(){
  const result=await api('leaves/form-links'),people=data.balances.filter(r=>r.can_manage_form_link&&r.eligible);
  const modal=dialog('Formulir pengajuan pegawai',`<p>Pilih pegawai, lalu buat tautan pribadi yang dapat diisi tanpa login. Bagikan hanya kepada pegawai yang bersangkutan. Tautan berlaku 90 hari; mengganti tautan menonaktifkan tautan sebelumnya.</p>
  <label class="field"><span>Pegawai</span><select id="leave-link-person">${people.map(r=>`<option value="${esc(r.employee_id)}">${esc(r.name)} · ${esc(r.unit_name||'Belum ditempatkan')} · ${esc(r.employee_no)}</option>`).join('')}</select></label>

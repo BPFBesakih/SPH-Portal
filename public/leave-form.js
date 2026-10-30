@@ -1,3 +1,4 @@
+import {employeePickerField,setupEmployeePicker} from './employee-picker.js';
 const root=document.querySelector('#leave-form-root'),token=new URLSearchParams(location.hash.slice(1)).get('token');
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=d=>new Intl.DateTimeFormat('id-ID',{weekday:'short',day:'numeric',month:'short',year:'numeric',timeZone:'Asia/Makassar'}).format(new Date(d+'T00:00:00+08:00'));
@@ -8,18 +9,25 @@ async function call(action,body={}){
 }
 async function start(){
  try{
-  if(!/^[a-f0-9]{64}$/.test(token||''))throw new Error('Buka tautan pribadi yang diberikan SDM. Tautan umum ini belum terhubung ke pegawai.');
+  if(!/^[a-f0-9]{64}$/.test(token||''))throw new Error('Buka tautan formulir yang diberikan SDM. Halaman ini membutuhkan tautan aktif.');
   const ctx=await call('context');
-  root.innerHTML=`<section class="card person"><div><p class="eyebrow">PEMOHON</p><h2>${esc(ctx.name)}</h2><p class="muted">${esc(ctx.position_name)}${ctx.unit_name?' · '+esc(ctx.unit_name):''}</p><small>Persetujuan: ${esc(ctx.approver||'Atasan belum ditetapkan')}</small></div><div class="balance"><strong>${ctx.available_days} hari</strong><span>Saldo tersedia${ctx.reserved_days?' · '+ctx.reserved_days+' hari ditahan':''}</span></div></section>
+  if(ctx.shared){
+   root.innerHTML=`<section class="card"><h2>Pilih nama Anda</h2><p class="muted">Satu formulir untuk seluruh pegawai non-THL. Cari nama, lalu pastikan jabatan dan unitnya sesuai.</p>${employeePickerField({label:'Nama pegawai',required:true})}<p class="privacy">Saldo dan riwayat pribadi tidak ditampilkan pada formulir bersama. Atasan langsung akan memastikan identitas pemohon sebelum menyetujui.</p></section><div id="selected-employee"></div>`;
+   setupEmployeePicker(root,ctx.employees,{required:true,onSelect:e=>{if(!e){document.querySelector('#selected-employee').innerHTML='';return;}renderRequest({shared:true,today:ctx.today,name:e.full_name,unit_name:e.unit_name,position_name:e.position_name,approver:e.approver,can_request:e.can_request,employee_id:e.id},document.querySelector('#selected-employee'));}});
+  }else renderRequest(ctx,root);
+ }catch(err){root.innerHTML=`<section class="card"><h2>Formulir belum dapat dibuka</h2><p class="error" role="alert">${esc(err.message)}</p><button type="button" id="retry">Coba lagi</button></section>`;document.querySelector('#retry').addEventListener('click',start);}
+}
+function renderRequest(ctx,target){
+  target.innerHTML=`<section class="card person"><div><p class="eyebrow">PEMOHON</p><h2>${esc(ctx.name)}</h2><p class="muted">${esc(ctx.position_name)}${!ctx.shared&&ctx.unit_name?' · '+esc(ctx.unit_name):''}</p><small>Persetujuan: ${esc(ctx.approver||'Atasan belum ditetapkan')}</small></div>${!ctx.shared?`<div class="balance"><strong>${ctx.available_days} hari</strong><span>Saldo tersedia${ctx.reserved_days?' · '+ctx.reserved_days+' hari ditahan':''}</span></div>`:''}</section>
   ${ctx.can_request?`<form id="request"><h2>Rencana cuti</h2><p class="muted">Pilih rentang tanggal, lalu centang hanya hari kerja Anda.</p><div class="dates-row"><label class="field"><span>Dari tanggal</span><input type="date" name="from" min="${ctx.today}" value="${ctx.today}" required></label><label class="field"><span>Sampai tanggal</span><input type="date" name="to" min="${ctx.today}" value="${ctx.today}" required></label></div><button type="button" id="show-dates">Tampilkan tanggal</button><div id="work-dates"></div>
   <label class="field"><span>Alasan / keperluan cuti</span><textarea name="reason" required maxlength="2000" placeholder="Tuliskan keperluan cuti Anda"></textarea></label>
   <label class="check"><input type="checkbox" name="confirmed" required><span>Saya adalah ${esc(ctx.name)}. Tanggal yang saya pilih merupakan hari kerja saya dan data pengajuan ini benar.</span></label>
-  <p class="error" id="form-error" role="alert"></p><div id="preview"></div><div class="actions"><button type="submit" class="primary" id="review">Periksa pengajuan</button><button type="button" class="primary" id="send" hidden>Kirim ke atasan</button></div><p class="privacy">Saldo ditahan selama pengajuan menunggu atasan. Simpan tautan pribadi ini dan bagikan hanya kepada pemiliknya.</p></form>`:'<div class="notice"><p>Atasan langsung belum ditetapkan secara tunggal. Hubungi SDM untuk melengkapi data sebelum mengajukan cuti.</p></div>'}`;
+  <p class="error" id="form-error" role="alert"></p><div id="preview"></div><div class="actions"><button type="submit" class="primary" id="review">Periksa pengajuan</button><button type="button" class="primary" id="send" hidden>Kirim ke atasan</button></div><p class="privacy">Saldo ditahan selama pengajuan menunggu atasan. ${ctx.shared?'Pastikan nama yang dipilih adalah nama Anda sendiri.':'Simpan tautan pribadi ini dan bagikan hanya kepada pemiliknya.'}</p></form>`:'<div class="notice"><p>Atasan langsung belum ditetapkan secara tunggal. Hubungi SDM untuk melengkapi data sebelum mengajukan cuti.</p></div>'}`;
   if(!ctx.can_request)return;
   const form=document.querySelector('#request'),error=document.querySelector('#form-error'),preview=document.querySelector('#preview'),review=document.querySelector('#review'),send=document.querySelector('#send'),days=document.querySelector('#work-dates');
   let planned=null,key=crypto.randomUUID(),busy=false,attempt=null;
   const reset=()=>{planned=null;preview.innerHTML='';send.hidden=true;review.hidden=false;};
-  const values=()=>({dates:[...form.querySelectorAll('[name=work_date]:checked')].map(i=>i.value),reason:form.elements.reason.value.trim()});
+  const values=()=>({dates:[...form.querySelectorAll('[name=work_date]:checked')].map(i=>i.value),reason:form.elements.reason.value.trim(),...(ctx.shared?{employee_id:ctx.employee_id}:{})});
   form.addEventListener('input',()=>{if(!busy){reset();error.textContent='';}});
   for(const name of ['from','to'])form.elements[name].addEventListener('change',()=>{days.innerHTML='';});
   document.querySelector('#show-dates').addEventListener('click',()=>{
@@ -28,7 +36,7 @@ async function start(){
    const dates=Array.from({length:n},(_,i)=>new Date(Date.parse(from)+i*86400000).toISOString().slice(0,10));
    days.innerHTML=`<fieldset><legend>Tanggal hari kerja yang diajukan</legend><small>Sabtu/Minggu tidak otomatis dianggap libur. Sesuaikan dengan jadwal kerja Anda.</small><div class="day-grid">${dates.map(d=>`<label class="check"><input type="checkbox" name="work_date" value="${d}"><span>${esc(date(d))}</span></label>`).join('')}</div></fieldset>`;
   });
-  const lock=value=>{busy=value;for(const el of form.querySelectorAll('input,textarea,button'))el.disabled=value;};
+  const lock=value=>{busy=value;for(const el of root.querySelectorAll('input,textarea,button'))el.disabled=value;};
   form.addEventListener('submit',async e=>{
    e.preventDefault();if(busy)return;error.textContent='';const body=values();if(!body.dates.length){error.textContent='Tampilkan tanggal dan centang minimal satu hari kerja.';return;}
    lock(true);try{
@@ -46,6 +54,5 @@ async function start(){
     document.querySelector('#another').addEventListener('click',start);
    }catch(err){error.textContent=err.message;lock(false);}
   });
- }catch(err){root.innerHTML=`<section class="card"><h2>Formulir belum dapat dibuka</h2><p class="error" role="alert">${esc(err.message)}</p><button type="button" id="retry">Coba lagi</button></section>`;document.querySelector('#retry').addEventListener('click',start);}
 }
 start();
