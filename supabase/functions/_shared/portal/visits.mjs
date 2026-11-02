@@ -6,13 +6,19 @@ const digest=s=>createHash('sha256').update(s).digest('hex');
 const params=()=>({url:Deno.env.get('VISITS_BRIDGE_URL'),key:Deno.env.get('VISITS_BRIDGE_KEY')});
 const safeDay=v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v)&&Number.isFinite(Date.parse(v));
 const validMonth=v=>typeof v==='string'&&/^\d{4}-(0[1-9]|1[0-2])$/.test(v);
-async function bridge(operation,payload={}){
+export async function bridge(operation,payload={}){
  const env=params();
  assert(env.url&&env.key,'Koneksi Google Spreadsheet Pengelolaan Kunjungan belum dikonfigurasi.',503);
  let url;try{url=new URL(env.url);}catch{throw new AppError(503,'Alamat jembatan Spreadsheet tidak valid.');}
- assert(url.protocol==='https:'&&!url.username&&!url.password,'Jembatan Spreadsheet harus melalui HTTPS.',503);
- // The bridge must validate the credential server-side, enforce operations, and never expose it to browsers.
- const response=await fetch(url.href,{method:'POST',redirect:'error',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({operation,credential:env.key,payload}),signal:AbortSignal.timeout(12000)});
+ assert(url.protocol==='https:'&&url.hostname==='script.google.com'&&/^\/macros\/s\/[^/]+\/exec$/.test(url.pathname),'Alamat Apps Script tidak valid.',503);
+ // Apps Script ContentService responds with a 302 to script.googleusercontent.com.
+ // Follow only this specific Google redirect and NEVER forward credentials on it.
+ let response=await fetch(url.href,{method:'POST',redirect:'manual',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({operation,credential:env.key,payload}),signal:AbortSignal.timeout(26000)});
+ if([301,302,303,307,308].includes(response.status)){
+  const target=new URL(response.headers.get('location')||'',url);
+  assert(target.protocol==='https:'&&target.hostname==='script.googleusercontent.com','Pengalihan Apps Script tidak valid.',503);
+  response=await fetch(target.href,{method:'GET',redirect:'error',signal:AbortSignal.timeout(12000)});
+ }
  assert(response.ok,'Google Spreadsheet sedang tidak dapat diakses.',503);
  let body;try{body=await response.json();}catch{throw new AppError(503,'Balasan Spreadsheet tidak valid.');}
  assert(body&&body.ok===true&&body.data!==undefined,'Permintaan Spreadsheet belum berhasil.',503);
@@ -50,6 +56,12 @@ export async function visitsRoutes(ctx){
   const from=url.searchParams.get('from'),to=url.searchParams.get('to');
   assert(safeDay(from)&&safeDay(to)&&from<=to,'Rentang tanggal tidak valid.',400);
   return bridge('records.list',{from,to});
+ }
+ if(area==='archive'&&action==='reviews'&&method==='GET'){
+  await requireAccess(db,user,'visits.archive.export');
+  const month=url.searchParams.get('month');
+  assert(validMonth(month),'Bulan arsip tidak valid.',422);
+  return bridge('archive.reviews',{month});
  }
  if(area==='archive'&&method==='GET'){
   await requireAccess(db,user,'visits.archive.read');

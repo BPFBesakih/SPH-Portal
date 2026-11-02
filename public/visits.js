@@ -56,7 +56,7 @@ export async function loadVisitsPage(route){
  return pending();
 }
 function guideForm(g){
- const fields=`<label class="field"><span>ID Guide</span><input name="guideId" maxlength="30" ${g?'readonly':''} value="${esc(g?.guideId||'')}" required></label><label class="field"><span>Nama</span><input name="guideName" maxlength="120" required value="${esc(g?.guideName||'')}"></label><label class="field"><span>Kategori</span><select name="kategori"><option ${g?.kategori==='Asing'?'selected':''}>Asing</option><option ${g?.kategori==='Domestik'?'selected':''}>Domestik</option></select></label><label class="field"><span>Regu</span><select name="regu">${['A1','A2','D1','D2'].map(r=>`<option ${g?.regu===r?'selected':''}>${r}</option>`).join('')}</select></label><label class="check"><input type="checkbox" name="aktif" ${!g||g.aktif?'checked':''}>Aktif</label>`;
+ const fields=`<label class="field"><span>ID Guide</span><input name="guideId" maxlength="30" ${g?'readonly':''} value="${esc(g?.guideId||'')}" placeholder="G-315" pattern="G-[0-9]{1,7}" required></label><label class="field"><span>Nama</span><input name="guideName" maxlength="120" required value="${esc(g?.guideName||'')}"></label><label class="field"><span>Kategori</span><select name="kategori"><option ${g?.kategori==='Asing'?'selected':''}>Asing</option><option ${g?.kategori==='Domestik'?'selected':''}>Domestik</option></select></label><label class="field"><span>Regu</span><select name="regu">${['A1','A2','D1','D2'].map(r=>`<option ${g?.regu===r?'selected':''}>${r}</option>`).join('')}</select></label><label class="check"><input type="checkbox" name="aktif" ${!g||g.aktif?'checked':''}>Aktif</label>`;
  formDialog(g?'Ubah Guide':'Tambah Guide',fields,async(data,form)=>{
   await post('visits/guides',{guideId:data.guideId,guideName:data.guideName,kategori:data.kategori,regu:data.regu,aktif:form.querySelector('[name=aktif]').checked});
   toast('Data guide tersimpan di Spreadsheet.');refresh();
@@ -71,9 +71,13 @@ async function exportArchive(){
  }
  if(!all.length)throw new Error('Tidak ada data arsip pada bulan yang dipilih.');
  const columns=['evaluationId','timestamp','pos','guideId','guideName','uniform','idCard','review','etika','catatan','receivedAt','koreksiDari','status'].map(key=>({header:key,key,kind:['uniform','idCard','review','etika','pos'].includes(key)?'number':'text'}));
- const blob=createXlsx([{name:'Evaluations',columns,rows:all}]);
+ const review=await api('visits/archive/reviews?month='+M.archiveMonth);
+ const reviewColumns=[{header:'Guide ID',key:'guideId'},{header:'Guide',key:'guideName'},{header:'Regu',key:'regu'},{header:'Tanggal WITA',key:'day'},{header:'Nilai REVIEW',key:'review',kind:'number'}];
+ const workbook=[{name:'Evaluations',columns,rows:all},{name:'REVIEW manual',columns:reviewColumns,rows:review.items||[]}];
+ if(review.unmatched?.length)workbook.push({name:'REVIEW perlu verifikasi',columns:[...reviewColumns,{header:'Keterangan',key:'reason'}],rows:review.unmatched});
+ const blob=createXlsx(workbook);
  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='arsip-nilaiguide-'+M.archiveMonth+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
- toast(all.length+' baris arsip siap diunduh. REVIEW manual tersedia di rekap spreadsheet lama.');
+ toast(all.length+' baris penilaian dan '+(review.items||[]).length+' REVIEW manual diekspor.');
 }
 export function bindVisitsPage(route){
  const root=document.querySelector('#main');if(!root)return;

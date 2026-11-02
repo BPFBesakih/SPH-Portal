@@ -45,7 +45,7 @@ function stats_(records,guideList){
  return {summary:{active_guides:guideList.filter(x=>x.aktif).length,trips:total,today:active.filter(x=>dateOf_(x)===wita_(new Date())).length,guides_rated:new Set(active.map(x=>x.guideId)).size,uniform_pct:pct(active.filter(x=>Number(x.uniform)>=1).length,total),id_pct:pct(active.filter(x=>Number(x.idCard)===1).length,total),etika_avg:mean(active.reduce((n,x)=>n+Number(x.etika||0),0),total)},per_pos:pos,by_regu:by_regu};
 }
 function upsertGuide_(id,p){
- if(!/^[A-Z0-9-]{2,30}$/.test(p.guideId||'')||!safe(p.guideName)||safe(p.guideName).length>120)throw Error('Data guide tidak valid.');
+ if(!/^G-[0-9]{1,7}$/.test(p.guideId||'')||!safe(p.guideName)||safe(p.guideName).length>120)throw Error('Data guide tidak valid.');
  if(!['A1','A2','D1','D2'].includes(p.regu)||((p.regu[0]==='A')!==(p.kategori==='Asing')))throw Error('Regu tidak sesuai kategori.');
  if(typeof p.aktif!=='boolean')throw Error('Status tidak valid.');
  const lock=LockService.getScriptLock();if(!lock.tryLock(20000))throw Error('SERVER_BUSY');

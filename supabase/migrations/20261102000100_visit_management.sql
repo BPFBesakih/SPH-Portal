@@ -24,7 +24,7 @@ WITH resources(resource,actions) AS (VALUES
  ('visits.archive',ARRAY['read','export']),('visits.settings',ARRAY['manage'])
 )
 INSERT INTO public.app_permissions(code,module_code,resource,action)
-SELECT resource||'.'||action,'visits',resource,action FROM resources,CROSS JOIN LATERAL unnest(actions) action
+SELECT resource||'.'||a.action,'visits',resource,a.action FROM resources CROSS JOIN LATERAL unnest(actions) AS a(action)
 ON CONFLICT(code) DO NOTHING;
 INSERT INTO public.app_roles(code,name) VALUES
  ('KUNJUNGAN_PENGELOLA','Pengelola Kunjungan'),
@@ -37,5 +37,10 @@ WITH templates(role_code,codes) AS (VALUES
 INSERT INTO public.app_role_permissions(role_id,permission_id)
 SELECT r.id,p.id FROM templates t JOIN public.app_roles r ON r.code=t.role_code
 JOIN public.app_permissions p ON p.code=ANY(t.codes)
+ON CONFLICT DO NOTHING;
+-- IT Admin and Superadmin always retain the ability to administer the new workspace.
+INSERT INTO public.app_role_permissions(role_id,permission_id)
+SELECT r.id,p.id FROM public.app_roles r CROSS JOIN public.app_permissions p
+WHERE r.code IN ('IT_ADMIN','SUPER_ADMIN') AND p.module_code='visits'
 ON CONFLICT DO NOTHING;
 COMMIT;
