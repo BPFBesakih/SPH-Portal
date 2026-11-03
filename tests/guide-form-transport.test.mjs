@@ -34,7 +34,7 @@ test('missing client IP and oversized batches are rejected before upstream',asyn
  assert.equal((await handleGuideForm(request('submit',{evaluations:[{catatan:'x'.repeat(25000)}]}),env,fail)).status,413);
 });
 test('busy and rate-limit answers stay retryable; unknown failures are redacted',async()=>{
- for(const [status,error] of [[429,'Terlalu banyak kiriman.'],[503,'Spreadsheet sedang sibuk. Coba lagi sebentar.'],[404,'Tautan pos tidak aktif.'],[422,'Periksa isian.']]){
+ for(const [status,error] of [[429,'Terlalu banyak kiriman.'],[503,'Kiriman sedang diproses. Coba lagi sebentar.'],[404,'Tautan pos tidak aktif.'],[422,'Periksa isian.']]){
   const r=await handleGuideForm(request(),env,async()=>Response.json({error},{status}));assert.equal(r.status,status);assert.equal((await r.json()).error,error);
  }
  const leaked=await handleGuideForm(request(),env,async()=>Response.json({error:'database secret details'},{status:503}));assert.equal(leaked.status,503);assert(!(await leaked.text()).includes('secret'));
