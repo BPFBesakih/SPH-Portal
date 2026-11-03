@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync,readdirSync} from 'node:fs';
+import {migrationNames,migrationSql} from './pglite-migrations.mjs';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
@@ -19,7 +20,7 @@ try{
  CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
  GRANT USAGE ON SCHEMA auth TO authenticated;`);
  const directory=new URL('../supabase/migrations/',import.meta.url);
- for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n<'20261016000900').sort())await pg.exec(readFileSync(new URL(name,directory),'utf8'));
+ for(const name of migrationNames(directory,n=>n<'20261016000900'))await pg.exec(migrationSql(directory,name));
  const existingId=randomUUID();
  await pg.query('INSERT INTO auth.users(id,email,email_confirmed_at) VALUES($1,$2,now())',[existingId,'existing-fixture@example.invalid']);
  await pg.query('INSERT INTO public.app_users(id,username,must_change_password) VALUES($1,$2,false)',[existingId,'existing_admin']);
@@ -29,7 +30,7 @@ try{
   SELECT 'Fiktif '||g,'[{"name":"Posisi Fiktif","org_path":"Unit Fiktif"}]'::jsonb,'fixture',jsonb_build_array('Bagan Lengkap!A'||g) FROM generate_series(1,157)g;`);
  const beforeIdentity=(await pg.query('SELECT id,username,status,must_change_password,row_version FROM public.app_users ORDER BY id')).rows;
  await pg.exec(readFileSync(new URL('20261016000900_operational_modules.sql',directory),'utf8'));
- for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n>'20261016000900_operational_modules.sql').sort())await pg.exec(readFileSync(new URL(name,directory),'utf8'));
+ for(const name of migrationNames(directory,n=>n>'20261016000900_operational_modules.sql'))await pg.exec(migrationSql(directory,name));
  await check('migration preserves existing accounts, six admin permissions and all 157 pending candidates',async()=>{
   assert.deepEqual((await pg.query('SELECT id,username,status,must_change_password,row_version FROM public.app_users ORDER BY id')).rows,beforeIdentity);
   assert.equal((await pg.query("SELECT count(*)::int n FROM public.app_role_permissions rp JOIN public.app_roles r ON r.id=rp.role_id JOIN public.app_permissions p ON p.id=rp.permission_id WHERE r.code='SUPER_ADMIN' AND p.module_code='admin'")).rows[0].n,6);
@@ -41,6 +42,11 @@ try{
  await pg.query('DELETE FROM public.app_user_roles WHERE user_id=$1',[existingId]);
  const db={inTransaction:true,query:async(sql,args=[])=>{const r=await pg.query(sql,args);return Object.assign(r.rows,{count:r.affectedRows??r.rows.length});}};
  await pg.exec('SET search_path=portal,pg_catalog');
+ await check('leave-year maintenance job is registered hourly without client access to the cron schema',async()=>{
+  const jobs=(await pg.query("SELECT schedule,command FROM cron.job WHERE jobname='leave-year-maintenance'")).rows;
+  assert.equal(jobs.length,1);assert.equal(jobs[0].schedule,'0 * * * *');assert.match(jobs[0].command,/portal\.run_leave_year_maintenance\(\)/);
+  for(const role of ['anon','authenticated','service_role'])assert.equal((await pg.query("SELECT has_schema_privilege($1,'cron','USAGE') ok",[role])).rows[0].ok,false);
+ });
  await check('operational schema has RLS and no direct client or service-role grants',async()=>{
   const tables=await pg.query("SELECT tablename,rowsecurity FROM pg_tables WHERE schemaname='portal'");
   assert(tables.rows.length>=67);assert(tables.rows.every(t=>t.rowsecurity));
@@ -84,7 +90,10 @@ try{
   const permissions=[...original,'hr.coaching.read','hr.employee_files.read'];
   const saved=await call(admin,`roles/${role.id}`,'PATCH',{row_version:role.row_version,permissions});
   assert.equal(saved.code,'SUPER_ADMIN');assert.equal(saved.is_system,1);assert.equal(await can(db,admin,'hr.coaching.read'),true);
-  await assert.rejects(call(admin,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,code:'RENAMED',permissions}),e=>e.status===422);
+  // Kode role sistem tidak boleh diganti (422). Bila daftar izin memuat hr.leaves.*, penjaga Kontrol Cuti
+  // menolak lebih dulu (403) karena kode tujuan bukan SUPER_ADMIN/LEAVE_CONTROLLER; keduanya tetap penolakan.
+  await assert.rejects(call(admin,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,code:'RENAMED',permissions:permissions.filter(p=>!p.startsWith('hr.leaves.'))}),e=>e.status===422);
+  await assert.rejects(call(admin,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,code:'RENAMED',permissions}),e=>e.status===403);
   await assert.rejects(call(admin,`roles/${role.id}`,'PATCH',{row_version:saved.row_version,permissions:permissions.filter(p=>p!=='admin.roles.manage')}),e=>e.status===409);
   assert.equal((await one(db,'SELECT row_version FROM roles WHERE id=?',role.id)).row_version,saved.row_version);
   const ordinary=await account('role_reader',null);
