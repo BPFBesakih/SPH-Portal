@@ -3,6 +3,7 @@ import {asyncMap,asyncFilter,asyncSome,asyncEvery,asyncFind,asyncForEach,asyncRe
 import {createHmac} from 'node:crypto';
 import {one, run, insert, assert, now} from './db.mjs';
 import {digest} from './auth.mjs';
+import {formGuideList, ingestGuideEvaluations} from './visit-data.mjs';
 export const guidePosts = {
   1: 'Pos 1 — Pintu Masuk',
   3: 'Pos 3 — Pelataran Utama'
@@ -109,35 +110,33 @@ export async function admitGuideForm(db, action, b) {
     rejected
   };
 }
-export const guideFormContext = (link, data) => {
-  assert(Array.isArray(data?.guides), 'Spreadsheet sedang tidak dapat diakses.', 503);
-  return {
-    pos: link.pos,
-    label: link.label,
-    serverTime: typeof data.serverTime === 'string' ? data.serverTime : now(),
-    guides: data.guides.filter(g => g && typeof g.guideId === 'string' && guideId.test(g.guideId) && typeof g.guideName === 'string').map(g => ({
-      guideId: g.guideId,
-      guideName: g.guideName,
-      kategori: String(g.kategori || ''),
-      regu: String(g.regu || '')
-    }))
+export const guideFormContext = async (db, link) => ({
+  pos: link.pos,
+  label: link.label,
+  serverTime: now(),
+  guides: await formGuideList(db)
+});
+export async function submitGuideForm(db, admitted, nowMs = Date.now()) {
+  return admitted.items.length ? await ingestGuideEvaluations(db, admitted.link, admitted.items, nowMs) : {
+    accepted: [],
+    rejected: []
   };
-};
-const reasonCode = errors => {
+}
+const localReason = errors => {
   const text = (errors || []).join(' ');
-  return (/jeda minimal|terlaluCepat/).test(text) ? 'JEDA' : (/koreksi|diperbaiki/).test(text) ? 'KOREKSI' : (/tab Guides|guideId/).test(text) ? 'GUIDE' : (/timestamp|jam HP|hari/).test(text) ? 'WAKTU' : (/pos/).test(text) ? 'POS' : 'VALIDASI';
+  return (/^pos penilaian/).test(text) ? 'POS' : (/timestamp/).test(text) ? 'WAKTU' : 'VALIDASI';
 };
 export function ipFingerprint(clientIp, key) {
   return typeof key === 'string' && key.length >= 32 ? createHmac('sha256', key).update(String(clientIp)).digest('hex') : null;
 }
-export async function recordGuideFormResult(db, link, result, ipHash) {
-  const stamp = now();
+export async function recordGuideFormResult(db, admitted, result, ipHash) {
+  const stamp = now(), link = admitted.link;
   await run(db, 'DELETE FROM guide_form_submissions WHERE received_at<?', new Date(Date.now() - guideFormLimits.retentionDays * 86400000).toISOString());
-  const rows = [...(result.accepted || []).map(a => [a.evaluationId, a.duplicate ? 'DUPLICATE' : 'ACCEPTED', null]), ...(result.rejected || []).filter(r => r.evaluationId).map(r => [r.evaluationId, 'REJECTED', reasonCode(r.errors)])];
+  const rows = [...result.accepted.map(a => [a.evaluationId, a.duplicate ? 'DUPLICATE' : 'ACCEPTED', null]), ...admitted.rejected.filter(r => r.evaluationId).map(r => [r.evaluationId, 'REJECTED', localReason(r.errors)]), ...result.rejected.map(r => [r.evaluationId, 'REJECTED', r.reason])];
   for (const [evaluationId, outcome, reason] of rows) if (typeof evaluationId === 'string' && uuid.test(evaluationId)) await insert(db, 'guide_form_submissions', {
     link_id: link.id,
     pos: link.pos,
-    evaluation_id: evaluationId,
+    evaluation_id: evaluationId.toLowerCase(),
     outcome,
     reason,
     received_at: stamp,
@@ -145,24 +144,14 @@ export async function recordGuideFormResult(db, link, result, ipHash) {
   });
   return rows.length;
 }
-export function guideFormReceipt(admitted, data) {
-  const accepted = Array.isArray(data?.accepted) ? data.accepted.filter(a => a && typeof a.evaluationId === 'string').map(a => ({
-    evaluationId: a.evaluationId,
-    synced: true,
-    duplicate: a.duplicate === true
-  })) : [];
-  const remote = Array.isArray(data?.rejected) ? data.rejected.filter(r => r && typeof r === 'object').map(r => ({
-    evaluationId: typeof r.evaluationId === 'string' ? r.evaluationId : null,
-    errors: Array.isArray(r.errors) ? r.errors.map(e => String(e).slice(0, 500)).slice(0, 5) : ['ditolak spreadsheet'],
-    ...r.terlaluCepat ? {
-      terlaluCepat: true,
-      sudahDinilai: true,
-      aktifSaatIni: typeof r.aktifSaatIni === 'string' ? r.aktifSaatIni : undefined
-    } : {}
-  })) : [];
+export function guideFormReceipt(admitted, result) {
   return {
-    accepted,
-    rejected: [...admitted.rejected.map(({local, ...r}) => r), ...remote],
-    serverTime: typeof data?.serverTime === 'string' ? data.serverTime : now()
+    accepted: result.accepted.map(a => ({
+      evaluationId: a.evaluationId,
+      synced: true,
+      duplicate: a.duplicate === true
+    })),
+    rejected: [...admitted.rejected.map(({local, ...r}) => r), ...result.rejected.map(({reason, ...r}) => r)],
+    serverTime: now()
   };
 }

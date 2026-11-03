@@ -2,6 +2,7 @@ import { randomBytes as __visits_randomBytes } from "node:crypto";
 import { randomUUID as __visits_randomUUID } from "node:crypto";
 import { createHash as __visits_createHash } from "node:crypto";
 import { createHmac as __visits_createHmac } from "node:crypto";
+import { createHash as __visits_createHash2, randomUUID as __visits_randomUUID2 } from "node:crypto";
 // supabase/functions/_shared/portal/leave-control.mjs
 async function leaveControlEligible(db, user) {
   if (!user?.id) return false;
@@ -5757,12 +5758,14 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
   }
   return merchandiseRoutes2;
 })();
-// --- Modul Pengelolaan Kunjungan, dibangkitkan dari lib/visits*.mjs dan lib/guide-form.mjs ---
+// --- Modul Pengelolaan Kunjungan, dibangkitkan dari lib/visit*.mjs dan lib/guide-form.mjs ---
 const __visits = (() => {
   const randomBytes = __visits_randomBytes;
   const randomUUID = __visits_randomUUID;
   const createHash = __visits_createHash;
   const createHmac = __visits_createHmac;
+  const createHash2 = __visits_createHash2;
+  const randomUUID2 = __visits_randomUUID2;
 // supabase/functions/_shared/portal/arrays.mjs
 async function asyncMap(items, fn) {
   const out = [];
@@ -5777,14 +5780,14 @@ var now = () => (/* @__PURE__ */ new Date()).toISOString();
 var today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Makassar" }).format(/* @__PURE__ */ new Date());
 var uid = () => randomUUID();
 var AppError = class extends Error {
-  constructor(status2, message, details) {
+  constructor(status, message, details) {
     super(message);
-    this.status = status2;
+    this.status = status;
     this.details = details;
   }
 };
-var assert = (condition, message, status2 = 422) => {
-  if (!condition) throw new AppError(status2, message);
+var assert = (condition, message, status = 422) => {
+  if (!condition) throw new AppError(status, message);
 };
 var sqlName = (n) => {
   if (!/^[a-z_][a-z0-9_]*$/.test(n)) throw new Error("Invalid SQL identifier");
@@ -5872,10 +5875,1386 @@ async function has(db, user, permission) {
 }
 
 // supabase/functions/_shared/portal/guide-form.mjs
+
+// supabase/functions/_shared/portal/visit-data.mjs
+var visitRules = Object.freeze({
+  jedaMenit: 15,
+  umurMaksHari: 30,
+  retensiHari: 42,
+  minimalPengantaran: 5,
+  jumlahPeringkat: 10,
+  reviewMaks: 20,
+  importMaks: 2e3
+});
+var reguInfo = Object.freeze([{
+  kode: "A1",
+  kategori: "Asing",
+  nomor: 1
+}, {
+  kode: "A2",
+  kategori: "Asing",
+  nomor: 2
+}, {
+  kode: "D1",
+  kategori: "Domestik",
+  nomor: 1
+}, {
+  kode: "D2",
+  kategori: "Domestik",
+  nomor: 2
+}]);
+var reguCodes = reguInfo.map((r) => r.kode);
+var witaOffset = 8 * 36e5;
+var witaDate = (ms) => new Date(ms + witaOffset).toISOString().slice(0, 10);
+var shiftDate = (day, days) => new Date(Date.parse(day + "T00:00:00Z") + days * 864e5).toISOString().slice(0, 10);
+var monthLastDay = (month) => {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+};
+var nextMonth = (month) => {
+  const [y, m] = month.split("-").map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+};
+function monthsBetween(fromMonth, toMonth) {
+  const out = [];
+  for (let m = fromMonth; m <= toMonth; m = nextMonth(m)) out.push(m);
+  return out;
+}
+var guideView = (g) => ({
+  guideId: g.id,
+  guideName: g.name,
+  kategori: g.kategori,
+  regu: g.regu,
+  aktif: Number(g.is_active) === 1,
+  row_version: Number(g.row_version)
+});
+var visitGuideList = async (db) => (await all(db, "SELECT * FROM visit_guides ORDER BY seq")).map(guideView);
+function parseGuideId(value) {
+  const m = /^G-(\d{1,7})$/.exec(String(value ?? "").trim().toUpperCase());
+  return m && Number(m[1]) >= 1 ? {
+    id: `G-${m[1]}`,
+    seq: Number(m[1])
+  } : null;
+}
+var cleanName = (value) => typeof value === "string" || typeof value === "number" ? String(value).trim().replace(/\s+/g, " ") : "";
+function normalizeKategori(value) {
+  const v = String(value ?? "").trim().toLowerCase();
+  return v === "asing" ? "Asing" : v === "domestik" ? "Domestik" : null;
+}
+function normalizeRegu(value) {
+  const codes = [...new Set((Array.isArray(value) ? value : String(value ?? "").split(/[,;/]/)).map((x) => String(x).trim().toUpperCase()).filter(Boolean))];
+  return codes.length >= 1 && codes.length <= 2 && codes.every((c) => reguCodes.includes(c)) ? codes.join(", ") : null;
+}
+function parseActive(value) {
+  if (value === void 0 || value === null || value === "") return true;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const v = String(value).trim().toLowerCase();
+  if (["true", "ya", "y", "1", "aktif", "yes"].includes(v)) return true;
+  if (["false", "tidak", "t", "0", "nonaktif", "tidak aktif", "no"].includes(v)) return false;
+  return null;
+}
+var nameKey = (name) => name.toLocaleLowerCase("id").replace(/\s+/g, " ").trim();
+var sharesRegu = (a, b) => a.split(", ").some((code) => b.split(", ").includes(code));
+var twinOf = (guides, candidate) => guides.find((g) => g.id !== candidate.id && nameKey(g.name) === nameKey(candidate.name) && sharesRegu(g.regu, candidate.regu));
+var formatGuideId = (seq) => `G-${String(seq).padStart(3, "0")}`;
+async function saveVisitGuide(db, user, b, audit2) {
+  const name = cleanName(b.guideName);
+  assert(name.length >= 1 && name.length <= 120, "Nama guide wajib diisi (maksimal 120 huruf).");
+  const kategori = normalizeKategori(b.kategori);
+  assert(kategori, "Kategori harus Asing atau Domestik.");
+  const regu = normalizeRegu(b.regu);
+  assert(regu, "Pilih regu yang valid: A1, A2, D1, atau D2 (paling banyak dua).");
+  assert(typeof b.aktif === "boolean", "Status aktif wajib dipilih.");
+  const guides = await all(db, "SELECT id,name,regu FROM visit_guides");
+  if (b.guideId !== void 0 && b.guideId !== null && b.guideId !== "") {
+    const parsed = parseGuideId(b.guideId);
+    assert(parsed, "ID guide tidak valid.");
+    const current = await one(db, "SELECT * FROM visit_guides WHERE id=?", parsed.id);
+    assert(current, "Guide tidak ditemukan.", 404);
+    const twin2 = twinOf(guides, {
+      id: current.id,
+      name,
+      regu
+    });
+    assert(!twin2, `Nama ini sudah dipakai ${twin2?.id} di regu yang sama. Beri pembeda dalam kurung, misalnya "${name} (2)".`, 409);
+    const saved2 = await update(db, "visit_guides", current.id, b.row_version, {
+      name,
+      kategori,
+      regu,
+      is_active: b.aktif ? 1 : 0,
+      updated_by: user.id
+    });
+    await audit2(db, user, "UPDATE", "visit_guides", current.id, {
+      kategori,
+      regu,
+      aktif: b.aktif
+    });
+    return {
+      ...guideView(saved2),
+      created: false
+    };
+  }
+  const twin = twinOf(guides, {
+    id: null,
+    name,
+    regu
+  });
+  assert(!twin, `Nama ini sudah dipakai ${twin?.id} di regu yang sama. Beri pembeda dalam kurung, misalnya "${name} (2)".`, 409);
+  const seq = Number((await one(db, "SELECT coalesce(max(seq),0) AS n FROM visit_guides")).n) + 1;
+  const saved = await insert(db, "visit_guides", {
+    id: formatGuideId(seq),
+    seq,
+    name,
+    kategori,
+    regu,
+    is_active: b.aktif ? 1 : 0,
+    created_by: user.id,
+    updated_by: user.id
+  });
+  await audit2(db, user, "CREATE", "visit_guides", saved.id, {
+    kategori,
+    regu,
+    aktif: b.aktif
+  });
+  return {
+    ...guideView(saved),
+    created: true
+  };
+}
+async function importVisitGuides(db, user, b, audit2) {
+  assert(Array.isArray(b.rows) && b.rows.length > 0, "Berkas tidak berisi baris guide.");
+  assert(b.rows.length <= visitRules.importMaks, `Maksimal ${visitRules.importMaks} baris per impor.`, 413);
+  const existing = new Map((await all(db, "SELECT * FROM visit_guides")).map((g) => [g.id, g]));
+  const seqOwner = new Map([...existing.values()].map((g) => [Number(g.seq), g.id]));
+  const errors = [], plan = [], seen = /* @__PURE__ */ new Map();
+  b.rows.forEach((r, index) => {
+    const line = Number.isInteger(r?.line) && r.line > 0 && r.line < 1e6 ? r.line : index + 2;
+    if (!r || typeof r !== "object" || Array.isArray(r)) {
+      errors.push({
+        line,
+        message: "Baris tidak valid."
+      });
+      return;
+    }
+    const problems = [];
+    let parsed = null;
+    if (r.guideId !== void 0 && r.guideId !== null && String(r.guideId).trim() !== "") {
+      parsed = parseGuideId(r.guideId);
+      if (!parsed) problems.push("ID guide harus berbentuk G-angka, misalnya G-001");
+      else if (seen.has(parsed.seq)) problems.push(`ID ${parsed.id} sudah ada di baris ${seen.get(parsed.seq)}`);
+      else {
+        seen.set(parsed.seq, line);
+        const owner = seqOwner.get(parsed.seq);
+        if (owner && owner !== parsed.id) problems.push(`ID ${parsed.id} bentrok dengan ${owner} yang sudah tersimpan`);
+      }
+    }
+    const name = cleanName(r.guideName);
+    if (!name || name.length > 120) problems.push("Nama guide wajib diisi (maksimal 120 huruf)");
+    const kategori = normalizeKategori(r.kategori);
+    if (!kategori) problems.push("Kategori harus Asing atau Domestik");
+    const regu = normalizeRegu(r.regu);
+    if (!regu) problems.push("Regu harus A1, A2, D1, atau D2 (paling banyak dua, dipisah koma)");
+    const active = parseActive(r.aktif);
+    if (active === null) problems.push("Kolom aktif harus TRUE/FALSE atau Ya/Tidak");
+    if (problems.length) {
+      errors.push({
+        line,
+        message: problems.join("; ")
+      });
+      return;
+    }
+    plan.push({
+      line,
+      id: parsed?.id || null,
+      seq: parsed?.seq || null,
+      name,
+      kategori,
+      regu,
+      is_active: active ? 1 : 0
+    });
+  });
+  const finalGuides = new Map([...existing.values()].map((g) => [g.id, {
+    id: g.id,
+    name: g.name,
+    regu: g.regu
+  }]));
+  plan.forEach((p, i) => {
+    finalGuides.set(p.id || `baris-${i}`, {
+      id: p.id || `baris-${i}`,
+      name: p.name,
+      regu: p.regu
+    });
+  });
+  const warnings = [];
+  plan.forEach((p, i) => {
+    const key = p.id || `baris-${i}`, twin = twinOf([...finalGuides.values()], {
+      id: key,
+      name: p.name,
+      regu: p.regu
+    });
+    if (twin) warnings.push({
+      line: p.line,
+      message: `Nama "${p.name}" juga dipakai ${twin.id.startsWith("baris-") ? "baris lain di berkas" : twin.id} di regu yang sama`
+    });
+  });
+  let created = 0, changed = 0, unchanged = 0;
+  for (const p of plan) {
+    const current = p.id && existing.get(p.id);
+    if (!current) created++;
+    else if (current.name === p.name && current.kategori === p.kategori && current.regu === p.regu && Number(current.is_active) === p.is_active) unchanged++;
+    else changed++;
+  }
+  const summary = {
+    total: b.rows.length,
+    create: created,
+    update: changed,
+    unchanged,
+    error_count: errors.length,
+    errors: errors.slice(0, 100),
+    warning_count: warnings.length,
+    warnings: warnings.slice(0, 100)
+  };
+  if (b.apply !== true) return {
+    ...summary,
+    applied: false
+  };
+  assert(!errors.length, `${errors.length} baris belum valid. Perbaiki berkasnya lalu impor ulang.`);
+  let next = Math.max(0, ...[...existing.values()].map((g) => Number(g.seq)), ...plan.filter((p) => p.seq).map((p) => p.seq)) + 1;
+  const stamp = now();
+  for (const p of plan) {
+    const current = p.id && existing.get(p.id);
+    if (!current) {
+      const seq = p.seq || next++;
+      await insert(db, "visit_guides", {
+        id: p.id || formatGuideId(seq),
+        seq,
+        name: p.name,
+        kategori: p.kategori,
+        regu: p.regu,
+        is_active: p.is_active,
+        created_by: user.id,
+        updated_by: user.id
+      });
+    } else if (!(current.name === p.name && current.kategori === p.kategori && current.regu === p.regu && Number(current.is_active) === p.is_active)) {
+      await run(db, "UPDATE visit_guides SET name=?,kategori=?,regu=?,is_active=?,updated_by=?,updated_at=?,row_version=row_version+1 WHERE id=?", p.name, p.kategori, p.regu, p.is_active, user.id, stamp, p.id);
+    }
+  }
+  await audit2(db, user, "IMPORT", "visit_guides", "berkas", {
+    created,
+    updated: changed,
+    unchanged,
+    rows: b.rows.length
+  });
+  return {
+    ...summary,
+    applied: true
+  };
+}
+var recordView = (r) => ({
+  evaluationId: r.id,
+  timestamp: r.evaluated_at,
+  tanggal: r.wita_date,
+  pos: Number(r.pos),
+  guideId: r.guide_id,
+  guideName: r.guide_name,
+  regu: r.regu || "",
+  uniform: Number(r.uniform),
+  idCard: Number(r.id_card),
+  etika: Number(r.etika),
+  review: Number(r.review),
+  catatan: r.catatan || "",
+  receivedAt: r.received_at,
+  koreksiDari: r.koreksi_dari || "",
+  status: r.status,
+  digantiOleh: r.replaced_by || ""
+});
+async function visitRecordPage(db, q) {
+  const where = ["e.wita_date>=?", "e.wita_date<=?"], args = [q.from, q.to];
+  if (q.pos) {
+    where.push("e.pos=?");
+    args.push(q.pos);
+  }
+  if (q.status) {
+    where.push("e.status=?");
+    args.push(q.status);
+  }
+  if (q.guideId) {
+    where.push("e.guide_id=?");
+    args.push(q.guideId);
+  }
+  if (q.regu) {
+    where.push("g.regu LIKE ?");
+    args.push(`%${q.regu}%`);
+  }
+  const from = ` FROM visit_evaluations e LEFT JOIN visit_guides g ON g.id=e.guide_id WHERE ${where.join(" AND ")}`;
+  const total = Number((await one(db, `SELECT count(*) AS n${from}`, ...args)).n);
+  const items = (await all(db, `SELECT e.*,g.regu${from} ORDER BY e.evaluated_at DESC,e.id LIMIT ? OFFSET ?`, ...args, q.limit, q.offset)).map(recordView);
+  return {
+    items,
+    total,
+    more: q.offset + items.length < total,
+    folded_through: (await one(db, "SELECT folded_through FROM visit_sheet_state WHERE id=1"))?.folded_through || null
+  };
+}
+var emptyStat = () => ({
+  antar: 0,
+  uniform: 0,
+  idCard: 0,
+  review: 0,
+  etika: 0,
+  uniformPatuh: 0
+});
+function addStat(target, n) {
+  target.antar += n.antar;
+  target.uniform += n.uniform;
+  target.idCard += n.idCard;
+  target.review += n.review;
+  target.etika += n.etika;
+  target.uniformPatuh += n.uniformPatuh;
+  return target;
+}
+function statFor(map, key) {
+  let s = map.get(key);
+  if (!s) {
+    s = emptyStat();
+    map.set(key, s);
+  }
+  return s;
+}
+var visitFigures = (s) => {
+  const antar = s ? s.antar : 0;
+  return {
+    pengantaran: antar,
+    persenUniform: antar ? s.uniformPatuh / antar : null,
+    persenId: antar ? s.idCard / antar : null,
+    mutuUniform: antar ? s.uniform / antar : null,
+    rataEtika: antar ? s.etika / antar : null
+  };
+};
+function rankBy(list, key, ascending, count) {
+  return list.slice().sort((a, b) => {
+    const diff = ascending ? a[key] - b[key] : b[key] - a[key];
+    if (diff) return diff;
+    if (a.antar !== b.antar) return b.antar - a.antar;
+    const x = a.nama.toLowerCase(), y = b.nama.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : 0;
+  }).slice(0, count);
+}
+async function visitPeriod(db, from, to) {
+  const folded = (await one(db, "SELECT folded_through FROM visit_sheet_state WHERE id=1"))?.folded_through || null;
+  if (!folded || from > folded) return {
+    from,
+    to,
+    folded,
+    months: []
+  };
+  const monthStart = from.slice(8) === "01", monthEnd = to === monthLastDay(to.slice(0, 7));
+  assert(monthStart && (to >= folded || monthEnd), `Rincian harian sampai ${folded} hanya tersimpan di spreadsheet tahunan. Untuk periode itu pilih bulan penuh (mulai tanggal 1 dan berakhir di akhir bulan), atau buka spreadsheetnya.`);
+  return {
+    from,
+    to,
+    folded,
+    months: monthsBetween(from.slice(0, 7), (to >= folded ? folded : to).slice(0, 7))
+  };
+}
+async function visitOverview(db, from, to) {
+  const period = await visitPeriod(db, from, to);
+  const guides = await all(db, "SELECT id,name,kategori,regu,is_active FROM visit_guides ORDER BY seq");
+  const byId = new Map(guides.map((g) => [g.id, g]));
+  const total = /* @__PURE__ */ new Map(), byPos = /* @__PURE__ */ new Map(), guideDays = /* @__PURE__ */ new Map(), days = /* @__PURE__ */ new Set(), foldedDays = /* @__PURE__ */ new Map();
+  let foldedAllDays = 0;
+  for (const r of await all(db, "SELECT guide_id,pos,uniform,id_card,review,etika,wita_date FROM visit_evaluations WHERE status='aktif' AND wita_date>=? AND wita_date<=?", from, to)) {
+    const uniform = Number(r.uniform), n2 = {
+      antar: 1,
+      uniform,
+      idCard: Number(r.id_card),
+      review: Number(r.review),
+      etika: Number(r.etika),
+      uniformPatuh: uniform >= 1 ? 1 : 0
+    };
+    addStat(statFor(total, r.guide_id), n2);
+    addStat(statFor(byPos, `${r.guide_id}|${Number(r.pos)}`), n2);
+    days.add(r.wita_date);
+    let set = guideDays.get(r.guide_id);
+    if (!set) {
+      set = /* @__PURE__ */ new Set();
+      guideDays.set(r.guide_id, set);
+    }
+    set.add(r.wita_date);
+  }
+  if (period.months.length) {
+    for (const t of await all(db, "SELECT * FROM visit_monthly_totals WHERE month>=? AND month<=?", period.months[0], period.months.at(-1))) {
+      const n2 = {
+        antar: Number(t.antar),
+        uniform: Number(t.uniform),
+        idCard: Number(t.id_card),
+        review: Number(t.review),
+        etika: Number(t.etika),
+        uniformPatuh: Number(t.uniform_patuh)
+      };
+      const pos = Number(t.pos);
+      if (t.guide_id === "*") {
+        if (pos === 0) foldedAllDays += Number(t.hari);
+        continue;
+      }
+      if (pos === 0) {
+        addStat(statFor(total, t.guide_id), n2);
+        foldedDays.set(t.guide_id, (foldedDays.get(t.guide_id) || 0) + Number(t.hari));
+      } else addStat(statFor(byPos, `${t.guide_id}|${pos}`), n2);
+    }
+  }
+  const dayCount = (id) => (guideDays.get(id)?.size || 0) + (foldedDays.get(id) || 0);
+  const sum = emptyStat();
+  let evaluated = 0;
+  for (const s of total.values()) {
+    addStat(sum, s);
+    if (s.antar) evaluated++;
+  }
+  const ringkasan = {
+    ...visitFigures(sum),
+    guideDinilai: evaluated,
+    hariDinilai: days.size + foldedAllDays,
+    guideAktif: guides.filter((g) => Number(g.is_active) === 1).length
+  };
+  const perPos = [1, 3].map((pos) => {
+    const s = emptyStat();
+    let count = 0;
+    for (const [key, v] of byPos) if (key.endsWith(`|${pos}`)) {
+      addStat(s, v);
+      if (v.antar) count++;
+    }
+    return {
+      pos,
+      ...visitFigures(s),
+      guideDinilai: count
+    };
+  });
+  const perRegu = reguInfo.map((info) => {
+    const s = emptyStat();
+    let count = 0;
+    for (const [id, v] of total) {
+      const g = byId.get(id);
+      if (!g || !g.regu.split(", ").includes(info.kode)) continue;
+      addStat(s, v);
+      if (v.antar) count++;
+    }
+    return {
+      regu: info.kode,
+      kategori: info.kategori,
+      ...visitFigures(s),
+      guideDinilai: count
+    };
+  });
+  const list = [];
+  for (const g of guides) {
+    const s = total.get(g.id);
+    if (Number(g.is_active) !== 1 || !s || !s.antar) continue;
+    const sumNilai = s.uniform + s.idCard + s.etika + s.review;
+    list.push({
+      guideId: g.id,
+      nama: g.name,
+      regu: g.regu,
+      kategori: g.kategori,
+      hari: dayCount(g.id),
+      antar: s.antar,
+      uniform: s.uniform,
+      uniformPatuh: s.uniformPatuh,
+      idCard: s.idCard,
+      etika: s.etika,
+      review: s.review,
+      total: sumNilai,
+      rataTotal: sumNilai / s.antar,
+      taat: (s.uniformPatuh + s.idCard) / (2 * s.antar),
+      rataUniform: s.uniform / s.antar,
+      rataEtika: s.etika / s.antar
+    });
+  }
+  const n = visitRules.jumlahPeringkat, enough = list.filter((x) => x.antar >= visitRules.minimalPengantaran), short = list.filter((x) => x.antar < visitRules.minimalPengantaran);
+  return {
+    from,
+    to,
+    ringkasan,
+    perPos,
+    perRegu,
+    minimalPengantaran: visitRules.minimalPengantaran,
+    diperingkat: enough.length,
+    belumCukup: short.length,
+    peringkat: {
+      totalTertinggi: rankBy(enough, "rataTotal", false, n),
+      totalTerendah: rankBy(enough, "rataTotal", true, n),
+      taatTertinggi: rankBy(enough, "taat", false, n),
+      taatTerendah: rankBy(enough, "taat", true, n),
+      etikaTertinggi: rankBy(enough, "rataEtika", false, n),
+      etikaTerendah: rankBy(enough, "rataEtika", true, n),
+      belumCukup: rankBy(short, "antar", false, n)
+    },
+    perGuide: rankBy(list, "rataTotal", false, list.length),
+    periode: {
+      folded_through: period.folded,
+      bulan_ringkasan: period.months
+    },
+    diperbarui: now()
+  };
+}
+
+// supabase/functions/_shared/portal/guide-form.mjs
 var guidePosts = {
   1: "Pos 1 \u2014 Pintu Masuk",
   3: "Pos 3 \u2014 Pelataran Utama"
 };
+
+// supabase/functions/_shared/portal/visit-sheets.mjs
+var visitSheetHeader = Object.freeze(["evaluationId", "timestamp", "pos", "guideId", "guideName", "uniform", "idCard", "review", "etika", "catatan", "receivedAt", "koreksiDari", "status"]);
+var visitSheetLimits = Object.freeze({
+  batchRows: 500,
+  dirtyRows: 200,
+  verifyRows: 3e3,
+  rangesPerRead: 40,
+  growRows: 1e3,
+  throttleSeconds: 20,
+  retentionEveryHours: 20,
+  runs: Object.freeze({
+    manual: {
+      budgetMs: 2e4,
+      leaseSeconds: 45
+    },
+    auto: {
+      budgetMs: 6e4,
+      leaseSeconds: 90
+    }
+  })
+});
+var columnWidths = [290, 190, 50, 90, 200, 80, 70, 70, 70, 240, 190, 290, 80];
+var sheetsApi = "https://sheets.googleapis.com/v4/spreadsheets";
+var driveApi = "https://www.googleapis.com/drive/v3/files";
+var tokenApi = "https://oauth2.googleapis.com/token";
+var folderMime = "application/vnd.google-apps.folder";
+var spreadsheetMime = "application/vnd.google-apps.spreadsheet";
+var kunjunganFolder = "SPH-Portal-Kunjungan";
+var driveIdPattern = /^[A-Za-z0-9_-]{8,200}$/;
+var evaluationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+var sheetAccessTokens = /* @__PURE__ */ new Map();
+var guideNotes = ["Penilaian Guide \u2014 salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).", "Satu tab per bulan, tanggal menurut WITA. Kolomnya sama dengan tab Evaluations aplikasi NilaiGuide lama.", 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', "Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.", "Untuk mengolah data, gunakan Data \u2192 Tampilan filter, atau salin tab ke spreadsheet lain.", `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
+function visitSheetConfig(env = {}) {
+  const value = (name) => typeof env[name] === "string" ? env[name].trim() : "";
+  const config = {
+    folder: value("GOOGLE_DRIVE_FOLDER_ID"),
+    clientId: value("GOOGLE_DRIVE_CLIENT_ID"),
+    clientSecret: value("GOOGLE_DRIVE_CLIENT_SECRET"),
+    refreshToken: value("GOOGLE_DRIVE_REFRESH_TOKEN")
+  };
+  return {
+    ...config,
+    configured: Boolean(config.clientId && config.clientSecret && config.refreshToken && driveIdPattern.test(config.folder))
+  };
+}
+var visitSheetValues = (r) => [r.id, r.evaluated_at, Number(r.pos), r.guide_id, r.guide_name, Number(r.uniform), Number(r.id_card), Number(r.review), Number(r.etika), r.catatan || "", r.received_at, r.koreksi_dari || "", r.status];
+var sameSheetRow = (cells, expected) => Array.isArray(cells) && expected.every((v, i) => typeof v === "number" ? Number(cells[i]) === v && cells[i] !== "" && cells[i] !== void 0 : String(cells[i] ?? "") === v);
+var quoteTab = (title) => `'${title}'`;
+var monthOfDay = (day) => day.slice(0, 7);
+var knownSheetReasons = /* @__PURE__ */ new Set(["invalid_grant", "invalid_client", "unauthorized_client", "access_denied", "SERVICE_DISABLED", "accessNotConfigured", "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "insufficientPermissions", "PERMISSION_DENIED", "insufficientFilePermissions", "appNotAuthorizedToFile", "notFound", "NOT_FOUND", "storageQuotaExceeded", "RATE_LIMIT_EXCEEDED", "rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded", "RESOURCE_EXHAUSTED", "UNAUTHENTICATED", "INVALID_ARGUMENT", "badRequest", "FAILED_PRECONDITION"]);
+async function sheetErrorReason(response) {
+  const reader = response.body?.getReader();
+  if (!reader) return "unknown";
+  const chunks = [];
+  let size = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > 16384) {
+        await reader.cancel();
+        return "unknown";
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const c of chunks) {
+      bytes.set(c, offset);
+      offset += c.length;
+    }
+    const body = JSON.parse(new TextDecoder().decode(bytes)), e = body?.error;
+    const candidates = typeof e === "string" ? [e] : [...Array.isArray(e?.details) ? e.details.map((d) => d?.reason) : [], ...Array.isArray(e?.errors) ? e.errors.map((x) => x?.reason) : [], e?.status];
+    return candidates.find((r) => knownSheetReasons.has(r)) || "unknown";
+  } catch {
+    return "unknown";
+  } finally {
+    reader.releaseLock();
+  }
+}
+function sheetFailure(stage, status, reason) {
+  let message;
+  if (reason === "invalid_grant") message = "Koneksi Google portal perlu dihubungkan ulang: token akses kedaluwarsa atau dicabut.";
+  else if (["invalid_client", "unauthorized_client"].includes(reason)) message = "Konfigurasi OAuth Google portal tidak valid.";
+  else if (["SERVICE_DISABLED", "accessNotConfigured"].includes(reason)) message = stage.startsWith("drive") ? "Google Drive API belum aktif untuk koneksi portal." : "Google Sheets API belum aktif di project Google Cloud milik OAuth client SPH Portal.";
+  else if (["ACCESS_TOKEN_SCOPE_INSUFFICIENT", "insufficientPermissions", "access_denied"].includes(reason)) message = "Izin token Google portal belum mencakup pengelolaan spreadsheet di Drive.";
+  else if (["insufficientFilePermissions", "appNotAuthorizedToFile", "PERMISSION_DENIED"].includes(reason)) message = "Aplikasi belum diizinkan mengubah folder atau spreadsheet penilaian guide.";
+  else if (["notFound", "NOT_FOUND"].includes(reason) || status === 404) message = stage.startsWith("sheet") ? "Spreadsheet penilaian guide tidak ditemukan (mungkin terhapus). Pulihkan dari Sampah Drive; penyalinan dan penghapusan 6 minggu ditahan sampai spreadsheet kembali." : "Folder Google Drive portal tidak ditemukan atau belum dapat diakses.";
+  else if (reason === "storageQuotaExceeded") message = "Penyimpanan Google Drive portal penuh.";
+  else if (["RATE_LIMIT_EXCEEDED", "rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded", "RESOURCE_EXHAUSTED"].includes(reason) || status === 429) message = "Batas penggunaan Google tercapai. Penyalinan dicoba lagi nanti.";
+  else if (reason === "network_error") message = "Google belum dapat dihubungi. Penyalinan dicoba lagi nanti.";
+  else if (reason === "budget") message = "Waktu penyalinan habis; sisanya disalin pada percobaan berikutnya.";
+  else message = `Google menolak penyalinan penilaian (tahap ${stage}, HTTP ${status || "\u2014"}).`;
+  return new AppError(503, message, {
+    service: "google_sheets",
+    stage,
+    upstream_status: status ?? null,
+    reason
+  });
+}
+function sheetClient(config, fetchImpl, deadline, tokenCache) {
+  const injected = typeof fetchImpl === "function";
+  const send = injected ? fetchImpl : globalThis.fetch.bind(globalThis);
+  const cache = tokenCache === void 0 ? injected ? null : sheetAccessTokens : tokenCache;
+  const cacheKey = createHash2("sha256").update(JSON.stringify([config.clientId, config.clientSecret, config.refreshToken])).digest("hex");
+  let access, pending;
+  async function sheetCall(url, init, stage) {
+    const left = deadline - Date.now();
+    if (left < 5e3) throw sheetFailure(stage, null, "budget");
+    let response;
+    try {
+      response = await send(url, {
+        ...init,
+        redirect: "manual",
+        signal: AbortSignal.timeout(Math.min(15e3, left))
+      });
+    } catch {
+      throw sheetFailure(stage, null, "network_error");
+    }
+    if (!response.ok) {
+      if (response.status === 401 && stage !== "token") {
+        access = void 0;
+        cache?.delete(cacheKey);
+      }
+      throw sheetFailure(stage, response.status, await sheetErrorReason(response));
+    }
+    return response.json();
+  }
+  async function sheetAccessToken() {
+    if (access) return access;
+    const saved = cache?.get(cacheKey);
+    if (saved && saved.expiresAt > Date.now()) {
+      access = saved.access;
+      return access;
+    }
+    if (!pending) pending = (async () => {
+      const j = await sheetCall(tokenApi, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          refresh_token: config.refreshToken
+        }).toString()
+      }, "token");
+      assert(typeof j.access_token === "string" && j.access_token.length > 0 && j.access_token.length < 8192, "Koneksi Google portal belum dapat diakses.", 503);
+      access = j.access_token;
+      const lifetime = Math.min(Number(j.expires_in), 3600);
+      if (cache && Number.isFinite(lifetime) && lifetime > 60) {
+        for (const [key, item] of cache) if (item.expiresAt <= Date.now()) cache.delete(key);
+        if (cache.size >= 4 && !cache.has(cacheKey)) cache.delete(cache.keys().next().value);
+        cache.set(cacheKey, {
+          access,
+          expiresAt: Date.now() + (lifetime - 60) * 1e3
+        });
+      }
+      return access;
+    })();
+    try {
+      return await pending;
+    } finally {
+      pending = void 0;
+    }
+  }
+  const sheetAuthed = async (url, init, stage) => await sheetCall(url, {
+    ...init,
+    headers: {
+      ...init.headers,
+      Authorization: `Bearer ${await sheetAccessToken()}`
+    }
+  }, stage);
+  return {
+    token: sheetAccessToken,
+    read: async (url, stage) => await sheetAuthed(url, {
+      method: "GET",
+      headers: {}
+    }, stage),
+    write: async (url, body, stage) => await sheetAuthed(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }, stage)
+  };
+}
+async function visitSheetStatus(db, nowMs = Date.now()) {
+  const s = await one(db, "SELECT * FROM visit_sheet_state WHERE id=1") || {};
+  const c = await one(db, "SELECT count(*) AS total,count(*) FILTER(WHERE sheet_row IS NULL) AS pending,count(*) FILTER(WHERE sheet_dirty=1) AS dirty,min(received_at) FILTER(WHERE sheet_row IS NULL) AS oldest FROM visit_evaluations");
+  const files = (await all(db, "SELECT year,spreadsheet_id FROM visit_sheet_files ORDER BY year DESC")).map((f) => ({
+    year: Number(f.year),
+    url: `https://docs.google.com/spreadsheets/d/${f.spreadsheet_id}/edit`
+  }));
+  return {
+    rows: Number(c.total),
+    pending: Number(c.pending),
+    dirty: Number(c.dirty),
+    oldest_pending_at: c.oldest || null,
+    running: Boolean(s.lease_until && Date.parse(s.lease_until) > nowMs),
+    last_attempt_at: s.last_attempt_at || null,
+    last_success_at: s.last_success_at || null,
+    last_error: s.last_error || null,
+    last_error_at: s.last_error_at || null,
+    last_retention_at: s.last_retention_at || null,
+    folded_through: s.folded_through || null,
+    folder_url: s.folder_id ? `https://drive.google.com/drive/folders/${s.folder_id}` : null,
+    files,
+    retention_days: visitRules.retensiHari,
+    max_age_days: visitRules.umurMaksHari
+  };
+}
+async function takeSheetLease(db, owner, nowMs, leaseSeconds, throttleSeconds) {
+  const stamp = new Date(nowMs).toISOString(), s = await one(db, "SELECT lease_until,last_attempt_at FROM visit_sheet_state WHERE id=1");
+  if (s.lease_until && s.lease_until > stamp) return {
+    ok: false,
+    busy: true,
+    retry_after_ms: Date.parse(s.lease_until) - nowMs
+  };
+  if (throttleSeconds && s.last_attempt_at && Date.parse(s.last_attempt_at) > nowMs - throttleSeconds * 1e3) return {
+    ok: false,
+    throttled: true,
+    retry_after_ms: Date.parse(s.last_attempt_at) + throttleSeconds * 1e3 - nowMs
+  };
+  const changed = await run(db, "UPDATE visit_sheet_state SET lease_owner=?,lease_until=?,last_attempt_at=?,updated_at=? WHERE id=1 AND (lease_until IS NULL OR lease_until<=?)", owner, new Date(nowMs + leaseSeconds * 1e3).toISOString(), stamp, stamp, stamp);
+  return changed.changes === 1 ? {
+    ok: true
+  } : {
+    ok: false,
+    busy: true,
+    retry_after_ms: 5e3
+  };
+}
+async function holdSheetLease(db, owner) {
+  const s = await one(db, "SELECT lease_owner,lease_until FROM visit_sheet_state WHERE id=1");
+  assert(s && s.lease_owner === owner && s.lease_until > now(), "Penyalinan spreadsheet diambil alih proses lain.", 409);
+}
+async function finishSheetRun(db, owner, error, keepLease) {
+  const stamp = now();
+  if (!error) {
+    await run(db, "UPDATE visit_sheet_state SET last_success_at=?,last_error=NULL,last_error_at=NULL,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=1 AND lease_owner=?", stamp, stamp, owner);
+    return;
+  }
+  if (keepLease) await run(db, "UPDATE visit_sheet_state SET last_error=?,last_error_at=?,updated_at=? WHERE id=1 AND lease_owner=?", error.slice(0, 300), stamp, stamp, owner);
+  else await run(db, "UPDATE visit_sheet_state SET last_error=?,last_error_at=?,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=1 AND lease_owner=?", error.slice(0, 300), stamp, stamp, owner);
+}
+var chunked = (items, size) => {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+};
+function groupBy(items, key) {
+  const map = /* @__PURE__ */ new Map();
+  for (const item of items) {
+    const k = key(item);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(item);
+  }
+  return map;
+}
+async function kunjunganFolderId(ctx) {
+  const { google, config } = ctx;
+  const url = new URL(driveApi);
+  url.searchParams.set("q", `'${config.folder}' in parents and trashed = false and mimeType = '${folderMime}' and appProperties has { key='sph_portal' and value='v1' } and appProperties has { key='sph_module' and value='kunjungan' }`);
+  url.searchParams.set("fields", "files(id,parents,trashed,mimeType,appProperties)");
+  url.searchParams.set("pageSize", "10");
+  url.searchParams.set("orderBy", "createdTime");
+  const listing = await google.read(url.href, "drive-folder");
+  const found = (listing.files || []).find((f) => driveIdPattern.test(f.id || "") && f.trashed === false && f.mimeType === folderMime && f.parents?.[0] === config.folder);
+  if (found) return found.id;
+  const created = await google.write(`${driveApi}?fields=id,parents,trashed,mimeType`, {
+    name: kunjunganFolder,
+    mimeType: folderMime,
+    parents: [config.folder],
+    appProperties: {
+      sph_portal: "v1",
+      sph_module: "kunjungan"
+    }
+  }, "drive-folder");
+  assert(driveIdPattern.test(created.id || "") && created.mimeType === folderMime && created.parents?.[0] === config.folder, "Folder SPH-Portal-Kunjungan belum dapat diverifikasi.", 503);
+  return created.id;
+}
+async function yearSpreadsheet(ctx, year) {
+  const { google, runTx } = ctx;
+  const folderId = await kunjunganFolderId(ctx);
+  const url = new URL(driveApi);
+  url.searchParams.set("q", `'${folderId}' in parents and trashed = false and mimeType = '${spreadsheetMime}' and appProperties has { key='sph_kind' and value='penilaian-guide' } and appProperties has { key='sph_year' and value='${year}' }`);
+  url.searchParams.set("fields", "files(id,trashed,mimeType)");
+  url.searchParams.set("pageSize", "10");
+  url.searchParams.set("orderBy", "createdTime");
+  const listing = await google.read(url.href, "drive-file");
+  let id = (listing.files || []).find((f) => driveIdPattern.test(f.id || "") && f.trashed === false && f.mimeType === spreadsheetMime)?.id;
+  if (!id) {
+    const created = await google.write(`${driveApi}?fields=id,mimeType,parents`, {
+      name: `Penilaian Guide ${year}`,
+      mimeType: spreadsheetMime,
+      parents: [folderId],
+      appProperties: {
+        sph_portal: "v1",
+        sph_module: "kunjungan",
+        sph_kind: "penilaian-guide",
+        sph_year: String(year)
+      }
+    }, "drive-file");
+    assert(driveIdPattern.test(created.id || "") && created.mimeType === spreadsheetMime, "Spreadsheet penilaian belum dapat diverifikasi.", 503);
+    id = created.id;
+  }
+  const meta = await sheetTabs(ctx, id);
+  if (!meta.some((s) => s.title === "Petunjuk") && meta.length === 1 && !/^\d{4}-\d{2}$/.test(meta[0].title)) {
+    await google.write(`${sheetsApi}/${encodeURIComponent(id)}:batchUpdate`, {
+      requests: [{
+        updateSheetProperties: {
+          properties: {
+            sheetId: meta[0].sheetId,
+            title: "Petunjuk",
+            gridProperties: {
+              rowCount: guideNotes.length + 2,
+              columnCount: 1
+            }
+          },
+          fields: "title,gridProperties.rowCount,gridProperties.columnCount"
+        }
+      }, {
+        updateCells: {
+          range: {
+            sheetId: meta[0].sheetId,
+            startRowIndex: 0,
+            endRowIndex: guideNotes.length,
+            startColumnIndex: 0,
+            endColumnIndex: 1
+          },
+          rows: guideNotes.map((text, i) => ({
+            values: [{
+              userEnteredValue: {
+                stringValue: text
+              },
+              userEnteredFormat: {
+                textFormat: {
+                  bold: i === 0
+                },
+                wrapStrategy: "WRAP"
+              }
+            }]
+          })),
+          fields: "userEnteredValue,userEnteredFormat(textFormat,wrapStrategy)"
+        }
+      }, {
+        updateDimensionProperties: {
+          range: {
+            sheetId: meta[0].sheetId,
+            dimension: "COLUMNS",
+            startIndex: 0,
+            endIndex: 1
+          },
+          properties: {
+            pixelSize: 820
+          },
+          fields: "pixelSize"
+        }
+      }]
+    }, "sheet-structure");
+  }
+  return runTx(async (db) => {
+    await holdSheetLease(db, ctx.owner);
+    await run(db, "INSERT INTO visit_sheet_files(year,spreadsheet_id,created_at) VALUES(?,?,?) ON CONFLICT(year) DO NOTHING", year, id, now());
+    await run(db, "UPDATE visit_sheet_state SET folder_id=?,updated_at=? WHERE id=1", folderId, now());
+    return await one(db, "SELECT * FROM visit_sheet_files WHERE year=?", year);
+  });
+}
+async function sheetTabs(ctx, spreadsheetId) {
+  const meta = await ctx.google.read(`${sheetsApi}/${encodeURIComponent(spreadsheetId)}?fields=${encodeURIComponent("sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))")}`, "sheet-meta");
+  return (meta.sheets || []).map((s) => ({
+    sheetId: Number(s.properties?.sheetId),
+    title: String(s.properties?.title || ""),
+    rowCount: Number(s.properties?.gridProperties?.rowCount || 0)
+  }));
+}
+function monthTabRequests(title, sheetId, rows) {
+  return [{
+    addSheet: {
+      properties: {
+        sheetId,
+        title,
+        gridProperties: {
+          rowCount: rows,
+          columnCount: visitSheetHeader.length,
+          frozenRowCount: 1
+        }
+      }
+    }
+  }, {
+    updateCells: {
+      range: {
+        sheetId,
+        startRowIndex: 0,
+        endRowIndex: 1,
+        startColumnIndex: 0,
+        endColumnIndex: visitSheetHeader.length
+      },
+      rows: [{
+        values: visitSheetHeader.map((h) => ({
+          userEnteredValue: {
+            stringValue: h
+          },
+          userEnteredFormat: {
+            textFormat: {
+              bold: true
+            },
+            backgroundColor: {
+              red: 0.93,
+              green: 0.95,
+              blue: 0.97
+            }
+          }
+        }))
+      }],
+      fields: "userEnteredValue,userEnteredFormat(textFormat,backgroundColor)"
+    }
+  }, ...columnWidths.map((pixelSize, i) => ({
+    updateDimensionProperties: {
+      range: {
+        sheetId,
+        dimension: "COLUMNS",
+        startIndex: i,
+        endIndex: i + 1
+      },
+      properties: {
+        pixelSize
+      },
+      fields: "pixelSize"
+    }
+  })), {
+    addProtectedRange: {
+      protectedRange: {
+        range: {
+          sheetId
+        },
+        description: "Dikelola SPH Portal \u2014 jangan mengurutkan, menyisipkan, atau menghapus baris.",
+        warningOnly: true
+      }
+    }
+  }];
+}
+async function addMonthTabs(ctx, file, meta, titles, pendingByTab) {
+  const { runTx } = ctx, used = new Set(meta.map((s) => s.sheetId)), requests = [], added = [];
+  for (const title of titles) {
+    let sheetId = Number(title.replace("-", ""));
+    while (used.has(sheetId)) sheetId++;
+    used.add(sheetId);
+    const rows = Math.max(visitSheetLimits.growRows, (pendingByTab.get(title)?.length || 0) + 1);
+    requests.push(...monthTabRequests(title, sheetId, rows));
+    added.push({
+      title,
+      sheetId,
+      rows
+    });
+  }
+  await ctx.google.write(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}:batchUpdate`, {
+    requests
+  }, "sheet-structure");
+  await runTx(async (db) => {
+    await holdSheetLease(db, ctx.owner);
+    const stamp = now();
+    for (const t of added) {
+      await run(db, "UPDATE visit_evaluations SET sheet_tab=NULL,sheet_row=NULL,sheet_dirty=0,sheet_verified_at=NULL WHERE sheet_tab=?", t.title);
+      await run(db, `INSERT INTO visit_sheet_tabs(title,year,sheet_id,next_row,row_count,created_at,updated_at) VALUES(?,?,?,2,?,?,?)
+    ON CONFLICT(title) DO UPDATE SET year=excluded.year,sheet_id=excluded.sheet_id,next_row=2,row_count=excluded.row_count,updated_at=excluded.updated_at`, t.title, Number(file.year), t.sheetId, t.rows, stamp, stamp);
+    }
+  });
+  return added.length;
+}
+async function rescanMonthTab(ctx, file, tab) {
+  const { runTx } = ctx, range2 = encodeURIComponent(`${quoteTab(tab.title)}!A2:A${Math.max(2, tab.rowCount)}`);
+  const data = await ctx.google.read(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}/values/${range2}?majorDimension=COLUMNS&valueRenderOption=UNFORMATTED_VALUE`, "sheet-read");
+  const column = (data.values?.[0] || []).map((v) => String(v ?? "").trim().toLowerCase());
+  let last = 1;
+  const found = /* @__PURE__ */ new Map();
+  column.forEach((v, i) => {
+    if (!v) return;
+    last = i + 2;
+    if (evaluationIdPattern.test(v) && !found.has(v)) found.set(v, i + 2);
+  });
+  await runTx(async (db) => {
+    await holdSheetLease(db, ctx.owner);
+    const stamp = now();
+    await run(db, "UPDATE visit_evaluations SET sheet_tab=NULL,sheet_row=NULL,sheet_dirty=0,sheet_verified_at=NULL WHERE sheet_tab=?", tab.title);
+    const ids = (await all(db, "SELECT id FROM visit_evaluations WHERE wita_date>=? AND wita_date<=?", `${tab.title}-01`, `${tab.title}-31`)).map((r) => r.id).filter((id) => found.has(id));
+    for (const part of chunked(ids, 200)) await run(db, `UPDATE visit_evaluations SET sheet_tab=?,sheet_row=CAST(v.column2 AS INTEGER),sheet_dirty=1,sheet_verified_at=NULL
+   FROM (VALUES ${part.map(() => "(?,?)").join(",")}) AS v WHERE visit_evaluations.id=v.column1 AND visit_evaluations.sheet_row IS NULL`, tab.title, ...part.flatMap((id) => [id, String(found.get(id))]));
+    await run(db, `INSERT INTO visit_sheet_tabs(title,year,sheet_id,next_row,row_count,created_at,updated_at) VALUES(?,?,?,?,?,?,?)
+   ON CONFLICT(title) DO UPDATE SET year=excluded.year,sheet_id=excluded.sheet_id,next_row=excluded.next_row,row_count=excluded.row_count,updated_at=excluded.updated_at`, tab.title, Number(file.year), tab.sheetId, last + 1, tab.rowCount, stamp, stamp);
+  });
+  return found.size;
+}
+async function copyRound(ctx, summary) {
+  const { google, runTx } = ctx, writtenBefore = summary.written + summary.rewritten;
+  const work = await runTx(async (db) => ({
+    pending: await all(db, "SELECT * FROM visit_evaluations WHERE sheet_row IS NULL ORDER BY received_at,id LIMIT ?", visitSheetLimits.batchRows),
+    dirty: await all(db, "SELECT * FROM visit_evaluations WHERE sheet_dirty=1 ORDER BY sheet_tab,sheet_row LIMIT ?", visitSheetLimits.dirtyRows),
+    files: await all(db, "SELECT * FROM visit_sheet_files"),
+    tabs: await all(db, "SELECT * FROM visit_sheet_tabs")
+  }));
+  if (!work.pending.length && !work.dirty.length) return {
+    more: false,
+    structural: false
+  };
+  const pendingByTab = groupBy(work.pending, (r) => monthOfDay(r.wita_date)), dirtyByTab = groupBy(work.dirty, (r) => r.sheet_tab);
+  const tabRows = new Map(work.tabs.map((t) => [t.title, t])), files = new Map(work.files.map((f) => [Number(f.year), f]));
+  const titles = [.../* @__PURE__ */ new Set([...pendingByTab.keys(), ...dirtyByTab.keys()])].sort();
+  let structural = false;
+  for (const year of [...new Set(titles.map((t) => Number(t.slice(0, 4))))]) {
+    const file = files.get(year) || await yearSpreadsheet(ctx, year);
+    const meta = await sheetTabs(ctx, file.spreadsheet_id), yearTitles = titles.filter((t) => t.startsWith(`${year}-`));
+    const missing = [], grow = [];
+    let changed = false;
+    for (const title of yearTitles) {
+      const sheet = meta.find((s) => s.title === title), known = tabRows.get(title);
+      if (!sheet) {
+        missing.push(title);
+        continue;
+      }
+      if (!known || Number(known.sheet_id) !== sheet.sheetId) {
+        await rescanMonthTab(ctx, file, {
+          ...sheet,
+          title
+        });
+        summary.rescanned++;
+        changed = true;
+        continue;
+      }
+      const needed = Number(known.next_row) + (pendingByTab.get(title)?.length || 0) - 1;
+      if (needed > sheet.rowCount) grow.push({
+        title,
+        sheetId: sheet.sheetId,
+        add: Math.max(visitSheetLimits.growRows, needed - sheet.rowCount),
+        rowCount: sheet.rowCount
+      });
+    }
+    if (missing.length) {
+      await addMonthTabs(ctx, file, meta, missing, pendingByTab);
+      changed = true;
+    }
+    if (changed) {
+      structural = true;
+      continue;
+    }
+    const rewrites = yearTitles.flatMap((t) => dirtyByTab.get(t) || []);
+    if (rewrites.length) {
+      const cells = [];
+      for (const part of chunked(rewrites, visitSheetLimits.rangesPerRead)) {
+        const url = new URL(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}/values:batchGet`);
+        for (const r of part) url.searchParams.append("ranges", `${quoteTab(r.sheet_tab)}!A${r.sheet_row}`);
+        url.searchParams.set("valueRenderOption", "UNFORMATTED_VALUE");
+        const data2 = await google.read(url.href, "sheet-read");
+        part.forEach((r, i) => cells.push(String(data2.valueRanges?.[i]?.values?.[0]?.[0] ?? "").trim().toLowerCase()));
+      }
+      const moved = [...new Set(rewrites.filter((r, i) => cells[i] !== r.id).map((r) => r.sheet_tab))];
+      if (moved.length) {
+        for (const title of moved) {
+          const sheet = meta.find((s) => s.title === title);
+          await rescanMonthTab(ctx, file, {
+            ...sheet,
+            title
+          });
+          summary.rescanned++;
+        }
+        structural = true;
+        continue;
+      }
+    }
+    if (grow.length) {
+      await google.write(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}:batchUpdate`, {
+        requests: grow.map((g) => ({
+          appendDimension: {
+            sheetId: g.sheetId,
+            dimension: "ROWS",
+            length: g.add
+          }
+        }))
+      }, "sheet-structure");
+      await runTx(async (db) => {
+        await holdSheetLease(db, ctx.owner);
+        for (const g of grow) await run(db, "UPDATE visit_sheet_tabs SET row_count=?,updated_at=? WHERE title=?", g.rowCount + g.add, now(), g.title);
+      });
+    }
+    const data = [], placed = [], nextRows = [];
+    for (const title of yearTitles) {
+      const rows = pendingByTab.get(title) || [];
+      if (!rows.length) continue;
+      const start = Number(tabRows.get(title).next_row);
+      data.push({
+        range: `${quoteTab(title)}!A${start}:M${start + rows.length - 1}`,
+        majorDimension: "ROWS",
+        values: rows.map(visitSheetValues)
+      });
+      rows.forEach((r, i) => placed.push({
+        id: r.id,
+        title,
+        row: start + i,
+        status: r.status
+      }));
+      nextRows.push([title, start + rows.length]);
+    }
+    for (const r of rewrites) data.push({
+      range: `${quoteTab(r.sheet_tab)}!A${r.sheet_row}:M${r.sheet_row}`,
+      majorDimension: "ROWS",
+      values: [visitSheetValues(r)]
+    });
+    ctx.writing = true;
+    await google.write(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}/values:batchUpdate`, {
+      valueInputOption: "RAW",
+      data
+    }, "sheet-write");
+    const stamp = now();
+    await runTx(async (db) => {
+      await holdSheetLease(db, ctx.owner);
+      for (const [title, list] of groupBy(placed, (p) => p.title)) for (const part of chunked(list, 150)) await run(db, `UPDATE visit_evaluations SET sheet_tab=?,sheet_row=CAST(v.column2 AS INTEGER),sheet_synced_at=?,sheet_verified_at=NULL,
+    sheet_dirty=CASE WHEN visit_evaluations.status=v.column3 THEN 0 ELSE 1 END FROM (VALUES ${part.map(() => "(?,?,?)").join(",")}) AS v WHERE visit_evaluations.id=v.column1 AND visit_evaluations.sheet_row IS NULL`, title, stamp, ...part.flatMap((p) => [p.id, String(p.row), p.status]));
+      for (const r of rewrites) await run(db, "UPDATE visit_evaluations SET sheet_synced_at=?,sheet_verified_at=NULL,sheet_dirty=CASE WHEN status=? THEN 0 ELSE 1 END WHERE id=? AND sheet_tab=? AND sheet_row=?", stamp, r.status, r.id, r.sheet_tab, r.sheet_row);
+      for (const [title, next] of nextRows) await run(db, "UPDATE visit_sheet_tabs SET next_row=?,updated_at=? WHERE title=?", next, stamp, title);
+    });
+    ctx.writing = false;
+    summary.written += placed.length;
+    summary.rewritten += rewrites.length;
+  }
+  return {
+    more: structural || summary.written + summary.rewritten > writtenBefore,
+    structural
+  };
+}
+async function verifyOldRows(ctx, summary, cutoff) {
+  const { google, runTx } = ctx;
+  const work = await runTx(async (db) => ({
+    rows: await all(db, "SELECT * FROM visit_evaluations WHERE wita_date<? AND sheet_row IS NOT NULL AND sheet_dirty=0 AND sheet_verified_at IS NULL ORDER BY sheet_tab,sheet_row LIMIT ?", cutoff, visitSheetLimits.verifyRows),
+    files: await all(db, "SELECT * FROM visit_sheet_files")
+  }));
+  if (!work.rows.length) return;
+  const files = new Map(work.files.map((f) => [Number(f.year), f]));
+  const verified = [], stale = [], moved = /* @__PURE__ */ new Set();
+  for (const [title, rows] of groupBy(work.rows, (r) => r.sheet_tab)) {
+    const file = files.get(Number(title.slice(0, 4)));
+    if (!file) continue;
+    const runs = [];
+    for (const r of rows) {
+      const last = runs.at(-1);
+      if (last && Number(r.sheet_row) === last.end + 1 && last.rows.length < 500) {
+        last.end++;
+        last.rows.push(r);
+      } else runs.push({
+        start: Number(r.sheet_row),
+        end: Number(r.sheet_row),
+        rows: [r]
+      });
+    }
+    for (const part of chunked(runs, visitSheetLimits.rangesPerRead)) {
+      const url = new URL(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}/values:batchGet`);
+      for (const span of part) url.searchParams.append("ranges", `${quoteTab(title)}!A${span.start}:M${span.end}`);
+      url.searchParams.set("valueRenderOption", "UNFORMATTED_VALUE");
+      url.searchParams.set("majorDimension", "ROWS");
+      const data = await google.read(url.href, "sheet-read");
+      part.forEach((span, i) => span.rows.forEach((r, j) => {
+        const cells = data.valueRanges?.[i]?.values?.[j];
+        if (sameSheetRow(cells, visitSheetValues(r))) verified.push(r);
+        else if (String(cells?.[0] ?? "").trim().toLowerCase() === r.id) stale.push(r);
+        else moved.add(title);
+      }));
+    }
+  }
+  const stamp = now();
+  await runTx(async (db) => {
+    await holdSheetLease(db, ctx.owner);
+    for (const r of verified) await run(db, "UPDATE visit_evaluations SET sheet_verified_at=? WHERE id=? AND sheet_tab=? AND sheet_row=? AND status=? AND sheet_dirty=0", stamp, r.id, r.sheet_tab, r.sheet_row, r.status);
+    for (const r of stale) await run(db, "UPDATE visit_evaluations SET sheet_dirty=1,sheet_verified_at=NULL WHERE id=?", r.id);
+  });
+  summary.verified += verified.length;
+  summary.rewrite_queued += stale.length;
+  for (const title of moved) {
+    const file = files.get(Number(title.slice(0, 4))), sheet = (await sheetTabs(ctx, file.spreadsheet_id)).find((s) => s.title === title);
+    if (sheet) {
+      await rescanMonthTab(ctx, file, {
+        ...sheet,
+        title
+      });
+      summary.rescanned++;
+    } else await runTx(async (db) => {
+      await holdSheetLease(db, ctx.owner);
+      await run(db, "UPDATE visit_evaluations SET sheet_tab=NULL,sheet_row=NULL,sheet_dirty=0,sheet_verified_at=NULL WHERE sheet_tab=?", title);
+      await run(db, "DELETE FROM visit_sheet_tabs WHERE title=?", title);
+    });
+  }
+}
+async function foldVerifiedDays(db, owner, cutoff) {
+  await holdSheetLease(db, owner);
+  const blocking = (await one(db, "SELECT min(wita_date) AS d FROM visit_evaluations WHERE wita_date<? AND (sheet_row IS NULL OR sheet_dirty=1 OR sheet_verified_at IS NULL)", cutoff))?.d || null;
+  const through = blocking ? shiftDate(blocking, -1) : shiftDate(cutoff, -1);
+  const count = Number((await one(db, "SELECT count(*) AS n FROM visit_evaluations WHERE wita_date<=?", through)).n);
+  if (!count) return {
+    days: 0,
+    deleted: 0,
+    blocked: Boolean(blocking)
+  };
+  const sums = "count(*) AS antar,sum(uniform) AS uniform,sum(CASE WHEN uniform>=1 THEN 1 ELSE 0 END) AS uniform_patuh,sum(id_card) AS id_card,sum(review) AS review,sum(etika) AS etika,count(DISTINCT wita_date) AS hari";
+  const groups = [...await all(db, `SELECT substr(wita_date,1,7) AS month,guide_id,pos,${sums} FROM visit_evaluations WHERE status='aktif' AND wita_date<=? GROUP BY substr(wita_date,1,7),guide_id,pos`, through), ...await all(db, `SELECT substr(wita_date,1,7) AS month,guide_id,0 AS pos,${sums} FROM visit_evaluations WHERE status='aktif' AND wita_date<=? GROUP BY substr(wita_date,1,7),guide_id`, through), ...await all(db, `SELECT substr(wita_date,1,7) AS month,'*' AS guide_id,0 AS pos,${sums} FROM visit_evaluations WHERE status='aktif' AND wita_date<=? GROUP BY substr(wita_date,1,7)`, through)];
+  const stamp = now();
+  for (const g of groups) await run(db, `INSERT INTO visit_monthly_totals(month,guide_id,pos,antar,uniform,uniform_patuh,id_card,review,etika,hari,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(month,guide_id,pos) DO UPDATE SET antar=visit_monthly_totals.antar+excluded.antar,uniform=visit_monthly_totals.uniform+excluded.uniform,uniform_patuh=visit_monthly_totals.uniform_patuh+excluded.uniform_patuh,
+  id_card=visit_monthly_totals.id_card+excluded.id_card,review=visit_monthly_totals.review+excluded.review,etika=visit_monthly_totals.etika+excluded.etika,hari=visit_monthly_totals.hari+excluded.hari,updated_at=excluded.updated_at`, g.month, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), Number(g.hari), stamp);
+  const days = Number((await one(db, "SELECT count(DISTINCT wita_date) AS n FROM visit_evaluations WHERE wita_date<=?", through)).n);
+  const deleted = (await run(db, "DELETE FROM visit_evaluations WHERE wita_date<=?", through)).changes;
+  await run(db, "UPDATE visit_sheet_state SET folded_through=?,updated_at=? WHERE id=1", through, stamp);
+  return {
+    days,
+    deleted: Number(deleted),
+    blocked: Boolean(blocking)
+  };
+}
+async function retentionPass(ctx, summary, nowMs) {
+  const { runTx } = ctx, cutoff = shiftDate(witaDate(nowMs), -visitRules.retensiHari);
+  await verifyOldRows(ctx, summary, cutoff);
+  const folded = await runTx(async (db) => await foldVerifiedDays(db, ctx.owner, cutoff));
+  summary.folded_days += folded.days;
+  summary.deleted += folded.deleted;
+  summary.retention_blocked = folded.blocked;
+  if (!folded.blocked) await runTx(async (db) => {
+    await holdSheetLease(db, ctx.owner);
+    await run(db, "UPDATE visit_sheet_state SET last_retention_at=?,updated_at=? WHERE id=1", now(), now());
+  });
+}
+async function runVisitSheetSync({ runTx, env, fetchImpl, trigger = "manual", tokenCache, retention = "auto" }) {
+  const startedAt = Date.now(), config = visitSheetConfig(env), plan = visitSheetLimits.runs[trigger === "manual" ? "manual" : "auto"];
+  if (!config.configured) {
+    const message = "Koneksi Google Drive portal belum dikonfigurasi; penilaian tetap tersimpan di portal dan tidak ada yang dihapus.";
+    await runTx(async (db) => {
+      await run(db, "UPDATE visit_sheet_state SET last_attempt_at=?,last_error=?,last_error_at=?,updated_at=? WHERE id=1 AND lease_owner IS NULL", now(), message, now(), now());
+    });
+    return {
+      ok: false,
+      configured: false,
+      error: message
+    };
+  }
+  const owner = randomUUID2();
+  const lease = await runTx(async (db) => await takeSheetLease(db, owner, startedAt, plan.leaseSeconds, trigger === "manual" ? 0 : visitSheetLimits.throttleSeconds));
+  if (!lease.ok) return lease;
+  const ctx = {
+    runTx,
+    config,
+    owner,
+    writing: false,
+    google: sheetClient(config, fetchImpl, startedAt + plan.budgetMs, tokenCache)
+  };
+  const summary = {
+    ok: true,
+    written: 0,
+    rewritten: 0,
+    rescanned: 0,
+    verified: 0,
+    rewrite_queued: 0,
+    folded_days: 0,
+    deleted: 0
+  };
+  try {
+    for (let round = 0; round < 4; round++) {
+      const r = await copyRound(ctx, summary);
+      if (!r.more) break;
+    }
+    const state = await runTx(async (db) => await one(db, "SELECT last_retention_at FROM visit_sheet_state WHERE id=1"));
+    const due = retention === "force" || retention === "auto" && (!state.last_retention_at || Date.parse(state.last_retention_at) < Date.now() - visitSheetLimits.retentionEveryHours * 36e5);
+    if (due && startedAt + plan.budgetMs - Date.now() > 8e3) await retentionPass(ctx, summary, Date.now());
+    await runTx(async (db) => await finishSheetRun(db, owner, null, false));
+  } catch (error) {
+    const message = error instanceof AppError || Number.isInteger(error?.status) ? error.message : "Penyalinan spreadsheet gagal karena kesalahan server.";
+    if (!(error instanceof AppError || Number.isInteger(error?.status))) console.warn(JSON.stringify({
+      event: "visit_sheet_error",
+      name: error?.name || "Error"
+    }));
+    try {
+      await runTx(async (db) => await finishSheetRun(db, owner, message, ctx.writing || error?.details?.reason === "network_error"));
+    } catch {
+    }
+    summary.ok = false;
+    summary.error = message;
+    summary.stage = error?.details?.stage || null;
+  }
+  summary.status = await runTx(async (db) => await visitSheetStatus(db, Date.now()));
+  return summary;
+}
+async function checkVisitSheetConnection({ runTx, env, fetchImpl, tokenCache }) {
+  const config = visitSheetConfig(env), steps = [];
+  const step = (key, label, ok, message) => {
+    steps.push({
+      key,
+      label,
+      ok,
+      message
+    });
+    return ok;
+  };
+  if (!step("config", "Konfigurasi koneksi Google", config.configured, config.configured ? "Lengkap." : "Secret GOOGLE_DRIVE_* belum lengkap di server.")) return {
+    ok: false,
+    steps
+  };
+  const google = sheetClient(config, fetchImpl, Date.now() + 25e3, tokenCache);
+  try {
+    await google.token();
+    step("token", "Token akses Google", true, "Berhasil diperbarui.");
+  } catch (error) {
+    step("token", "Token akses Google", false, error.message);
+    return {
+      ok: false,
+      steps
+    };
+  }
+  try {
+    const meta = await google.read(`${driveApi}/${encodeURIComponent(config.folder)}?fields=id,mimeType,trashed`, "drive-folder");
+    if (!step("drive", "Folder Google Drive portal", meta.mimeType === folderMime && meta.trashed === false, meta.mimeType === folderMime && meta.trashed === false ? "Dapat dibuka." : "Folder tujuan bukan folder aktif.")) return {
+      ok: false,
+      steps
+    };
+  } catch (error) {
+    step("drive", "Folder Google Drive portal", false, error.message);
+    return {
+      ok: false,
+      steps
+    };
+  }
+  const file = await runTx(async (db) => await one(db, "SELECT * FROM visit_sheet_files ORDER BY year DESC LIMIT 1"));
+  try {
+    if (file) {
+      await google.read(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}?fields=spreadsheetId`, "sheet-meta");
+      step("sheets", "Google Sheets API", true, `Spreadsheet ${file.year} dapat dibuka.`);
+    } else {
+      try {
+        await google.read(`${sheetsApi}/sph-portal-pemeriksaan-koneksi-0000?fields=spreadsheetId`, "sheet-probe");
+        step("sheets", "Google Sheets API", true, "Aktif.");
+      } catch (error) {
+        if (error?.details?.upstream_status === 404 || error?.details?.upstream_status === 400) step("sheets", "Google Sheets API", true, "Aktif. Spreadsheet tahun berjalan dibuat saat penilaian pertama disalin.");
+        else throw error;
+      }
+    }
+  } catch (error) {
+    step("sheets", "Google Sheets API", false, error.message);
+  }
+  return {
+    ok: steps.every((s) => s.ok),
+    steps
+  };
+}
 
 // supabase/functions/_shared/portal/visits.mjs
 var localDeps = {
@@ -5883,8 +7262,7 @@ var localDeps = {
   audit
 };
 var posts = [1, 3];
-var regu = ["A1", "A2", "D1", "D2"];
-var status = ["aktif", "diganti"];
+var statuses = ["aktif", "diganti"];
 var linkView = async (db, link) => link && {
   id: link.id,
   pos: Number(link.pos),
@@ -5901,10 +7279,6 @@ async function requireAny(db, user, codes, has2, message = "Akses modul kunjunga
   }
   assert(allowed, message, 403);
 }
-var month = (v) => {
-  assert(typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v), "Bulan tidak valid.");
-  return v;
-};
 function range(url) {
   const from = date(url?.searchParams.get("from") || today().slice(0, 8) + "01", "Tanggal mulai"), to = date(url?.searchParams.get("to") || today(), "Tanggal akhir");
   assert(from <= to, "Tanggal mulai harus sebelum tanggal akhir.");
@@ -6043,243 +7417,92 @@ async function visitRoutes({ db, user, p, method, body: b = {}, url }, deps = lo
       };
     });
   }
-  assert(false, "Alamat API tidak ditemukan.", 404);
-}
-function isVisitBridgeRequest(path, method) {
-  return method === "GET" && ["visits/overview", "visits/guides", "visits/records", "visits/reviews", "visits/health"].includes(path) || method === "POST" && path === "visits/guides";
-}
-async function visitBridgePlan({ db, user, p, method, body: b = {}, url }, deps = localDeps) {
-  const path = p.join("/"), { has: has2 } = deps;
-  if (!isVisitBridgeRequest(path, method)) return void 0;
-  assert(!user.must_change_password, "Anda wajib mengganti password sementara terlebih dahulu.", 428);
-  if (path === "visits/overview") {
+  if (p[1] === "overview" && p.length === 2 && method === "GET") {
     await requireAny(db, user, ["visits.dashboard.read", "visits.reports.read"], has2);
-    return {
-      operation: "overview",
-      payload: range(url)
-    };
+    const r = range(url);
+    return await visitOverview(db, r.from, r.to);
   }
-  if (path === "visits/records") {
+  if (p[1] === "records" && p.length === 2 && method === "GET") {
     await requireAny(db, user, ["visits.records.read"], has2);
-    const r = range(url), q = url.searchParams;
-    const limit = Number(q.get("limit") || 200), offset = Number(q.get("offset") || 0);
+    const r = range(url), q = url.searchParams, limit = Number(q.get("limit") || 200), offset = Number(q.get("offset") || 0);
     assert(Number.isInteger(limit) && limit >= 1 && limit <= 1e3 && Number.isInteger(offset) && offset >= 0 && offset <= 2e5, "Halaman tidak valid.");
-    const payload2 = {
+    const filter = {
       ...r,
       limit,
       offset
     };
     if (q.get("pos")) {
-      payload2.pos = Number(q.get("pos"));
-      assert([1, 2, 3].includes(payload2.pos), "Pos tidak valid.");
+      filter.pos = Number(q.get("pos"));
+      assert(posts.includes(filter.pos), "Pos tidak valid.");
     }
     if (q.get("regu")) {
-      payload2.regu = q.get("regu");
-      assert(regu.includes(payload2.regu), "Regu tidak valid.");
+      filter.regu = q.get("regu");
+      assert(reguCodes.includes(filter.regu), "Regu tidak valid.");
     }
     if (q.get("status")) {
-      payload2.status = q.get("status");
-      assert(status.includes(payload2.status), "Status tidak valid.");
+      filter.status = q.get("status");
+      assert(statuses.includes(filter.status), "Status tidak valid.");
     }
     if (q.get("guide")) {
-      payload2.guideId = q.get("guide");
-      assert(/^G-\d{1,7}$/.test(payload2.guideId), "Guide tidak valid.");
+      const parsed = parseGuideId(q.get("guide"));
+      assert(parsed, "Guide tidak valid.");
+      filter.guideId = parsed.id;
     }
-    return {
-      operation: "records.list",
-      payload: payload2
-    };
+    return await visitRecordPage(db, filter);
   }
-  if (path === "visits/reviews") {
-    await requireAny(db, user, ["visits.reports.read"], has2);
-    return {
-      operation: "reviews.month",
-      payload: {
-        month: month(url.searchParams.get("month") || today().slice(0, 7))
-      }
-    };
-  }
-  if (path === "visits/health") {
-    await requireAny(db, user, ["visits.forms.read", "visits.forms.manage", "visits.dashboard.read"], has2);
-    return {
-      operation: "health",
-      payload: {}
-    };
-  }
-  if (method === "GET") {
+  if (p[1] === "guides" && p.length === 2 && method === "GET") {
     await requireAny(db, user, ["visits.guides.read", "visits.guides.manage"], has2);
     return {
-      operation: "guides.list",
-      payload: {}
+      items: await visitGuideList(db),
+      can_manage: await has2(db, user, "visits.guides.manage")
     };
   }
-  assert(await has2(db, user, "visits.guides.manage"), "Hanya pengelola kunjungan yang dapat mengubah data guide.", 403);
-  assert(b.guideId === void 0 || b.guideId === null || b.guideId === "" || typeof b.guideId === "string" && /^G-\d{1,7}$/.test(b.guideId), "ID guide tidak valid.");
-  assert(typeof b.guideName === "string" && b.guideName.trim().length > 0 && b.guideName.length <= 120, "Nama guide wajib diisi (maksimal 120 huruf).");
-  assert(["Asing", "Domestik"].includes(b.kategori), "Kategori harus Asing atau Domestik.");
-  const codes = (Array.isArray(b.regu) ? b.regu : String(b.regu || "").split(",")).map((x) => String(x).trim()).filter(Boolean);
-  assert(codes.length > 0 && codes.length <= 2 && codes.every((c) => regu.includes(c)), "Pilih regu yang valid.");
-  assert(typeof b.aktif === "boolean", "Status aktif wajib dipilih.");
-  const payload = {
-    guideName: b.guideName.trim(),
-    kategori: b.kategori,
-    regu: codes.join(", "),
-    aktif: b.aktif
-  };
-  if (b.guideId) payload.guideId = b.guideId;
-  return {
-    operation: "guides.upsert",
-    payload,
-    audit: {
-      action: b.guideId ? "UPDATE" : "CREATE",
-      type: "visit_guides",
-      summary: {
-        kategori: payload.kategori,
-        regu: payload.regu,
-        aktif: payload.aktif
-      }
-    }
-  };
+  if (p[1] === "guides" && method === "POST" && (p.length === 2 || p.length === 3 && p[2] === "import")) {
+    assert(await has2(db, user, "visits.guides.manage"), "Hanya pengelola kunjungan yang dapat mengubah data guide.", 403);
+    return await tx(db, async () => p.length === 2 ? await saveVisitGuide(db, user, b, audit2) : await importVisitGuides(db, user, b, audit2));
+  }
+  if (p[1] === "sheet" && p.length === 2 && method === "GET") {
+    await requireAny(db, user, ["visits.dashboard.read", "visits.forms.read", "visits.settings.manage"], has2);
+    const status = await visitSheetStatus(db), manage = await has2(db, user, "visits.settings.manage");
+    const links = manage || await has2(db, user, "visits.reports.export");
+    return {
+      ...status,
+      files: links ? status.files : status.files.map((f) => ({
+        year: f.year
+      })),
+      folder_url: links ? status.folder_url : null,
+      can_sync: manage
+    };
+  }
+  assert(false, "Alamat API tidak ditemukan.", 404);
 }
-async function visitBridgeFinish({ db, user, plan, data }, deps = localDeps) {
-  if (plan.audit) {
-    const { audit: audit2 } = deps;
-    assert(typeof data.guideId === "string", "Jawaban spreadsheet tidak lengkap.", 503);
-    await audit2(db, user, data.created ? "CREATE" : plan.audit.action, plan.audit.type, data.guideId, plan.audit.summary);
-  }
-  return data;
+var isVisitSheetAction = (path, method) => method === "POST" && (path === "visits/sheet/sync" || path === "visits/sheet/check");
+async function authorizeVisitSheetAction({ db, user }, deps = localDeps) {
+  const { has: has2 } = deps;
+  assert(!user.must_change_password, "Anda wajib mengganti password sementara terlebih dahulu.", 428);
+  assert(await has2(db, user, "visits.settings.manage"), "Hanya pengelola kunjungan yang dapat menjalankan penyalinan spreadsheet.", 403);
+  return true;
 }
-
-// supabase/functions/_shared/portal/visits-bridge.mjs
-var productionUrl = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{20,}\/exec$/;
-var localUrl = /^http:\/\/(127\.0\.0\.1|localhost):\d{2,5}\/[A-Za-z0-9/_-]*$/;
-var devKeyMarker = "uji-lokal";
-var bridgeCodes = {
-  KUNCI: [503, "Jembatan spreadsheet menolak kredensial portal. Hubungi admin portal."],
-  OPERASI: [503, "Versi jembatan spreadsheet belum sesuai. Hubungi admin portal."],
-  SIBUK: [503, "Spreadsheet sedang sibuk. Coba lagi sebentar."],
-  GAGAL_TULIS: [503, "Spreadsheet belum dapat menyimpan. Coba lagi sebentar."],
-  GALAT: [503, "Spreadsheet sedang tidak dapat diakses."],
-  TIDAK_SAH: [422],
-  KEMBAR: [409],
-  TIDAK_ADA: [404]
-};
-var unavailable = "Spreadsheet sedang tidak dapat diakses.";
-function bridgeConfig(env = {}, { allowLocal = false } = {}) {
-  const url = typeof env.VISITS_BRIDGE_URL === "string" ? env.VISITS_BRIDGE_URL.trim() : "";
-  const key = typeof env.VISITS_BRIDGE_KEY === "string" ? env.VISITS_BRIDGE_KEY.trim() : "";
-  if (!url || !key) return null;
-  const local = localUrl.test(url);
-  if (!(productionUrl.test(url) || allowLocal && local)) return null;
-  if (key.length < 48 || key.length > 256 || !local && key.includes(devKeyMarker)) return null;
-  return {
-    url,
-    key,
-    local
-  };
-}
-async function readLimited(response, limit = 4 * 1024 * 1024) {
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  const chunks = [];
-  let size = 0;
-  try {
-    for (; ; ) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.length;
-      if (size > limit) {
-        await reader.cancel();
-        throw new Error("Bridge response too large");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return new TextDecoder("utf-8", {
-    fatal: true
-  }).decode(bytes);
-}
-async function callBridge(config, operation, payload = {}, { fetchImpl = globalThis.fetch, timeoutMs = 24e3 } = {}) {
-  assert(config, "Jembatan Google Spreadsheet belum dikonfigurasi.", 503);
-  let response;
-  try {
-    const signal = AbortSignal.timeout(timeoutMs);
-    response = await fetchImpl(config.url, {
-      method: "POST",
-      redirect: "manual",
-      headers: {
-        "Content-Type": "text/plain;charset=utf-8"
-      },
-      body: JSON.stringify({
-        operation,
-        credential: config.key,
-        payload
-      }),
-      signal
-    });
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const next = new URL(response.headers.get("location") || "", config.url);
-      if (next.protocol !== "https:" || next.hostname !== "script.googleusercontent.com" || next.username || next.password) throw new Error("Unexpected bridge redirect");
-      await response.body?.cancel();
-      response = await fetchImpl(next.href, {
-        method: "GET",
-        redirect: "manual",
-        signal
-      });
-    }
-  } catch {
-    throw new AppError(503, unavailable, {
-      bridge_code: "JARINGAN"
-    });
-  }
-  let data;
-  try {
-    if (response.status !== 200) throw new Error(`Bridge HTTP ${response.status}`);
-    data = JSON.parse(await readLimited(response));
-  } catch {
-    throw new AppError(503, unavailable, {
-      bridge_code: "JAWABAN"
-    });
-  }
-  if (!data || typeof data !== "object" || typeof data.ok !== "boolean") throw new AppError(503, unavailable, {
-    bridge_code: "JAWABAN"
-  });
-  if (data.ok) {
-    assert(data.data && typeof data.data === "object" && !Array.isArray(data.data), unavailable, 503);
-    return data.data;
-  }
-  const [status2, message] = bridgeCodes[data.code] || [503, unavailable];
-  throw new AppError(status2, message || (typeof data.error === "string" && data.error.length <= 500 ? data.error : unavailable), {
-    bridge_code: String(data.code || "GALAT").slice(0, 20)
-  });
-}
-  return { bridgeConfig: bridgeConfig, callBridge: callBridge, isVisitBridgeRequest: isVisitBridgeRequest, visitBridgeFinish: visitBridgeFinish, visitBridgePlan: visitBridgePlan, visitRoutes: visitRoutes };
+  return { authorizeVisitSheetAction: authorizeVisitSheetAction, checkVisitSheetConnection: checkVisitSheetConnection, isVisitSheetAction: isVisitSheetAction, runVisitSheetSync: runVisitSheetSync, visitRoutes: visitRoutes };
 })();
 // --- Pengelolaan Kunjungan (build-visits-deploy.mjs) ---
-// Galat dari modul visits memakai kelas AppError salinannya sendiri; diubah ke
+// Galat dari modul kunjungan memakai kelas AppError salinannya sendiri; diubah ke
 // AppError snapshot supaya status 403/404/409/422 tidak berubah menjadi 503.
 function adoptVisitError(error) {
   if (!(error instanceof AppError) && error instanceof Error && Number.isInteger(error.status) && error.status >= 400 && error.status < 600) throw new AppError(error.status, error.message, error.details);
   throw error;
 }
-async function visitsBridgeRequest(client, identity, storage, b, env, authorize) {
+async function visitsSheetRequest(client, identity, storage, b, env, authorize) {
   try {
-    const planned = await transaction(client, identity, storage, async (db) => {
+    await transaction(client, identity, storage, async (db) => {
       const user = await authorize(db);
-      const plan = await __visits.visitBridgePlan({ db, user, p: b.path.split("/"), method: b.method, body: b.body, url: new URL(`https://portal.invalid/?${b.query}`) }, { has });
-      return { user, plan };
+      return __visits.authorizeVisitSheetAction({ db, user }, { has });
     }, false);
-    const data = await __visits.callBridge(__visits.bridgeConfig(env), planned.plan.operation, planned.plan.payload);
-    if (!planned.plan.audit) return data;
-    return await transaction(client, identity, storage, (db) => __visits.visitBridgeFinish({ db, user: planned.user, plan: planned.plan, data }, { audit }), true);
+    // Langkah basis data penyalinan menyentuh tabel visit_* saja; serialisasinya
+    // dipegang lease visit_sheet_state, bukan kunci global portal.
+    const runTx = (work) => transaction(client, identity, storage, work, false);
+    if (b.path === "visits/sheet/sync") return await __visits.runVisitSheetSync({ runTx, env, trigger: "manual" });
+    return await __visits.checkVisitSheetConnection({ runTx, env });
   } catch (error) {
     adoptVisitError(error);
   }
@@ -6464,8 +7687,8 @@ var index_default = {
       assert(uuid2.test(verified?.id), "Sesi berakhir. Silakan masuk kembali.", 401);
       const claims = JSON.parse(atob(b.access_token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/")));
       assert(claims.sub === verified.id && uuid2.test(claims.session_id), "Sesi berakhir. Silakan masuk kembali.", 401);
-      if (typeof b.path === "string" && __visits.isVisitBridgeRequest(b.path, b.method)) {
-        const result = await visitsBridgeRequest(client, identity, storage, b, Deno.env.toObject(), async (db) => {
+      if (typeof b.path === "string" && __visits.isVisitSheetAction(b.path, b.method)) {
+        const result = await visitsSheetRequest(client, identity, storage, b, Deno.env.toObject(), async (db) => {
         const user = await one(db, "SELECT * FROM users WHERE id=? AND status='ACTIVE'", verified.id);
         assert(user, "Akun tidak aktif.", 401);
         user.request_id = requestId;
