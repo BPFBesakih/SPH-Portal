@@ -28,7 +28,13 @@ export const resourceActions = {
   'merchandise.catalog': ['read', 'manage', 'costs'],
   'merchandise.stock': ['read', 'record', 'adjust'],
   'merchandise.sales': ['read', 'create', 'void'],
-  'merchandise.reports': ['read', 'export']
+  'merchandise.reports': ['read', 'export'],
+  'visits.dashboard': ['read'],
+  'visits.guides': ['read', 'manage'],
+  'visits.records': ['read'],
+  'visits.forms': ['read', 'manage'],
+  'visits.reports': ['read', 'export'],
+  'visits.settings': ['manage']
 };
 export const purchasingRoleCodes = {
   PURCHASE_REQUESTER: ['Pemohon Pengadaan', ['purchasing.requests.create', 'purchasing.requests.read']],
@@ -38,6 +44,18 @@ export const purchasingRoleCodes = {
   PURCHASE_ADMIN: ['Pengelola Pengadaan', ['purchasing.settings.manage', 'purchasing.requests.read', 'purchasing.vendors.read', 'purchasing.vendors.manage', 'purchasing.vendors.sensitive', 'purchasing.budget.read', 'purchasing.budget.manage']]
 };
 const purchasingRoles = Object.entries(purchasingRoleCodes).map(([code, [name, codes]]) => [code, name, c => codes.includes(c)]);
+export const merchandiseRoleCodes = {
+  BISNIS_PIMPINAN: ['Pimpinan Bisnis', ['merchandise.catalog.read', 'merchandise.catalog.costs', 'merchandise.stock.read', 'merchandise.sales.read', 'merchandise.reports.read', 'merchandise.reports.export']],
+  BISNIS_MANAGER: ['Pengelola Bisnis', ['merchandise.catalog.read', 'merchandise.catalog.manage', 'merchandise.catalog.costs', 'merchandise.stock.read', 'merchandise.stock.record', 'merchandise.stock.adjust', 'merchandise.sales.read', 'merchandise.sales.create', 'merchandise.sales.void', 'merchandise.reports.read', 'merchandise.reports.export']],
+  BISNIS_KOORDINATOR: ['Koordinator Merchandise', ['merchandise.catalog.read', 'merchandise.catalog.costs', 'merchandise.stock.read', 'merchandise.stock.record', 'merchandise.stock.adjust', 'merchandise.sales.read', 'merchandise.sales.create', 'merchandise.reports.read', 'merchandise.reports.export']],
+  BISNIS_PETUGAS: ['Petugas Penjualan Merchandise', ['merchandise.catalog.read', 'merchandise.stock.read', 'merchandise.stock.record', 'merchandise.sales.read', 'merchandise.sales.create']]
+};
+const merchandiseRoles = Object.entries(merchandiseRoleCodes).map(([code, [name, codes]]) => [code, name, c => codes.includes(c)]);
+export const visitRoleCodes = {
+  KUNJUNGAN_PENGELOLA: ['Pengelola Kunjungan', ['visits.dashboard.read', 'visits.guides.read', 'visits.guides.manage', 'visits.records.read', 'visits.forms.read', 'visits.forms.manage', 'visits.reports.read', 'visits.reports.export', 'visits.settings.manage']],
+  KUNJUNGAN_PIMPINAN: ['Pimpinan Kunjungan', ['visits.dashboard.read', 'visits.guides.read', 'visits.records.read', 'visits.reports.read', 'visits.reports.export']]
+};
+const visitRoles = Object.entries(visitRoleCodes).map(([code, [name, codes]]) => [code, name, c => codes.includes(c)]);
 export async function grants(db, user) {
   const key = `grants:${user.id}`, cache = db.authorizationCache;
   if (cache?.has(key)) return cache.get(key);

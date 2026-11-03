@@ -1,3 +1,7 @@
+import { randomBytes as __visits_randomBytes } from "node:crypto";
+import { randomUUID as __visits_randomUUID } from "node:crypto";
+import { createHash as __visits_createHash } from "node:crypto";
+import { createHmac as __visits_createHmac } from "node:crypto";
 // supabase/functions/_shared/portal/leave-control.mjs
 async function leaveControlEligible(db, user) {
   if (!user?.id) return false;
@@ -5753,6 +5757,533 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
   }
   return merchandiseRoutes2;
 })();
+// --- Modul Pengelolaan Kunjungan, dibangkitkan dari lib/visits*.mjs dan lib/guide-form.mjs ---
+const __visits = (() => {
+  const randomBytes = __visits_randomBytes;
+  const randomUUID = __visits_randomUUID;
+  const createHash = __visits_createHash;
+  const createHmac = __visits_createHmac;
+// supabase/functions/_shared/portal/arrays.mjs
+async function asyncMap(items, fn) {
+  const out = [];
+  for (let i = 0; i < items.length; i++) out.push(await fn(items[i], i, items));
+  return out;
+}
+
+// supabase/functions/_shared/portal/visits.mjs
+
+// supabase/functions/_shared/portal/db.mjs
+var now = () => (/* @__PURE__ */ new Date()).toISOString();
+var today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Makassar" }).format(/* @__PURE__ */ new Date());
+var uid = () => randomUUID();
+var AppError = class extends Error {
+  constructor(status2, message, details) {
+    super(message);
+    this.status = status2;
+    this.details = details;
+  }
+};
+var assert = (condition, message, status2 = 422) => {
+  if (!condition) throw new AppError(status2, message);
+};
+var sqlName = (n) => {
+  if (!/^[a-z_][a-z0-9_]*$/.test(n)) throw new Error("Invalid SQL identifier");
+  return n;
+};
+function postgresQuery(sql) {
+  let quoted = false, index = 0, out = "";
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    if (c === "'") {
+      out += c;
+      if (quoted && sql[i + 1] === "'") {
+        out += sql[++i];
+        continue;
+      }
+      quoted = !quoted;
+      continue;
+    }
+    out += c === "?" && !quoted ? `$${++index}` : c;
+  }
+  return out.replace(/\b([a-z_]\w*)\.rowid\b/gi, "$1.id");
+}
+var all = (db, sql, ...args) => db.query(postgresQuery(sql), args.map((v) => v ?? null));
+var one = async (db, sql, ...args) => (await all(db, sql, ...args))[0];
+var run = async (db, sql, ...args) => {
+  const rows = await db.query(postgresQuery(sql), args.map((v) => v ?? null));
+  return { changes: rows.count ?? rows.affectedRows ?? 0 };
+};
+async function insert(db, table, values) {
+  const row = { id: uid(), created_at: now(), updated_at: now(), row_version: 1, ...values };
+  const columns = Object.keys(row).map(sqlName);
+  await run(db, `INSERT INTO ${sqlName(table)} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`, ...Object.values(row).map((v) => typeof v === "boolean" ? Number(v) : v ?? null));
+  return one(db, `SELECT * FROM ${sqlName(table)} WHERE id=?`, row.id);
+}
+async function update(db, table, id, version, values) {
+  assert(Number.isInteger(version), "Versi data wajib dikirim. Muat ulang data.", 409);
+  const row = { ...values, updated_at: now() };
+  const result = await run(db, `UPDATE ${sqlName(table)} SET ${Object.keys(row).map((k) => `${sqlName(k)}=?`).join(",")},row_version=row_version+1 WHERE id=? AND row_version=?`, ...Object.values(row).map((v) => typeof v === "boolean" ? Number(v) : v ?? null), id, version);
+  assert(result.changes === 1, "Data sudah berubah. Muat ulang sebelum menyimpan.", 409);
+  return one(db, `SELECT * FROM ${sqlName(table)} WHERE id=?`, id);
+}
+async function tx(db, work) {
+  assert(db.inTransaction, "Transaction required.", 500);
+  return await work();
+}
+async function audit(db, actor, action, type, key, summary = {}, reason = "") {
+  await insert(db, "audit_events", { actor_user_id: actor?.id || null, action, object_type: type, object_key: String(key), occurred_at: now(), outcome: "SUCCESS", request_id: actor?.request_id || uid(), reason, change_summary: JSON.stringify(summary) });
+}
+function date(v, label = "Tanggal") {
+  assert(typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v, `${label} tidak valid.`);
+  return v;
+}
+
+// supabase/functions/_shared/portal/auth.mjs
+var digest = (value) => createHash("sha256").update(value).digest("hex");
+var purchasingRoleCodes = {
+  PURCHASE_REQUESTER: ["Pemohon Pengadaan", ["purchasing.requests.create", "purchasing.requests.read"]],
+  PURCHASING_STAFF: ["Staf Purchasing", ["purchasing.requests.read", "purchasing.procurement.manage", "purchasing.vendors.read", "purchasing.vendors.manage", "purchasing.vendors.sensitive", "purchasing.budget.read", "purchasing.reports.read"]],
+  FINANCE_VERIFIER: ["Verifikator Keuangan", ["purchasing.requests.read", "purchasing.requests.verify", "purchasing.budget.read", "purchasing.budget.manage", "purchasing.vendors.read", "purchasing.vendors.sensitive", "purchasing.reports.read"]],
+  PURCHASE_AUDITOR: ["Pemeriksa SPI", ["purchasing.requests.read", "purchasing.vendors.read", "purchasing.budget.read", "purchasing.reports.read", "purchasing.reports.export", "admin.audit.read"]],
+  PURCHASE_ADMIN: ["Pengelola Pengadaan", ["purchasing.settings.manage", "purchasing.requests.read", "purchasing.vendors.read", "purchasing.vendors.manage", "purchasing.vendors.sensitive", "purchasing.budget.read", "purchasing.budget.manage"]]
+};
+var purchasingRoles = Object.entries(purchasingRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+var merchandiseRoleCodes = {
+  BISNIS_PIMPINAN: ["Pimpinan Bisnis", ["merchandise.catalog.read", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.sales.read", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_MANAGER: ["Pengelola Bisnis", ["merchandise.catalog.read", "merchandise.catalog.manage", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.stock.record", "merchandise.stock.adjust", "merchandise.sales.read", "merchandise.sales.create", "merchandise.sales.void", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_KOORDINATOR: ["Koordinator Merchandise", ["merchandise.catalog.read", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.stock.record", "merchandise.stock.adjust", "merchandise.sales.read", "merchandise.sales.create", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_PETUGAS: ["Petugas Penjualan Merchandise", ["merchandise.catalog.read", "merchandise.stock.read", "merchandise.stock.record", "merchandise.sales.read", "merchandise.sales.create"]]
+};
+var merchandiseRoles = Object.entries(merchandiseRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+var visitRoleCodes = {
+  KUNJUNGAN_PENGELOLA: ["Pengelola Kunjungan", ["visits.dashboard.read", "visits.guides.read", "visits.guides.manage", "visits.records.read", "visits.forms.read", "visits.forms.manage", "visits.reports.read", "visits.reports.export", "visits.settings.manage"]],
+  KUNJUNGAN_PIMPINAN: ["Pimpinan Kunjungan", ["visits.dashboard.read", "visits.guides.read", "visits.records.read", "visits.reports.read", "visits.reports.export"]]
+};
+var visitRoles = Object.entries(visitRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+async function grants(db, user) {
+  const key = `grants:${user.id}`, cache = db.authorizationCache;
+  if (cache?.has(key)) return cache.get(key);
+  const rows = await all(db, `SELECT ur.id,ur.scope_kind,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=?`, user.id);
+  cache?.set(key, rows);
+  return rows;
+}
+async function has(db, user, permission) {
+  return (await grants(db, user)).some((g) => g.code === permission);
+}
+
+// supabase/functions/_shared/portal/guide-form.mjs
+var guidePosts = {
+  1: "Pos 1 \u2014 Pintu Masuk",
+  3: "Pos 3 \u2014 Pelataran Utama"
+};
+
+// supabase/functions/_shared/portal/visits.mjs
+var localDeps = {
+  has,
+  audit
+};
+var posts = [1, 3];
+var regu = ["A1", "A2", "D1", "D2"];
+var status = ["aktif", "diganti"];
+var linkView = async (db, link) => link && {
+  id: link.id,
+  pos: Number(link.pos),
+  label: link.label,
+  created_at: link.created_at,
+  row_version: link.row_version,
+  created_by_name: link.created_by ? (await one(db, "SELECT username FROM users WHERE id=?", link.created_by))?.username || "" : ""
+};
+async function requireAny(db, user, codes, has2, message = "Akses modul kunjungan ditolak.") {
+  let allowed = false;
+  for (const code of codes) if (await has2(db, user, code)) {
+    allowed = true;
+    break;
+  }
+  assert(allowed, message, 403);
+}
+var month = (v) => {
+  assert(typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v), "Bulan tidak valid.");
+  return v;
+};
+function range(url) {
+  const from = date(url?.searchParams.get("from") || today().slice(0, 8) + "01", "Tanggal mulai"), to = date(url?.searchParams.get("to") || today(), "Tanggal akhir");
+  assert(from <= to, "Tanggal mulai harus sebelum tanggal akhir.");
+  assert((Date.parse(to) - Date.parse(from)) / 864e5 < 366, "Rentang maksimal 366 hari.");
+  return {
+    from,
+    to
+  };
+}
+async function newLink(db, user, pos) {
+  const token = randomBytes(32).toString("hex");
+  const row = await insert(db, "guide_form_links", {
+    pos,
+    label: guidePosts[pos],
+    token_hash: digest(token),
+    share_token: token,
+    is_active: 1,
+    created_by: user.id
+  });
+  return {
+    row,
+    token
+  };
+}
+async function visitRoutes({ db, user, p, method, body: b = {}, url }, deps = localDeps) {
+  if (p[0] !== "visits") return void 0;
+  const { has: has2, audit: audit2 } = deps;
+  if (p[1] === "links" && p.length === 2) {
+    if (method === "GET") {
+      await requireAny(db, user, ["visits.forms.read", "visits.forms.manage"], has2);
+      const since = new Date(Date.now() - 864e5).toISOString();
+      const items = await asyncMap(posts, async (pos2) => {
+        const link = await one(db, "SELECT * FROM guide_form_links WHERE pos=? AND is_active=1 AND revoked_at IS NULL", pos2);
+        const last = await one(db, "SELECT received_at,outcome FROM guide_form_submissions WHERE pos=? AND outcome IN('ACCEPTED','DUPLICATE') ORDER BY received_at DESC LIMIT 1", pos2);
+        const day = await one(db, "SELECT count(*) FILTER(WHERE outcome='ACCEPTED') accepted,count(*) FILTER(WHERE outcome='REJECTED') rejected FROM guide_form_submissions WHERE pos=? AND received_at>=?", pos2, since);
+        return {
+          pos: pos2,
+          label: guidePosts[pos2],
+          link: await linkView(db, link) || null,
+          last_received_at: last?.received_at || null,
+          accepted_24h: Number(day?.accepted || 0),
+          rejected_24h: Number(day?.rejected || 0)
+        };
+      });
+      const recent = await all(db, "SELECT pos,outcome,reason,received_at FROM guide_form_submissions ORDER BY received_at DESC LIMIT 30");
+      return {
+        items,
+        recent,
+        can_manage: await has2(db, user, "visits.forms.manage")
+      };
+    }
+    assert(method === "POST", "Metode tidak diizinkan.", 405);
+    assert(await has2(db, user, "visits.forms.manage"), "Hanya pengelola kunjungan yang dapat mengelola tautan pos.", 403);
+    assert(["create", "rotate", "revoke", "copy"].includes(b.action), "Tindakan tautan tidak valid.");
+    const pos = Number(b.pos);
+    assert(posts.includes(pos), "Pos tidak valid.");
+    return await tx(db, async () => {
+      const active = await one(db, "SELECT * FROM guide_form_links WHERE pos=? AND is_active=1 AND revoked_at IS NULL", pos);
+      if (b.action === "create") {
+        assert(!active, `Tautan aktif ${guidePosts[pos]} sudah ada. Gunakan Salin atau Ganti.`, 409);
+        const { row: row2, token: token2 } = await newLink(db, user, pos);
+        await audit2(db, user, "CREATE", "guide_form_links", row2.id, {
+          pos
+        });
+        return {
+          link: await linkView(db, row2),
+          token: token2
+        };
+      }
+      assert(active && b.id === active.id && b.row_version === active.row_version, "Tautan sudah berubah. Muat ulang halaman Tautan Pos.", 409);
+      if (b.action === "copy") {
+        assert(typeof active.share_token === "string" && digest(active.share_token) === active.token_hash, "Salinan tautan tidak tersedia. Gunakan Ganti tautan.", 409);
+        await audit2(db, user, "COPY_LINK", "guide_form_links", active.id, {
+          pos
+        });
+        return {
+          link: await linkView(db, active),
+          token: active.share_token
+        };
+      }
+      await update(db, "guide_form_links", active.id, active.row_version, {
+        is_active: 0,
+        revoked_at: now(),
+        revoked_by: user.id,
+        share_token: null
+      });
+      if (b.action === "revoke") {
+        await audit2(db, user, "REVOKE", "guide_form_links", active.id, {
+          pos
+        });
+        return {
+          link: null
+        };
+      }
+      const { row, token } = await newLink(db, user, pos);
+      await audit2(db, user, "ROTATE", "guide_form_links", row.id, {
+        pos,
+        replaced: active.id
+      });
+      return {
+        link: await linkView(db, row),
+        token
+      };
+    });
+  }
+  if (p[1] === "activity" && p.length === 2 && method === "GET") {
+    await requireAny(db, user, ["visits.dashboard.read", "visits.forms.read"], has2);
+    const since = new Date(Date.now() - 864e5).toISOString();
+    return {
+      items: await asyncMap(posts, async (pos) => {
+        const last = await one(db, "SELECT received_at FROM guide_form_submissions WHERE pos=? AND outcome IN('ACCEPTED','DUPLICATE') ORDER BY received_at DESC LIMIT 1", pos);
+        const day = await one(db, "SELECT count(*) FILTER(WHERE outcome='ACCEPTED') accepted,count(*) FILTER(WHERE outcome='REJECTED') rejected FROM guide_form_submissions WHERE pos=? AND received_at>=?", pos, since);
+        return {
+          pos,
+          label: guidePosts[pos],
+          last_received_at: last?.received_at || null,
+          accepted_24h: Number(day?.accepted || 0),
+          rejected_24h: Number(day?.rejected || 0)
+        };
+      })
+    };
+  }
+  if (p[1] === "exports" && p.length === 2 && method === "POST") {
+    assert(await has2(db, user, "visits.reports.export"), "Akses ekspor kunjungan ditolak.", 403);
+    assert(["records", "summary"].includes(b.kind), "Jenis ekspor tidak valid.");
+    const from = date(b.from, "Tanggal mulai"), to = date(b.to, "Tanggal akhir");
+    assert(from <= to, "Rentang tanggal tidak valid.");
+    const rows = Number(b.rows);
+    assert(Number.isInteger(rows) && rows >= 0 && rows <= 2e5, "Jumlah baris tidak valid.");
+    return await tx(db, async () => {
+      await audit2(db, user, "EXPORT", "visit_" + b.kind, `${from}..${to}`, {
+        row_count: rows
+      });
+      return {
+        ok: true
+      };
+    });
+  }
+  assert(false, "Alamat API tidak ditemukan.", 404);
+}
+function isVisitBridgeRequest(path, method) {
+  return method === "GET" && ["visits/overview", "visits/guides", "visits/records", "visits/reviews", "visits/health"].includes(path) || method === "POST" && path === "visits/guides";
+}
+async function visitBridgePlan({ db, user, p, method, body: b = {}, url }, deps = localDeps) {
+  const path = p.join("/"), { has: has2 } = deps;
+  if (!isVisitBridgeRequest(path, method)) return void 0;
+  assert(!user.must_change_password, "Anda wajib mengganti password sementara terlebih dahulu.", 428);
+  if (path === "visits/overview") {
+    await requireAny(db, user, ["visits.dashboard.read", "visits.reports.read"], has2);
+    return {
+      operation: "overview",
+      payload: range(url)
+    };
+  }
+  if (path === "visits/records") {
+    await requireAny(db, user, ["visits.records.read"], has2);
+    const r = range(url), q = url.searchParams;
+    const limit = Number(q.get("limit") || 200), offset = Number(q.get("offset") || 0);
+    assert(Number.isInteger(limit) && limit >= 1 && limit <= 1e3 && Number.isInteger(offset) && offset >= 0 && offset <= 2e5, "Halaman tidak valid.");
+    const payload2 = {
+      ...r,
+      limit,
+      offset
+    };
+    if (q.get("pos")) {
+      payload2.pos = Number(q.get("pos"));
+      assert([1, 2, 3].includes(payload2.pos), "Pos tidak valid.");
+    }
+    if (q.get("regu")) {
+      payload2.regu = q.get("regu");
+      assert(regu.includes(payload2.regu), "Regu tidak valid.");
+    }
+    if (q.get("status")) {
+      payload2.status = q.get("status");
+      assert(status.includes(payload2.status), "Status tidak valid.");
+    }
+    if (q.get("guide")) {
+      payload2.guideId = q.get("guide");
+      assert(/^G-\d{1,7}$/.test(payload2.guideId), "Guide tidak valid.");
+    }
+    return {
+      operation: "records.list",
+      payload: payload2
+    };
+  }
+  if (path === "visits/reviews") {
+    await requireAny(db, user, ["visits.reports.read"], has2);
+    return {
+      operation: "reviews.month",
+      payload: {
+        month: month(url.searchParams.get("month") || today().slice(0, 7))
+      }
+    };
+  }
+  if (path === "visits/health") {
+    await requireAny(db, user, ["visits.forms.read", "visits.forms.manage", "visits.dashboard.read"], has2);
+    return {
+      operation: "health",
+      payload: {}
+    };
+  }
+  if (method === "GET") {
+    await requireAny(db, user, ["visits.guides.read", "visits.guides.manage"], has2);
+    return {
+      operation: "guides.list",
+      payload: {}
+    };
+  }
+  assert(await has2(db, user, "visits.guides.manage"), "Hanya pengelola kunjungan yang dapat mengubah data guide.", 403);
+  assert(b.guideId === void 0 || b.guideId === null || b.guideId === "" || typeof b.guideId === "string" && /^G-\d{1,7}$/.test(b.guideId), "ID guide tidak valid.");
+  assert(typeof b.guideName === "string" && b.guideName.trim().length > 0 && b.guideName.length <= 120, "Nama guide wajib diisi (maksimal 120 huruf).");
+  assert(["Asing", "Domestik"].includes(b.kategori), "Kategori harus Asing atau Domestik.");
+  const codes = (Array.isArray(b.regu) ? b.regu : String(b.regu || "").split(",")).map((x) => String(x).trim()).filter(Boolean);
+  assert(codes.length > 0 && codes.length <= 2 && codes.every((c) => regu.includes(c)), "Pilih regu yang valid.");
+  assert(typeof b.aktif === "boolean", "Status aktif wajib dipilih.");
+  const payload = {
+    guideName: b.guideName.trim(),
+    kategori: b.kategori,
+    regu: codes.join(", "),
+    aktif: b.aktif
+  };
+  if (b.guideId) payload.guideId = b.guideId;
+  return {
+    operation: "guides.upsert",
+    payload,
+    audit: {
+      action: b.guideId ? "UPDATE" : "CREATE",
+      type: "visit_guides",
+      summary: {
+        kategori: payload.kategori,
+        regu: payload.regu,
+        aktif: payload.aktif
+      }
+    }
+  };
+}
+async function visitBridgeFinish({ db, user, plan, data }, deps = localDeps) {
+  if (plan.audit) {
+    const { audit: audit2 } = deps;
+    assert(typeof data.guideId === "string", "Jawaban spreadsheet tidak lengkap.", 503);
+    await audit2(db, user, data.created ? "CREATE" : plan.audit.action, plan.audit.type, data.guideId, plan.audit.summary);
+  }
+  return data;
+}
+
+// supabase/functions/_shared/portal/visits-bridge.mjs
+var productionUrl = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{20,}\/exec$/;
+var localUrl = /^http:\/\/(127\.0\.0\.1|localhost):\d{2,5}\/[A-Za-z0-9/_-]*$/;
+var devKeyMarker = "uji-lokal";
+var bridgeCodes = {
+  KUNCI: [503, "Jembatan spreadsheet menolak kredensial portal. Hubungi admin portal."],
+  OPERASI: [503, "Versi jembatan spreadsheet belum sesuai. Hubungi admin portal."],
+  SIBUK: [503, "Spreadsheet sedang sibuk. Coba lagi sebentar."],
+  GAGAL_TULIS: [503, "Spreadsheet belum dapat menyimpan. Coba lagi sebentar."],
+  GALAT: [503, "Spreadsheet sedang tidak dapat diakses."],
+  TIDAK_SAH: [422],
+  KEMBAR: [409],
+  TIDAK_ADA: [404]
+};
+var unavailable = "Spreadsheet sedang tidak dapat diakses.";
+function bridgeConfig(env = {}, { allowLocal = false } = {}) {
+  const url = typeof env.VISITS_BRIDGE_URL === "string" ? env.VISITS_BRIDGE_URL.trim() : "";
+  const key = typeof env.VISITS_BRIDGE_KEY === "string" ? env.VISITS_BRIDGE_KEY.trim() : "";
+  if (!url || !key) return null;
+  const local = localUrl.test(url);
+  if (!(productionUrl.test(url) || allowLocal && local)) return null;
+  if (key.length < 48 || key.length > 256 || !local && key.includes(devKeyMarker)) return null;
+  return {
+    url,
+    key,
+    local
+  };
+}
+async function readLimited(response, limit = 4 * 1024 * 1024) {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks = [];
+  let size = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > limit) {
+        await reader.cancel();
+        throw new Error("Bridge response too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return new TextDecoder("utf-8", {
+    fatal: true
+  }).decode(bytes);
+}
+async function callBridge(config, operation, payload = {}, { fetchImpl = globalThis.fetch, timeoutMs = 24e3 } = {}) {
+  assert(config, "Jembatan Google Spreadsheet belum dikonfigurasi.", 503);
+  let response;
+  try {
+    const signal = AbortSignal.timeout(timeoutMs);
+    response = await fetchImpl(config.url, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        "Content-Type": "text/plain;charset=utf-8"
+      },
+      body: JSON.stringify({
+        operation,
+        credential: config.key,
+        payload
+      }),
+      signal
+    });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const next = new URL(response.headers.get("location") || "", config.url);
+      if (next.protocol !== "https:" || next.hostname !== "script.googleusercontent.com" || next.username || next.password) throw new Error("Unexpected bridge redirect");
+      await response.body?.cancel();
+      response = await fetchImpl(next.href, {
+        method: "GET",
+        redirect: "manual",
+        signal
+      });
+    }
+  } catch {
+    throw new AppError(503, unavailable, {
+      bridge_code: "JARINGAN"
+    });
+  }
+  let data;
+  try {
+    if (response.status !== 200) throw new Error(`Bridge HTTP ${response.status}`);
+    data = JSON.parse(await readLimited(response));
+  } catch {
+    throw new AppError(503, unavailable, {
+      bridge_code: "JAWABAN"
+    });
+  }
+  if (!data || typeof data !== "object" || typeof data.ok !== "boolean") throw new AppError(503, unavailable, {
+    bridge_code: "JAWABAN"
+  });
+  if (data.ok) {
+    assert(data.data && typeof data.data === "object" && !Array.isArray(data.data), unavailable, 503);
+    return data.data;
+  }
+  const [status2, message] = bridgeCodes[data.code] || [503, unavailable];
+  throw new AppError(status2, message || (typeof data.error === "string" && data.error.length <= 500 ? data.error : unavailable), {
+    bridge_code: String(data.code || "GALAT").slice(0, 20)
+  });
+}
+  return { bridgeConfig: bridgeConfig, callBridge: callBridge, isVisitBridgeRequest: isVisitBridgeRequest, visitBridgeFinish: visitBridgeFinish, visitBridgePlan: visitBridgePlan, visitRoutes: visitRoutes };
+})();
+// --- Pengelolaan Kunjungan (build-visits-deploy.mjs) ---
+// Galat dari modul visits memakai kelas AppError salinannya sendiri; diubah ke
+// AppError snapshot supaya status 403/404/409/422 tidak berubah menjadi 503.
+function adoptVisitError(error) {
+  if (!(error instanceof AppError) && error instanceof Error && Number.isInteger(error.status) && error.status >= 400 && error.status < 600) throw new AppError(error.status, error.message, error.details);
+  throw error;
+}
+async function visitsBridgeRequest(client, identity, storage, b, env, authorize) {
+  try {
+    const planned = await transaction(client, identity, storage, async (db) => {
+      const user = await authorize(db);
+      const plan = await __visits.visitBridgePlan({ db, user, p: b.path.split("/"), method: b.method, body: b.body, url: new URL(`https://portal.invalid/?${b.query}`) }, { has });
+      return { user, plan };
+    }, false);
+    const data = await __visits.callBridge(__visits.bridgeConfig(env), planned.plan.operation, planned.plan.payload);
+    if (!planned.plan.audit) return data;
+    return await transaction(client, identity, storage, (db) => __visits.visitBridgeFinish({ db, user: planned.user, plan: planned.plan, data }, { audit }), true);
+  } catch (error) {
+    adoptVisitError(error);
+  }
+}
 async function routeOperation({ db, user, path, method, body = {}, query = "" }) {
   assert(typeof path === "string" && /^[a-z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path) && path.length <= 512, "Alamat API tidak valid.", 404);
   assert(["GET", "POST", "PATCH", "DELETE"].includes(method), "Metode tidak diizinkan.", 405);
@@ -5762,6 +6293,7 @@ async function routeOperation({ db, user, path, method, body = {}, query = "" })
   assert(!user.must_change_password, "Anda wajib mengganti password sementara terlebih dahulu.", 428);
   await guardLeaveRoleChanges({ db, user, p, method, body }, assert);
   if (p[0] === "leaves") return leaveRoutes({ db, user, p, method, body, url }, { assert, can, has, audit, today });
+  if (p[0] === "visits") return __visits.visitRoutes({ db, user, p, method, body, url }, { has, audit }).catch(adoptVisitError);
   if (path === "dashboard" && method === "GET") return dashboard(db, user, url.searchParams.get("module") || "hr", url.searchParams.get("as_of") || void 0);
   if (path === "lookups" && method === "GET") return lookups(db, user, url.searchParams.get("purpose") || "employees", url.searchParams.get("session_id"));
   if (p[0] === "exports" && method === "GET") {
@@ -5932,6 +6464,21 @@ var index_default = {
       assert(uuid2.test(verified?.id), "Sesi berakhir. Silakan masuk kembali.", 401);
       const claims = JSON.parse(atob(b.access_token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/")));
       assert(claims.sub === verified.id && uuid2.test(claims.session_id), "Sesi berakhir. Silakan masuk kembali.", 401);
+      if (typeof b.path === "string" && __visits.isVisitBridgeRequest(b.path, b.method)) {
+        const result = await visitsBridgeRequest(client, identity, storage, b, Deno.env.toObject(), async (db) => {
+        const user = await one(db, "SELECT * FROM users WHERE id=? AND status='ACTIVE'", verified.id);
+        assert(user, "Akun tidak aktif.", 401);
+        user.request_id = requestId;
+        const session = await one(db, "SELECT id FROM portal_auth_private.web_sessions WHERE token_hash=? AND user_id=? AND auth_session_id=? AND revoked_at IS NULL AND expires_at>clock_timestamp() AND lease_hash=? AND lease_until>clock_timestamp() AND version=?", b.session_hash, user.id, claims.session_id, b.lease_hash, b.session_version);
+        assert(session, "Sesi berakhir. Silakan masuk kembali.", 401);
+        assert(!user.employee_id || (await one(db, "SELECT is_active FROM employees WHERE id=?", user.employee_id))?.is_active === 1, "Profil pegawai tidak aktif.", 401);
+        assert(typeof b.query === "string" && b.query.length <= 2048 && b.body && typeof b.body === "object" && !Array.isArray(b.body), "Permintaan tidak valid.", 400);
+          assert(!user.must_change_password, "Anda wajib mengganti password sementara terlebih dahulu.", 428);
+          return user;
+        });
+        workCompleted = true;
+        return Response.json({ ok: true, result }, { headers: { "Cache-Control": "no-store", "X-SPH-Modules-Revision": "20261016.1" } });
+      }
       const result = await transaction(client, identity, storage, async (db) => {
         const user = await one(db, "SELECT * FROM users WHERE id=? AND status='ACTIVE'", verified.id);
         assert(user, "Akun tidak aktif.", 401);
