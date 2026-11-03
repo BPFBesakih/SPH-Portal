@@ -74,7 +74,7 @@
           `<span class="badge ${nilaiUniform(c.uniform) >= 1 ? '' : 'bad'}">Uniform ${esc(labelUniform(c.uniform))}</span>` +
           `<span class="badge">Etika ${App.nilaiEtika(c.etika)}</span>`;
       const keterangan = e.corrupt
-        ? `<span class="cmeta">Sudah terkirim ke server — lihat spreadsheet, kode ${esc(String(e.evaluationId).slice(0, 8))}</span>`
+        ? `<span class="cmeta">Sudah tersimpan di portal, kode ${esc(String(e.evaluationId).slice(0, 8))}</span>`
         : '';
       const ikon = e.diganti ? '✏️' : e.buntu ? '🚫' : e.corrupt ? '⚠️' : e.synced ? '✅' : '⏳';
       const status = e.diganti ? 'Sudah dibetulkan — angka ini tidak dipakai'
@@ -108,7 +108,7 @@
    * Hanya penilaian HARI INI yang boleh dibetulkan dari aplikasi.
    * Kunci "satu pos sekali sehari" di server memakai tanggal, jadi koreksi
    * untuk hari lain pasti ditolak — dan rekap hari-hari sebelumnya biasanya
-   * sudah dilaporkan. Untuk hari yang sudah lewat, lewat admin di spreadsheet.
+   * sudah dilaporkan. Untuk hari yang sudah lewat, lewat pengelola kunjungan di portal.
    */
   const bolehDikoreksi = (e) =>
     !e.corrupt && !e.diganti && DB.tanggalLokal(e.timestamp) === DB.tanggalLokal();
@@ -158,7 +158,7 @@
       `<p>Tercatat pukul ${esc(jamLokal(App.state.koreksi.timestamp))} di Pos ${esc(App.state.koreksi.pos)}: ` +
       `Uniform ${labelUniform(c.uniform)}, ID ${c.idCard ? 'Ya' : 'Tidak'}, Etika ${App.nilaiEtika(c.etika)}. ` +
       `Ubah nilainya lalu tekan SIMPAN. Guide dan pos tidak bisa diganti — ` +
-      `${App.state.koreksi.synced ? 'penilaian lama akan ditandai "diganti" di spreadsheet, tidak dihapus'
+      `${App.state.koreksi.synced ? 'penilaian lama akan ditandai "diganti" di portal, tidak dihapus'
                         : 'penilaian ini belum terkirim, jadi cukup ditimpa di perangkat'}.</p>` +
       `<button type="button" class="chip retrybtn" data-batal-koreksi="1">✖ Batalkan koreksi</button>`;
   }

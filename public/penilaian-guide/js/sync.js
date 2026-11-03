@@ -17,7 +17,7 @@
   const MAX_DELAY = 5 * 60_000;
   const AUTO_INTERVAL = 60_000; // cek berkala tiap 1 menit
   const BATCH = 20;             // batas kiriman portal per permintaan
-  const TIMEOUT_MS = 35_000;    // jembatan bisa menunggu kunci spreadsheet 20 detik
+  const TIMEOUT_MS = 35_000;    // di atas batas Pages→Edge (32 detik)
   const GUIDE_REFRESH_MS = 10 * 60_000;
 
   const listeners = new Set();
