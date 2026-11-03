@@ -310,3 +310,19 @@ CREATE TABLE IF NOT EXISTS merchandise_stock_movements (
  quantity_delta INTEGER NOT NULL, balance_before INTEGER, balance_after INTEGER NOT NULL CHECK(balance_after>=0), reason TEXT NOT NULL,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id));
 CREATE INDEX IF NOT EXISTS merchandise_stock_product_idx ON merchandise_stock_movements(product_id,created_at);
+-- Pengelolaan Kunjungan: penilaian guide tinggal di Google Spreadsheet NilaiGuide.
+-- Portal hanya menyimpan tautan pos dan catatan kiriman (tanpa nama guide/nilai/catatan).
+CREATE TABLE IF NOT EXISTS guide_form_links (
+ id TEXT PRIMARY KEY, pos INTEGER NOT NULL CHECK(pos IN(1,3)), label TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash)=64),
+ share_token TEXT CHECK(share_token IS NULL OR length(share_token)=64), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ revoked_at TEXT, revoked_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), CHECK(is_active=1 OR revoked_at IS NOT NULL));
+CREATE UNIQUE INDEX IF NOT EXISTS guide_form_one_active_link ON guide_form_links(pos) WHERE is_active=1;
+CREATE TABLE IF NOT EXISTS guide_form_rate_limits (id TEXT PRIMARY KEY, window_start TEXT NOT NULL, hits INTEGER NOT NULL CHECK(hits>0));
+CREATE TABLE IF NOT EXISTS guide_form_submissions (
+ id TEXT PRIMARY KEY, link_id TEXT NOT NULL REFERENCES guide_form_links(id), pos INTEGER NOT NULL CHECK(pos IN(1,2,3)), evaluation_id TEXT NOT NULL,
+ outcome TEXT NOT NULL CHECK(outcome IN('ACCEPTED','DUPLICATE','REJECTED')), reason TEXT CHECK(reason IS NULL OR reason IN('JEDA','KOREKSI','GUIDE','WAKTU','POS','VALIDASI')),
+ received_at TEXT NOT NULL, ip_hmac TEXT CHECK(ip_hmac IS NULL OR length(ip_hmac)=64),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS guide_form_submissions_pos_time ON guide_form_submissions(pos,received_at);
+CREATE INDEX IF NOT EXISTS guide_form_submissions_time ON guide_form_submissions(received_at);

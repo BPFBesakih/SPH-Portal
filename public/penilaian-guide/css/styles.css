@@ -1,0 +1,287 @@
+/* =========================================================
+   Penilaian Guide Kawasan Besakih
+   Desain: target sentuh besar (>=56px), teks >=16px,
+   kontras tinggi, bahasa Indonesia.
+   ========================================================= */
+:root{
+  --hijau:#0B5D3B;
+  --hijau-tua:#084229;
+  --hijau-muda:#E7F3EC;
+  --emas:#C8942B;
+  --merah:#B3261E;
+  --merah-muda:#FCEBEA;
+  --abu:#5C6360;
+  --abu-muda:#EDEFEE;
+  --garis:#D6DBD8;
+  --teks:#12211A;
+  --bg:#F6F8F7;
+  --putih:#FFFFFF;
+  --radius:16px;
+  --tap:56px;
+  --shadow:0 2px 10px rgba(8,66,41,.10);
+  --shadow-lg:0 8px 28px rgba(8,66,41,.18);
+}
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  font-size:17px; line-height:1.45; color:var(--teks); background:var(--bg);
+  padding-top:calc(64px + env(safe-area-inset-top));
+  -webkit-text-size-adjust:100%;
+}
+.hidden{display:none !important}
+/* Atribut [hidden] harus selalu menang atas `display` milik class
+   (.view, .drawer, .tutorial semuanya menyetel display). */
+[hidden]{display:none !important}
+svg{width:28px;height:28px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+
+/* ------------------------- App bar ------------------------- */
+.appbar{
+  position:fixed; top:0; left:0; right:0; z-index:40;
+  height:calc(64px + env(safe-area-inset-top));
+  padding:env(safe-area-inset-top) 12px 0;
+  display:flex; align-items:center; gap:8px;
+  background:var(--hijau); color:#fff; box-shadow:var(--shadow);
+}
+.appbar h1{font-size:19px;margin:0;flex:1;font-weight:700;letter-spacing:.2px}
+.iconbtn{
+  width:var(--tap); height:var(--tap); min-width:var(--tap);
+  display:grid; place-items:center; border:0; border-radius:14px;
+  background:transparent; color:#fff; cursor:pointer;
+}
+.iconbtn:active{background:rgba(255,255,255,.18)}
+
+.netbadge{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.16);
+  padding:8px 12px;border-radius:999px;font-size:14px;font-weight:600;white-space:nowrap}
+.netbadge .dot{width:10px;height:10px;border-radius:50%;background:#7CE0A5}
+.netbadge.offline{background:rgba(0,0,0,.25)}
+.netbadge.offline .dot{background:#FFB4AB}
+.netbadge.syncing .dot{background:#FFD782;animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.25}}
+
+/* ------------------------- Drawer ------------------------- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;animation:fade .18s}
+@keyframes fade{from{opacity:0}}
+.drawer{
+  position:fixed; top:0; bottom:0; left:0; width:min(84vw,320px); z-index:51;
+  background:var(--putih); box-shadow:var(--shadow-lg);
+  display:flex; flex-direction:column; padding:env(safe-area-inset-top) 0 0;
+  animation:slide .2s ease-out; overflow-y:auto;
+}
+@keyframes slide{from{transform:translateX(-100%)}}
+.drawer-head{display:flex;align-items:center;gap:12px;padding:20px 18px;background:var(--hijau);color:#fff}
+.drawer-head small{display:block;opacity:.85;font-size:13px}
+.logo{font-size:34px;line-height:1}
+.logo.big{font-size:64px;text-align:center}
+.navitem{
+  display:flex;align-items:center;gap:14px;width:100%;
+  min-height:var(--tap); padding:14px 18px; border:0; background:transparent;
+  font-size:17px; font-weight:600; color:var(--teks); text-align:left; cursor:pointer;
+  border-bottom:1px solid var(--abu-muda);
+}
+.navitem:active{background:var(--hijau-muda)}
+.navitem .ni{font-size:24px;width:32px;text-align:center}
+.drawer-foot{margin-top:auto;padding:16px 18px;border-top:1px solid var(--garis)}
+.mini{font-size:13px;color:var(--abu)}
+
+/* ------------------------- Layout ------------------------- */
+main{max-width:640px;margin:0 auto;padding:16px 16px calc(28px + env(safe-area-inset-bottom))}
+.view{display:flex;flex-direction:column;gap:16px;animation:rise .18s ease-out}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}}
+
+/* ------------------------- Hero / Home ------------------------- */
+.hero{background:linear-gradient(140deg,var(--hijau),var(--hijau-tua));color:#fff;
+  border-radius:var(--radius);padding:18px;box-shadow:var(--shadow)}
+.hero .lbl{color:rgba(255,255,255,.9)}
+.hero .bigselect{background:rgba(255,255,255,.96)}
+
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat{background:var(--putih);border:1px solid var(--garis);border-radius:var(--radius);
+  padding:14px 8px;text-align:center}
+.stat-num{font-size:30px;font-weight:800;line-height:1.1}
+.stat-num.warn{color:var(--emas)} .stat-num.ok{color:var(--hijau)}
+.stat-lbl{font-size:13px;color:var(--abu);margin-top:2px}
+
+/* ------------------------- Buttons ------------------------- */
+.bigbutton{
+  display:flex;align-items:center;gap:14px;width:100%;
+  min-height:72px;padding:14px 18px;border-radius:var(--radius);
+  border:2px solid transparent;font-family:inherit;font-size:17px;
+  text-align:left;cursor:pointer;background:var(--putih);color:var(--teks);
+  box-shadow:var(--shadow);transition:transform .06s;
+}
+.bigbutton:active{transform:scale(.985)}
+.bigbutton .bb-icon{font-size:30px;width:40px;text-align:center;flex:0 0 auto}
+.bigbutton .bb-text{display:flex;flex-direction:column;line-height:1.25}
+.bigbutton .bb-text strong{font-size:18px}
+.bigbutton .bb-text small{font-size:14px;opacity:.75}
+.bigbutton.primary{background:var(--hijau);color:#fff}
+.bigbutton.ghost{background:var(--putih);border-color:var(--garis);box-shadow:none}
+.bigbutton.danger{background:var(--merah-muda);color:var(--merah);border-color:#F3C9C6;box-shadow:none}
+.bigbutton.compact{min-height:56px;justify-content:center;text-align:center;padding:12px 22px;width:auto}
+.bigbutton[disabled]{opacity:.55;pointer-events:none}
+.bigbutton.sticky{position:sticky;bottom:calc(12px + env(safe-area-inset-bottom));z-index:10}
+.linkbtn{background:none;border:0;color:var(--abu);font-size:16px;font-family:inherit;
+  padding:16px;cursor:pointer;text-decoration:underline;min-height:var(--tap)}
+
+/* ------------------------- Form ------------------------- */
+.field{display:flex;flex-direction:column;gap:8px;background:var(--putih);
+  border:1px solid var(--garis);border-radius:var(--radius);padding:16px}
+.hero .field{background:none;border:0;padding:0}
+.lbl{font-size:16px;font-weight:700}
+.lbl small{font-weight:400;color:var(--abu)}
+.help{font-size:14px;color:var(--abu)}
+.bigselect,.bigtext{
+  width:100%;min-height:var(--tap);padding:14px 14px;font-size:17px;font-family:inherit;
+  color:var(--teks);background:var(--putih);border:2px solid var(--garis);border-radius:12px;
+}
+.bigtext{min-height:auto;resize:vertical}
+.bigselect:focus,.bigtext:focus{outline:none;border-color:var(--hijau);box-shadow:0 0 0 3px var(--hijau-muda)}
+select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230B5D3B' stroke-width='3' stroke-linecap='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 14px center;background-size:22px;padding-right:46px}
+.duakolom{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sublbl{display:block;font-size:14px;font-weight:600;color:var(--abu);margin-bottom:4px}
+
+.picked{background:var(--hijau-muda);border-radius:12px;padding:10px 14px;font-size:15px;font-weight:600;color:var(--hijau-tua)}
+
+/* ------------------------- Kriteria ------------------------- */
+.criterion{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:12px 0;border-top:1px solid var(--abu-muda);flex-wrap:wrap}
+.criterion:first-of-type{border-top:0}
+.crit-head{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700}
+.crit-icon{font-size:26px}
+.segmented{display:flex;gap:0;border:2px solid var(--garis);border-radius:14px;overflow:hidden}
+.seg{
+  min-width:88px;min-height:52px;padding:0 18px;border:0;background:var(--putih);
+  font-family:inherit;font-size:17px;font-weight:700;color:var(--abu);cursor:pointer;
+}
+.seg + .seg{border-left:2px solid var(--garis)}
+.seg.yes.on{background:var(--hijau);color:#fff}
+.seg.no.on{background:var(--merah);color:#fff}
+/* Uniform punya tiga tingkat, jadi labelnya lebih panjang daripada Ya/Tidak.
+   Teks dikecilkan sedikit supaya ketiganya tetap muat di layar HP sempit. */
+.segmented.tiga .seg{font-size:.92rem;padding-left:.35rem;padding-right:.35rem}
+.seg.plus.on{background:var(--emas);color:#fff}
+.criterion.unset .segmented{border-color:var(--emas)}
+
+/* Penghitung Review — tombol besar, tanpa mengetik */
+.stepper{display:flex;align-items:center;gap:0;border:2px solid var(--garis);
+  border-radius:14px;overflow:hidden}
+.stepbtn{min-width:60px;min-height:52px;border:0;background:var(--putih);
+  font-family:inherit;font-size:26px;font-weight:700;color:var(--hijau);
+  cursor:pointer;line-height:1}
+.stepbtn:active{background:var(--hijau-muda)}
+.stepbtn[disabled]{color:var(--garis);pointer-events:none}
+.stepnilai{min-width:56px;min-height:52px;display:grid;place-items:center;
+  font-size:22px;font-weight:800;background:var(--hijau-muda);color:var(--hijau-tua);
+  border-left:2px solid var(--garis);border-right:2px solid var(--garis)}
+.draft-note{font-size:14px;color:var(--hijau);text-align:center}
+
+/* ------------------------- Cards / Riwayat ------------------------- */
+.cards{display:flex;flex-direction:column;gap:10px}
+.card{background:var(--putih);border:1px solid var(--garis);border-radius:var(--radius);
+  padding:14px 16px;display:flex;gap:12px;align-items:flex-start;text-align:left;
+  width:100%;font-family:inherit;font-size:16px;cursor:pointer}
+.card .cstat{font-size:24px;flex:0 0 auto}
+.card .cbody{flex:1;min-width:0}
+.card .cname{font-weight:700;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .cmeta{font-size:14px;color:var(--abu);margin-top:2px}
+.badges{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.badge{font-size:13px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--hijau-muda);color:var(--hijau-tua)}
+.badge.bad{background:var(--merah-muda);color:var(--merah)}
+.empty{text-align:center;color:var(--abu);padding:40px 16px;font-size:16px}
+.empty .big{font-size:52px;display:block;margin-bottom:8px}
+
+.filterbar{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}
+.chip{min-height:48px;padding:0 18px;border-radius:999px;border:2px solid var(--garis);
+  background:var(--putih);font-family:inherit;font-size:15px;font-weight:600;
+  color:var(--abu);cursor:pointer;white-space:nowrap}
+.chip.active{background:var(--hijau);border-color:var(--hijau);color:#fff}
+/* Tombol "Coba lagi" pada entri yang ditahan. Tetap >=48px seperti chip lain
+   (AC-7), tapi dibedakan warnanya supaya tidak tertukar dengan filter. */
+.retrybtn{margin-top:10px;border-color:var(--emas);background:#FFF6E0;font-size:15px}
+.card.ditahan{border-color:var(--emas);background:#FFFDF5}
+/* Penilaian yang sudah dibetulkan: tetap terlihat sebagai jejak, tapi jelas
+   bukan angka yang berlaku. */
+.card.diganti{opacity:.62}
+.card.diganti .cname{text-decoration:line-through}
+
+/* ------------------------- Switch ------------------------- */
+.switchrow{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  background:var(--putih);border:1px solid var(--garis);border-radius:var(--radius);padding:14px 16px;min-height:72px}
+.switchrow small{display:block;color:var(--abu);font-size:14px}
+.switch{position:relative;flex:0 0 auto;width:64px;height:38px}
+.switch input{opacity:0;width:0;height:0}
+.switch span{position:absolute;inset:0;background:var(--garis);border-radius:999px;transition:.18s;cursor:pointer}
+.switch span::after{content:"";position:absolute;top:4px;left:4px;width:30px;height:30px;
+  border-radius:50%;background:#fff;transition:.18s;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.switch input:checked + span{background:var(--hijau)}
+.switch input:checked + span::after{transform:translateX(26px)}
+
+.aktifbox{background:var(--hijau-muda);border:1px solid #BFE0CD;border-radius:12px;
+  padding:10px 12px;font-size:14px;line-height:1.5}
+.aktifbox strong{display:block;font-size:14px;color:var(--hijau-tua)}
+.aktifbox span{display:block;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:12.5px;color:var(--teks);margin:2px 0}
+.aktifbox em{display:block;font-style:normal;font-size:13px;color:var(--abu)}
+.aktifbox.kosong{background:var(--merah-muda);border-color:#F3C9C6}
+.aktifbox.kosong strong{color:var(--merah)}
+
+.notice{background:#FFF6E0;border:2px solid var(--emas);border-radius:var(--radius);padding:14px 16px}
+.notice strong{display:block;font-size:17px;margin-bottom:6px}
+.notice p{margin:0;font-size:15px;line-height:1.5}
+.notice code{background:rgba(0,0,0,.07);padding:2px 6px;border-radius:6px;font-size:14px;word-break:break-all}
+
+.storagebox{background:var(--putih);border:1px solid var(--garis);border-radius:var(--radius);padding:14px 16px}
+.storagebar{height:12px;background:var(--abu-muda);border-radius:999px;overflow:hidden;margin-bottom:8px}
+.storagebar i{display:block;height:100%;width:0;background:var(--hijau);transition:width .3s}
+.storagebar.full i{background:var(--merah)}
+
+/* ------------------------- Tentang ------------------------- */
+.about{background:var(--putih);border:1px solid var(--garis);border-radius:var(--radius);padding:24px 20px;text-align:center}
+.about h2{font-size:21px;margin:8px 0 12px}
+.checklist{list-style:none;padding:0;margin:16px 0;text-align:left;display:inline-block}
+.checklist li{padding:8px 0 8px 32px;position:relative;font-size:16px}
+.checklist li::before{content:"✅";position:absolute;left:0}
+
+/* ------------------------- Tutorial ------------------------- */
+.tutorial{position:fixed;inset:0;z-index:60;background:rgba(8,66,41,.94);
+  display:grid;place-items:center;padding:24px}
+.tut-card{background:var(--putih);border-radius:24px;padding:28px 24px;max-width:420px;width:100%;text-align:center}
+.tut-step{font-size:64px;line-height:1}
+.tut-card h2{font-size:22px;margin:14px 0 8px}
+.tut-card p{font-size:17px;color:var(--abu);margin:0 0 20px;line-height:1.5}
+.tut-dots{display:flex;justify-content:center;gap:8px;margin-bottom:20px}
+.tut-dots i{width:10px;height:10px;border-radius:50%;background:var(--garis)}
+.tut-dots i.on{background:var(--hijau);width:26px;border-radius:999px}
+.tut-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
+
+/* ------------------------- Toast ------------------------- */
+.toastwrap{position:fixed;left:0;right:0;bottom:calc(16px + env(safe-area-inset-bottom));
+  z-index:70;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;padding:0 16px}
+.toast{background:var(--teks);color:#fff;padding:16px 20px;border-radius:14px;font-size:16px;font-weight:600;
+  box-shadow:var(--shadow-lg);max-width:520px;width:100%;display:flex;gap:10px;align-items:center;
+  animation:toastin .2s ease-out}
+.toast.ok{background:var(--hijau)} .toast.err{background:var(--merah)} .toast.warn{background:var(--emas);color:#3a2a00}
+.toast .ticon{font-size:22px}
+@keyframes toastin{from{opacity:0;transform:translateY(14px)}}
+
+/* ------------------------- Tablet ------------------------- */
+@media(min-width:720px){
+  body{font-size:18px}
+  main{max-width:760px;padding:24px}
+  .view{gap:20px}
+  .bigbutton{min-height:84px}
+  .appbar h1{font-size:22px}
+}
+@media(prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
+
+/* ---------------- Tautan pos (SPH-Portal) ---------------- */
+.posbadge{font-size:20px;font-weight:800;line-height:1.3;padding:12px 14px;border-radius:12px;background:var(--hijau-muda);color:var(--hijau-tua)}
+.hero .posbadge{background:rgba(255,255,255,.14);color:#fff;padding:8px 0;background:none}
+.hero .bigselect{margin-top:8px}
+.notice.bahaya{background:var(--merah-muda);border-color:var(--merah)}
+.notice p + p{margin-top:8px}
+.card .linkpos{flex:1;min-width:0}
+.card .linkpos small{display:block;color:var(--abu);font-size:14px}

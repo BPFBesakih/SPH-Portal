@@ -18,7 +18,13 @@ const resourceNames={
   'merchandise.catalog':'Bisnis: katalog dan harga merchandise',
   'merchandise.stock':'Bisnis: stok barang',
   'merchandise.sales':'Bisnis: penjualan',
-  'merchandise.reports':'Bisnis: laporan penjualan'
+  'merchandise.reports':'Bisnis: laporan penjualan',
+  'visits.dashboard':'Kunjungan: dashboard penilaian guide',
+  'visits.guides':'Kunjungan: data guide',
+  'visits.records':'Kunjungan: daftar penilaian',
+  'visits.forms':'Kunjungan: tautan pos',
+  'visits.reports':'Kunjungan: laporan dan ekspor',
+  'visits.settings':'Kunjungan: pengaturan modul'
 };
 const actionNames={
   read:'Lihat',create:'Tambah',update:'Ubah',manage:'Kelola',

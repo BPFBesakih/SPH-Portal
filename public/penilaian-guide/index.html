@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B5D3B">
+<meta name="description" content="Formulir penilaian guide pos pemeriksaan BP Besakih — offline first">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Penilaian Guide — BP Besakih</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Penilaian Guide">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<!-- ===================== HEADER ===================== -->
+<header class="appbar">
+  <button id="btnMenu" class="iconbtn" aria-label="Buka menu" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+  </button>
+  <button id="btnBack" class="iconbtn hidden" aria-label="Kembali">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <h1 id="appTitle">Penilaian Guide</h1>
+  <div id="netBadge" class="netbadge" title="Status jaringan">
+    <span class="dot"></span><span class="netlabel">Online</span>
+  </div>
+</header>
+
+<!-- ===================== DRAWER ===================== -->
+<div id="scrim" class="scrim" hidden></div>
+<nav id="drawer" class="drawer" aria-label="Menu utama" hidden>
+  <div class="drawer-head">
+    <div class="logo">🛕</div>
+    <div>
+      <strong>Kawasan Besakih</strong>
+      <small>Penilaian Guide</small>
+    </div>
+  </div>
+  <button class="navitem" data-nav="home"><span class="ni">🏠</span> Beranda</button>
+  <button class="navitem" data-nav="nilai"><span class="ni">📝</span> Penilaian Baru</button>
+  <button class="navitem" data-nav="guides"><span class="ni">👥</span> Daftar Guide</button>
+  <button class="navitem" data-nav="riwayat"><span class="ni">🗂️</span> Riwayat</button>
+  <button class="navitem" data-nav="pengaturan"><span class="ni">⚙️</span> Pengaturan</button>
+  <button class="navitem" data-nav="tentang"><span class="ni">ℹ️</span> Tentang</button>
+  <div class="drawer-foot">
+    <div id="drawerSync" class="mini">Menunggu sync: 0</div>
+    <div class="mini">Versi <span data-version></span></div>
+  </div>
+</nav>
+
+<main id="main">
+
+  <!-- ===================== HOME ===================== -->
+  <section id="view-home" class="view">
+    <div class="hero">
+      <div class="hero-pos">
+        <label class="lbl" for="homePos">Pos Pemeriksaan</label>
+        <div id="posLabel" class="posbadge">Belum ada tautan pos</div>
+        <!-- Pemilih pos hanya muncul bila HP menyimpan tautan lebih dari satu pos. -->
+        <select id="homePos" class="bigselect" hidden></select>
+      </div>
+    </div>
+
+    <div id="tautanNotice" class="notice" hidden></div>
+    <div id="updateBar" class="notice" hidden>
+      <strong>🆕 Versi baru siap</strong>
+      <p>Aplikasi akan memuat ulang sendiri setelah penilaian disimpan. Isian yang sedang diketik tidak hilang.</p>
+      <button type="button" id="btnMuatUlang" class="chip retrybtn">🔄 Muat ulang sekarang</button>
+    </div>
+
+    <button id="btnNewEval" class="bigbutton primary">
+      <span class="bb-icon">📝</span>
+      <span class="bb-text">
+        <strong>Penilaian Baru</strong>
+        <small>Nilai guide di pos ini</small>
+      </span>
+    </button>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-num" id="statTotal">0</div>
+        <div class="stat-lbl">Penilaian Hari Ini</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num warn" id="statPending">0</div>
+        <div class="stat-lbl">Menunggu Sync</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num ok" id="statSynced">0</div>
+        <div class="stat-lbl">Terkirim</div>
+      </div>
+    </div>
+
+    <div id="homeDitahan" class="notice" hidden></div>
+    <div id="jamNotice" class="notice" hidden></div>
+
+    <button id="btnSyncNow" class="bigbutton ghost">
+      <span class="bb-icon">🔄</span>
+      <span class="bb-text"><strong>Kirim Sekarang</strong><small id="syncHint">Kirim data yang menunggu</small></span>
+    </button>
+
+    <button class="bigbutton ghost" data-nav="riwayat">
+      <span class="bb-icon">🗂️</span>
+      <span class="bb-text"><strong>Lihat Riwayat</strong><small>Cek data terkirim &amp; tertunda</small></span>
+    </button>
+  </section>
+
+  <!-- ===================== PENILAIAN ===================== -->
+  <section id="view-nilai" class="view" hidden>
+    <div id="koreksiBar" class="notice" hidden></div>
+
+    <form id="formEval" autocomplete="off">
+      <div class="field">
+        <span class="lbl">1. Pos Pemeriksaan</span>
+        <div id="posFormLabel" class="posbadge">—</div>
+      </div>
+
+      <div class="field">
+        <span class="lbl">2. Pilih Guide</span>
+
+        <div class="duakolom">
+          <div>
+            <label class="sublbl" for="filterKategori">Kategori</label>
+            <select id="filterKategori" class="bigselect">
+              <option value="">Semua</option>
+              <option value="Asing">Asing</option>
+              <option value="Domestik">Domestik</option>
+            </select>
+          </div>
+          <div>
+            <label class="sublbl" for="filterRegu">Regu</label>
+            <select id="filterRegu" class="bigselect">
+              <option value="">Semua</option>
+              <option value="1">Regu 1</option>
+              <option value="2">Regu 2</option>
+            </select>
+          </div>
+        </div>
+
+        <input id="guideInput" class="bigselect" list="guideList" placeholder="Ketik nama atau pilih…" required
+               inputmode="search" aria-describedby="guideHelp">
+        <datalist id="guideList"></datalist>
+        <div id="guideHelp" class="help">Ketik sebagian nama untuk mencari. <span id="guideCount"></span></div>
+        <div id="guideAmbigu" class="help" hidden></div>
+        <div id="guidePicked" class="picked hidden"></div>
+      </div>
+
+      <div class="field">
+        <span class="lbl">3. Penilaian</span>
+
+        <div class="criterion" data-crit="idCard">
+          <div class="crit-head"><span class="crit-icon">🪪</span><span class="crit-name">ID‑Card</span></div>
+          <div class="segmented" role="group" aria-label="Penilaian ID-Card">
+            <button type="button" class="seg yes" data-val="1">Ya</button>
+            <button type="button" class="seg no"  data-val="0">Tidak</button>
+          </div>
+        </div>
+
+        <div class="criterion" data-crit="uniform">
+          <div class="crit-head"><span class="crit-icon">👔</span><span class="crit-name">Uniform</span></div>
+          <div class="segmented tiga" role="group" aria-label="Penilaian Uniform">
+            <button type="button" class="seg no"  data-val="-1">Tidak sesuai</button>
+            <button type="button" class="seg yes" data-val="1">Sesuai</button>
+            <button type="button" class="seg plus" data-val="2">Bagus</button>
+          </div>
+        </div>
+
+        <div class="criterion" data-crit="etika">
+          <div class="crit-head"><span class="crit-icon">🤝</span><span class="crit-name">Etika</span></div>
+          <div class="stepper" role="group" aria-label="Nilai etika">
+            <button type="button" class="stepbtn" data-step="-1" aria-label="Kurangi">−</button>
+            <span id="etikaNilai" class="stepnilai" aria-live="polite">0</span>
+            <button type="button" class="stepbtn" data-step="1" aria-label="Tambah">+</button>
+          </div>
+        </div>
+        <div class="help">Uniform: Tidak sesuai (−1), Sesuai (+1), atau Bagus (+2). Etika diisi angka −5 sampai +5; biarkan 0 bila tidak ada catatan khusus.</div>
+      </div>
+
+      <div class="field">
+        <label class="lbl" for="catatan">Catatan <small>(boleh kosong)</small></label>
+        <textarea id="catatan" class="bigtext" rows="2" placeholder="Contoh: seragam tidak lengkap"></textarea>
+      </div>
+
+      <div class="draft-note" id="draftNote" hidden>💾 Draft tersimpan otomatis</div>
+
+      <button type="submit" id="btnSave" class="bigbutton primary sticky">
+        <span class="bb-icon">💾</span>
+        <span class="bb-text"><strong>SIMPAN PENILAIAN</strong><small>Tersimpan walau tanpa sinyal</small></span>
+      </button>
+    </form>
+  </section>
+
+  <!-- ===================== DAFTAR GUIDE ===================== -->
+  <section id="view-guides" class="view" hidden>
+    <input id="guideSearch" class="bigselect" placeholder="🔍 Cari guide…" inputmode="search">
+    <div class="filterbar">
+      <button class="chip active" data-gfilter="">Semua</button>
+      <button class="chip" data-gfilter="Asing">Asing</button>
+      <button class="chip" data-gfilter="Domestik">Domestik</button>
+    </div>
+    <div id="guideTotal" class="help"></div>
+    <div id="guideCards" class="cards"></div>
+  </section>
+
+  <!-- ===================== RIWAYAT ===================== -->
+  <section id="view-riwayat" class="view" hidden>
+    <div class="filterbar">
+      <button class="chip active" data-filter="all">Semua</button>
+      <button class="chip" data-filter="pending">⏳ Tertunda</button>
+      <button class="chip" data-filter="synced">✅ Terkirim</button>
+      <button class="chip" data-filter="ditahan">🚫 Ditahan</button>
+    </div>
+    <div id="ditahanBar" class="notice" hidden></div>
+    <div id="historyList" class="cards"></div>
+    <button id="btnMoreHistory" class="bigbutton ghost" hidden>
+      <span class="bb-icon">⬇️</span>
+      <span class="bb-text"><strong>Tampilkan lebih banyak</strong><small id="historyMoreHint"></small></span>
+    </button>
+    <button id="btnExportCsv" class="bigbutton ghost">
+      <span class="bb-icon">📄</span>
+      <span class="bb-text"><strong>Export Rekap CSV</strong><small>Rekap perangkat ini — untuk dicocokkan dengan spreadsheet</small></span>
+    </button>
+  </section>
+
+  <!-- ===================== PENGATURAN ===================== -->
+  <section id="view-pengaturan" class="view" hidden>
+    <div class="field">
+      <span class="lbl">Tautan pos tersimpan</span>
+      <div id="tautanList" class="cards"></div>
+      <div class="help">Tautan pos diberikan pengelola kunjungan. Simpan tautan Pos 1 dan Pos 3 bila HP ini dipakai bergantian di kedua pos.</div>
+    </div>
+
+    <button class="bigbutton ghost" data-nav="tautan">
+      <span class="bb-icon">🔗</span>
+      <span class="bb-text"><strong>Tambah / Ganti Tautan Pos</strong><small>Tempel tautan dari pengelola</small></span>
+    </button>
+
+    <div class="switchrow">
+      <div><strong>Mode Offline Paksa</strong><small>Jangan pernah kirim otomatis</small></div>
+      <label class="switch"><input type="checkbox" id="optForceOffline"><span></span></label>
+    </div>
+
+    <div class="switchrow">
+      <div><strong>Enkripsi Data Lokal</strong><small>AES‑256‑GCM di perangkat</small></div>
+      <label class="switch"><input type="checkbox" id="optEncrypt" checked><span></span></label>
+    </div>
+
+    <div class="switchrow">
+      <div><strong>Getar saat Simpan</strong><small>Umpan balik haptic</small></div>
+      <label class="switch"><input type="checkbox" id="optHaptic" checked><span></span></label>
+    </div>
+
+    <button id="btnTestServer" class="bigbutton ghost">
+      <span class="bb-icon">📡</span>
+      <span class="bb-text"><strong>Tes Koneksi &amp; Perbarui Daftar Guide</strong><small id="testHint">Periksa tautan pos dan muat daftar guide terbaru</small></span>
+    </button>
+
+    <button id="btnForceSync" class="bigbutton ghost">
+      <span class="bb-icon">🔄</span>
+      <span class="bb-text"><strong>Force Sync</strong><small>Kirim ulang semua data tertunda</small></span>
+    </button>
+
+    <button id="btnBackup" class="bigbutton ghost">
+      <span class="bb-icon">📦</span>
+      <span class="bb-text"><strong>Export Cadangan JSON</strong><small>Simpan semua data lokal ke file</small></span>
+    </button>
+
+    <button id="btnClearSynced" class="bigbutton danger">
+      <span class="bb-icon">🧹</span>
+      <span class="bb-text"><strong>Hapus Data Terkirim</strong><small>Kosongkan penyimpanan lokal</small></span>
+    </button>
+
+    <div id="backupStatus" class="notice" hidden></div>
+    <div id="jamStatus" class="notice" hidden></div>
+
+    <div id="storageBar" class="storagebox">
+      <div class="storagebar"><i></i></div>
+      <div class="mini" id="storageText">Menghitung penyimpanan…</div>
+    </div>
+  </section>
+
+  <!-- ===================== TAUTAN POS ===================== -->
+  <section id="view-tautan" class="view" hidden>
+    <div class="notice">
+      <strong>🔗 Minta tautan pos kepada pengelola kunjungan</strong>
+      <p>Buka tautan pos (dari WhatsApp atau QR) satu kali saat ada sinyal. Setelah itu formulir bisa dipakai tanpa sinyal.</p>
+      <p>Di iPhone, aplikasi yang dibuka dari layar utama tidak membawa tautan dari Safari. Salin tautan pos, lalu tempel di kotak ini.</p>
+    </div>
+    <form id="formTautan" autocomplete="off">
+      <div class="field">
+        <label class="lbl" for="tautanInput">Tempel tautan pos</label>
+        <input id="tautanInput" class="bigselect" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://bpbesakih.com/penilaian-guide/#…">
+        <div id="tautanHasil" class="help" hidden></div>
+      </div>
+      <button type="submit" class="bigbutton primary">
+        <span class="bb-icon">🔗</span>
+        <span class="bb-text"><strong>Simpan Tautan Pos</strong><small>Butuh sinyal sekali untuk memeriksa tautan</small></span>
+      </button>
+    </form>
+  </section>
+
+  <!-- ===================== TENTANG ===================== -->
+  <section id="view-tentang" class="view" hidden>
+    <div class="about">
+      <div class="logo big">🛕</div>
+      <h2>Penilaian Guide Kawasan Besakih</h2>
+      <p>Formulir pencatatan kepatuhan guide di pos pemeriksaan: <strong>Uniform</strong>, <strong>ID‑Card</strong>, dan <strong>Etika</strong>. Bagian dari SPH-Portal BP Besakih.</p>
+      <ul class="checklist">
+        <li>Bekerja penuh tanpa jaringan</li>
+        <li>Data tersimpan aman di perangkat</li>
+        <li>Terkirim otomatis saat sinyal tersedia</li>
+        <li>Tidak mencatat nama petugas, lokasi, atau foto</li>
+      </ul>
+      <p class="mini">Versi <span data-version></span> · Mode penyimpanan: <span id="aboutStorage">IndexedDB</span></p>
+      <p class="mini">Berkas terpasang: <span id="aboutSw">memeriksa…</span></p>
+      <button id="btnShowTutorial" class="bigbutton ghost">
+        <span class="bb-icon">🎓</span>
+        <span class="bb-text"><strong>Lihat Panduan Lagi</strong><small>Tutorial singkat penggunaan</small></span>
+      </button>
+    </div>
+  </section>
+
+</main>
+
+<!-- ===================== TUTORIAL OVERLAY ===================== -->
+<div id="tutorial" class="tutorial" hidden>
+  <div class="tut-card">
+    <div class="tut-step" id="tutIcon">👋</div>
+    <h2 id="tutTitle">Selamat Datang</h2>
+    <p id="tutBody">Aplikasi ini untuk menilai guide di pos pemeriksaan. Ikuti 4 langkah singkat berikut.</p>
+    <div class="tut-dots" id="tutDots"></div>
+    <div class="tut-actions">
+      <button id="tutSkip" class="linkbtn">Lewati</button>
+      <button id="tutNext" class="bigbutton primary compact">Lanjut</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== TOAST ===================== -->
+<div id="toastWrap" class="toastwrap" aria-live="polite"></div>
+
+<script src="js/db.js"></script>
+<script src="js/sync.js"></script>
+<script src="js/app/00-inti.js"></script>
+<script src="js/app/01-navigasi.js"></script>
+<script src="js/app/02-guide.js"></script>
+<script src="js/app/03-form.js"></script>
+<script src="js/app/04-riwayat.js"></script>
+<script src="js/app/05-export.js"></script>
+<script src="js/app/06-status.js"></script>
+<script src="js/app/07-mulai.js"></script>
+</body>
+</html>
