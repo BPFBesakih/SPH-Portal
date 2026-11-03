@@ -46,22 +46,34 @@ try{
   // Baris daftar saran nama guide: ID, nama, dan keterangan ID · regu.
   const saran=()=>page.$$eval('#guideSaran .saran-item',els=>els.map(e=>({id:e.dataset.saran,nama:e.querySelector('.saran-nama').textContent,meta:e.querySelector('.saran-meta').textContent})));
   const pilihSaran=async name=>{const ids=(await saran()).filter(r=>r.nama===name).map(r=>r.id);assert.equal(ids.length,1,`satu saran bernama ${name}`);await page.click(`#guideSaran [data-saran="${ids[0]}"]`);};
-  const pick=async(name,uniform='1',id='1')=>{await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput',name);await pilihSaran(name);await page.click(`.criterion[data-crit="idCard"] .seg[data-val="${id}"]`);await page.click(`.criterion[data-crit="uniform"] .seg[data-val="${uniform}"]`);};
+  // Ketik sebagian nama lalu pilih dari daftar, seperti petugas di pos.
+  const pick=async(name,uniform='1',id='1')=>{await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput',name.slice(0,-1));await pilihSaran(name);await page.click(`.criterion[data-crit="idCard"] .seg[data-val="${id}"]`);await page.click(`.criterion[data-crit="uniform"] .seg[data-val="${uniform}"]`);};
   await page.goto(base+'/penilaian-guide/');await page.waitForTimeout(800);await page.click('#tutSkip').catch(()=>{});
   await check('UJI-02 tanpa token hanya petunjuk tautan, tanpa daftar guide',async()=>{assert(await page.isVisible('#view-tautan'));assert.equal(await page.evaluate(()=>App.state.guides.length),0);assert.equal((await saran()).length,0);});
   await page.goto(base+'/penilaian-guide/#'+tokens[1]);await page.waitForFunction(()=>App.state.guides.length>30);
   await check('UJI-01 tautan pos tersimpan, guide dari Data Guide portal termuat, token hilang dari alamat',async()=>{assert(!page.url().includes(tokens[1]));assert.match(await page.textContent('#posLabel'),/Pos 1/);});
   // Dulu <datalist>: Firefox menampilkan label "Asing · Regu 1" menggantikan nama guide.
+  // Perilaku sama dengan pemilih nama coaching/patroli: daftar muncul setelah 2 huruf, maks. 8 baris.
+  const petunjuk=()=>page.$eval('#guidePetunjuk',e=>e.textContent);
   await check('Daftar saran menampilkan nama guide beserta ID dan regu, bukan hanya "Asing · Regu 1"',async()=>{
-    await page.evaluate(()=>App.go('nilai'));await page.click('#guideInput');assert(await page.isVisible('#guideSaran'));assert.equal((await saran()).length,42);
-    await page.fill('#guideInput','contoh a1');const rows=await saran();assert.equal(rows.length,10);
+    await page.evaluate(()=>App.go('nilai'));await page.click('#guideInput');assert(await page.isHidden('#guideSaran'));assert.match(await petunjuk(),/Ketik minimal 2 huruf/);
+    await page.fill('#guideInput','c');assert(await page.isHidden('#guideSaran'),'satu huruf belum membuka daftar');
+    await page.fill('#guideInput','contoh a1');const rows=await saran();assert.equal(rows.length,8);assert.match(await petunjuk(),/Menampilkan 8 dari 10 hasil/);
     assert(rows.every(r=>/^Guide Contoh A1-\d\d$/.test(r.nama)&&/^G-\d{3} · Asing · Regu 1$/.test(r.meta)),JSON.stringify(rows));
     await page.keyboard.press('Escape');assert(await page.isHidden('#guideSaran'));
   });
+  await check('Nama yang dipilih tidak membuka daftar lagi; nama lengkap yang diketik langsung terpilih',async()=>{
+    await page.fill('#guideInput','contoh a2-0');await pilihSaran('Guide Contoh A2-05');assert(await page.isHidden('#guideSaran'));
+    assert.match(await page.textContent('#guidePicked'),/Guide Contoh A2-05 · G-015/);
+    await page.click('#guideInput');assert(await page.isHidden('#guideSaran'),'ketuk ulang kotak yang sudah terisi');
+    await page.fill('#guideInput','Guide Contoh D2-07');assert(await page.isHidden('#guideSaran'));assert.equal(await page.evaluate(()=>App.state.form.guide.guideId),'G-037');
+    await page.fill('#guideInput','');
+  });
   await check('Filter Kategori/Regu menyaring saran; nama dari regu lain tetap ditawarkan dengan keterangan',async()=>{
     await page.selectOption('#filterKategori','Domestik');await page.selectOption('#filterRegu','2');
-    await page.fill('#guideInput','contoh');const rows=await saran();assert.equal(rows.length,10);assert(rows.every(r=>r.meta.endsWith('Domestik · Regu 2')));
-    await page.fill('#guideInput','A1-03');assert.match(await page.textContent('#guideSaran'),/Tidak ada di Domestik · Regu 2/);assert.deepEqual((await saran()).map(r=>r.nama),['Guide Contoh A1-03']);
+    await page.fill('#guideInput','contoh');const rows=await saran();assert.equal(rows.length,8);assert(rows.every(r=>r.meta.endsWith('Domestik · Regu 2')));
+    await page.fill('#guideInput','A1-03');assert.match(await petunjuk(),/Tidak ada di Domestik · Regu 2/);assert.deepEqual((await saran()).map(r=>r.nama),['Guide Contoh A1-03']);
+    await page.fill('#guideInput','zzz');assert(await page.isHidden('#guideSaran'));assert.match(await petunjuk(),/Guide tidak ditemukan/);
     await page.selectOption('#filterKategori','');await page.selectOption('#filterRegu','');await page.fill('#guideInput','');
   });
   await check('Keyboard: panah bawah lalu Enter memilih saran tanpa mengirim formulir',async()=>{

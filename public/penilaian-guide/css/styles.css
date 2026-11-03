@@ -24,6 +24,9 @@
 
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0}
+/* Bilah judul tetap di atas: kotak isian yang digulir ke layar (mis. saat
+   keyboard HP muncul) berhenti di bawahnya, bukan tertutup. */
+html{scroll-padding-top:calc(72px + env(safe-area-inset-top))}
 body{
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   font-size:17px; line-height:1.45; color:var(--teks); background:var(--bg);
@@ -145,24 +148,20 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
 
 .picked{background:var(--hijau-muda);border-radius:12px;padding:10px 14px;font-size:15px;font-weight:600;color:var(--hijau-tua)}
 
-/* Daftar saran nama guide (pengganti <datalist>). Melayang di atas isi di
-   bawahnya, jadi menutupnya tidak menggeser tombol yang sedang diketuk.
-   max-height disetel 02-guide.js mengikuti ruang di atas keyboard HP. */
-.saran-wrap{position:relative}
-#guideInput{scroll-margin-top:calc(76px + env(safe-area-inset-top))}
-.saran{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:20;
-  max-height:min(52vh,420px);overflow-y:auto;-webkit-overflow-scrolling:touch;
-  background:var(--putih);border:2px solid var(--hijau);border-radius:12px;box-shadow:var(--shadow-lg)}
+/* Daftar saran nama guide (pengganti <datalist>). Seperti pemilih nama
+   formulir coaching/patroli: menyatu di bawah kotak nama, bukan melayang
+   menutupi tombol penilaian. */
+.saran-wrap{display:flex;flex-direction:column;gap:8px}
+.saran{max-height:320px;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  background:var(--putih);border:1px solid var(--garis);border-radius:12px}
 .saran-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
   min-height:var(--tap);padding:9px 14px;border:0;border-top:1px solid var(--abu-muda);
   background:var(--putih);font-family:inherit;text-align:left;color:var(--teks);cursor:pointer}
-#guideSaranDaftar .saran-item:first-child{border-top:0}
+.saran-item:first-child{border-top:0}
 .saran-item:active,.saran-item.aktif{background:var(--hijau-muda)}
 @media(hover:hover){.saran-item:hover{background:var(--hijau-muda)}}
-.saran-nama{font-size:17px;font-weight:700;line-height:1.3}
+.saran-nama{font-size:17px;font-weight:700;line-height:1.3;overflow-wrap:anywhere}
 .saran-meta{font-size:14px;line-height:1.3;color:var(--abu)}
-.saran-info{padding:10px 14px;font-size:14px;color:var(--abu);background:var(--bg)}
-.saran-info + #guideSaranDaftar .saran-item:first-child{border-top:1px solid var(--abu-muda)}
 
 /* ------------------------- Kriteria ------------------------- */
 .criterion{display:flex;align-items:center;justify-content:space-between;gap:12px;

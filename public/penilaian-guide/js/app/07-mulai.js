@@ -95,7 +95,9 @@
       if (cocok.length > 1) {
         App.state.form.guide = null;
         $('#guidePicked').classList.add('hidden');
-        App.tampilkanKandidat(cocok);
+        // Daftar saran sudah menampilkan nama kembar beserta ID-nya; chip
+        // hanya dipakai bila daftar saran tidak tersedia (berkas lama di cache).
+        App.tampilkanKandidat(App.tampilkanSaran ? null : cocok);
       } else {
         const g = cocok[0] || App.findGuide(teks);
         App.state.form.guide = g;
@@ -118,24 +120,16 @@
     // dari cache (keduanya diperbarui terpisah). Tanpa penjagaan ini, satu galat
     // di sini menghentikan semua binding di bawahnya, termasuk tombol SIMPAN.
     if (guideSaran && App.tampilkanSaran) {
-      guideInput.addEventListener('focus', () => {
-        App.tampilkanSaran();
-        // Di HP keyboard menutup hampir separuh layar. Kotak nama digeser ke atas
-        // supaya daftar saran di bawahnya terlihat beberapa baris, bukan satu.
-        if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
-          setTimeout(() => {
-            if (document.activeElement !== guideInput) return;
-            const halus = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-            guideInput.scrollIntoView({ block: 'start', behavior: halus ? 'smooth' : 'auto' });
-          }, 300);
-        }
-      });
-      // Kotak yang masih fokus diketuk lagi setelah daftarnya ditutup (Esc/pilih).
+      guideInput.addEventListener('focus', () => App.tampilkanSaran());
+      // Kotak yang masih fokus diketuk lagi setelah daftarnya ditutup (Esc).
       guideInput.addEventListener('click', () => { if (!App.saranTerbuka()) App.tampilkanSaran(); });
       guideInput.addEventListener('keydown', e => {
+        if (e.isComposing) return;
+        if (e.key === 'Tab') { App.tutupSaran(); return; }
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-          e.preventDefault();
           if (!App.saranTerbuka()) App.tampilkanSaran();
+          if (!App.saranTerbuka()) return;
+          e.preventDefault();
           App.geserSaran(e.key === 'ArrowDown' ? 1 : -1);
         } else if (e.key === 'Enter' && App.jumlahSaran()) {
           // Enter memilih baris yang disorot, satu-satunya baris, atau nama yang
@@ -149,13 +143,15 @@
           App.tutupSaran();
         }
       });
-      // Ditutup sedikit tertunda, supaya ketukan pada baris saran sempat diproses
-      // di peramban yang memindahkan fokus lebih dulu.
-      guideInput.addEventListener('blur', () => {
-        setTimeout(() => { if (document.activeElement !== guideInput) App.tutupSaran(); }, 150);
+      // Daftar menyatu dengan halaman, jadi menutupnya menggeser isi di
+      // bawahnya. Supaya tombol yang sedang ditekan tidak bergeser sebelum
+      // kliknya tercatat, daftar tidak ditutup saat fokus pindah ke tombol (atau
+      // ke mana-mana, di peramban yang tidak memfokuskan tombol) — klik di luar
+      // yang menutupnya, setelah klik itu diproses.
+      guideInput.addEventListener('blur', e => {
+        const ke = e.relatedTarget;
+        if (ke && !ke.closest('.saran-wrap') && !ke.closest('button')) App.tutupSaran();
       });
-      // Ketukan di luar kotak nama menutup daftar. Di iOS kotak nama tidak selalu
-      // kehilangan fokus saat tombol lain diketuk, jadi blur saja tidak cukup.
       document.addEventListener('click', e => {
         if (App.saranTerbuka() && !e.target.closest('.saran-wrap')) App.tutupSaran();
       });
@@ -168,13 +164,6 @@
         // Keyboard HP ditutup: langkah berikutnya menekan tombol penilaian.
         guideInput.blur();
       });
-      const ukurSaran = () => { if (App.saranTerbuka()) App.ukurSaran(); };
-      window.addEventListener('resize', ukurSaran);
-      window.addEventListener('scroll', ukurSaran, { passive: true });
-      if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', ukurSaran);
-        window.visualViewport.addEventListener('scroll', ukurSaran);
-      }
     }
 
     $('#catatan').addEventListener('input', e => { App.state.form.catatan = e.target.value; App.saveDraft(); });

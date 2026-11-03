@@ -22,8 +22,9 @@
                        catatan: '', lanjutJeda: null };
     App.tampilkanPos();
     $('#guideInput').value = '';
-    // Dijaga: selama pembaruan, HP bisa sesaat memuat 02-guide.js lama dari cache.
-    if (App.tutupSaran) App.tutupSaran();
+    // Kotak kosong: daftar saran tertutup dan keterangannya kembali ke petunjuk
+    // awal. Dijaga: selama pembaruan, HP bisa sesaat memuat 02-guide.js lama.
+    if (App.tampilkanSaran) App.tampilkanSaran();
     $('#catatan').value = '';
     $('#guidePicked').classList.add('hidden');
     App.tampilkanKandidat(null);

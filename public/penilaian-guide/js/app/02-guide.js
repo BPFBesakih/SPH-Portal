@@ -92,16 +92,18 @@
      sama. Selain itu nama yang kembar tidak bisa dibedakan, karena yang
      dikirim datalist hanya teks nama.
 
-     Daftar ini menampilkan nama + ID · regu di setiap baris, dan baris yang
-     dipilih menentukan guide lewat guideId (unik), bukan lewat nama.
+     Perilakunya mengikuti pemilih nama di formulir coaching dan patroli
+     (public/employee-picker.js): daftar baru muncul setelah 2 huruf, paling
+     banyak 8 baris, menyatu di bawah kotak nama (tidak melayang), dan baris
+     keterangan di bawahnya selalu memberi tahu keadaan pencarian. Bedanya,
+     setiap baris membawa ID · regu dan memilih guide lewat guideId (unik),
+     karena nama guide bisa kembar.
      --------------------------------------------------------- */
 
-  // Cukup untuk menggulir ke nama yang dicari tanpa membebani HP lama;
-  // selebihnya dipersempit dengan mengetik.
-  const SARAN_MAKS = 50;
-  // Batas tinggi daftar: minimal ±3 baris, maksimal ±7 baris.
-  const SARAN_TINGGI_MIN = 172;
-  const SARAN_TINGGI_MAKS = 420;
+  // Sama dengan pemilih nama coaching/patroli.
+  const SARAN_MIN_HURUF = 2;
+  const SARAN_MAKS = 8;
+  const PETUNJUK_AWAL = 'Ketik minimal 2 huruf nama guide, lalu pilih dari daftar.';
 
   // Huruf kecil, spasi dirapikan: "  i  WAYAN " sama dengan "i wayan".
   const rapikan = s => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -111,6 +113,17 @@
     const kat = $('#filterKategori') ? $('#filterKategori').value : '';
     const rg = $('#filterRegu') ? $('#filterRegu').value : '';
     return [kat, rg ? `Regu ${rg}` : ''].filter(Boolean).join(' · ');
+  };
+
+  /**
+   * Baris keterangan di bawah kotak nama. Selama mencari, isinya keadaan
+   * pencarian; selain itu petunjuk awal + jumlah guide sesuai filter.
+   */
+  const tulisPetunjuk = (teks) => {
+    const el = $('#guidePetunjuk');
+    const jumlah = $('#guideCount');
+    if (el) el.textContent = teks || PETUNJUK_AWAL;
+    if (jumlah) jumlah.hidden = !!teks;
   };
 
   /**
@@ -144,47 +157,57 @@
     return !!box && !box.hidden;
   }
 
-  /** Gambar ulang daftar saran sesuai ketikan dan filter yang aktif. */
+  /**
+   * Cari ulang sesuai ketikan dan filter, lalu tampilkan atau tutup daftar.
+   * Tidak membuka apa pun selama ketikan masih nama guide yang sudah dipilih
+   * — mengetuk lagi kotak yang sudah terisi tidak memunculkan daftar.
+   */
   App.tampilkanSaran = function tampilkanSaran() {
     const box = $('#guideSaran');
     const input = $('#guideInput');
     if (!box || !input) return;
-    if (input.disabled || !App.state.guides.length) { App.tutupSaran(); return; }
-
     const teks = String(input.value || '').trim();
+    const dipilih = App.state.form.guide;
+    if (input.disabled || !App.state.guides.length ||
+        (dipilih && rapikan(dipilih.guideName) === rapikan(teks))) {
+      App.tutupSaran(); tulisPetunjuk(''); return;
+    }
+    if (rapikan(teks).length < SARAN_MIN_HURUF) { App.tutupSaran(); tulisPetunjuk(''); return; }
+
     const filter = labelFilter();
     let cocok = App.cariSaran(teks, App.guidesTersaring());
-    let atas = '';
+    let lintasFilter = false;
     // Sama seperti saat menyimpan (guideUntukSimpan): bila tak ada yang cocok
     // di filter, cari di semua guide — regu tiap baris tetap terlihat.
-    if (!cocok.length && teks && filter) {
+    if (!cocok.length && filter) {
       cocok = App.cariSaran(teks, App.state.guides);
-      if (cocok.length) atas = `Tidak ada di ${esc(filter)}. Guide dari kategori/regu lain:`;
+      lintasFilter = cocok.length > 0;
     }
-    if (!cocok.length) {
-      atas = teks ? `Tidak ada guide yang cocok dengan “${esc(teks)}”.`
-                  : `Belum ada guide di ${esc(filter || 'daftar')}.`;
-    }
-
     const tampil = cocok.slice(0, SARAN_MAKS);
-    const sisa = cocok.length - tampil.length;
+    if (!tampil.length) {
+      App.tutupSaran();
+      tulisPetunjuk(`Guide tidak ditemukan${filter ? ` di ${filter} maupun regu lain` : ''}. Coba bagian nama lainnya.`);
+      return;
+    }
+    tulisPetunjuk(
+      (lintasFilter ? `Tidak ada di ${filter}. Dari kategori/regu lain: ` : '') +
+      (cocok.length > tampil.length
+        ? `Menampilkan ${tampil.length} dari ${cocok.length} hasil. Perjelas pencarian untuk mempersempit hasil.`
+        : `${cocok.length} guide ditemukan. Pilih guide yang sesuai.`));
+
+    const baruDibuka = box.hidden;
     App.state.saranAktif = -1;
     input.removeAttribute('aria-activedescendant');
-    box.innerHTML =
-      (atas ? `<div class="saran-info">${atas}</div>` : '') +
-      `<div id="guideSaranDaftar" role="listbox" aria-label="Saran nama guide">` +
-      tampil.map((g, i) =>
-        `<button type="button" class="saran-item" id="saran-${i}" role="option" tabindex="-1" ` +
-        `aria-selected="false" data-saran="${esc(g.guideId)}">` +
-        `<span class="saran-nama">${esc(g.guideName)}</span>` +
-        `<span class="saran-meta">${esc(g.guideId)} · ${esc(App.labelRegu(g.regu) || 'tanpa regu')}</span>` +
-        `</button>`).join('') +
-      `</div>` +
-      (sisa > 0 ? `<div class="saran-info">+${sisa} guide lainnya — ketik lebih lengkap.</div>` : '');
+    box.innerHTML = tampil.map((g, i) =>
+      `<button type="button" class="saran-item" id="saran-${i}" role="option" tabindex="-1" ` +
+      `aria-selected="false" data-saran="${esc(g.guideId)}">` +
+      `<span class="saran-nama">${esc(g.guideName)}</span>` +
+      `<span class="saran-meta">${esc(g.guideId)} · ${esc(App.labelRegu(g.regu) || 'tanpa regu')}</span>` +
+      `</button>`).join('');
     box.scrollTop = 0;
     box.hidden = false;
     input.setAttribute('aria-expanded', 'true');
-    App.ukurSaran();
+    if (baruDibuka) App.pastikanSaranTerlihat();
   }
 
   App.tutupSaran = function tutupSaran() {
@@ -201,23 +224,27 @@
   }
 
   /**
-   * Tinggi daftar mengikuti ruang yang benar-benar terlihat di bawah kotak
-   * nama. Di HP keyboard menutup hampir separuh layar; visualViewport memberi
-   * tahu di mana layar yang terlihat berakhir.
+   * Kotak nama di formulir ini ada di tengah layar, jadi di HP daftar yang baru
+   * muncul bisa tertutup keyboard. Halaman digeser seperlunya saja — sampai
+   * daftar terlihat, tanpa mendorong kotak nama ke balik bilah judul.
    */
-  App.ukurSaran = function ukurSaran() {
+  App.pastikanSaranTerlihat = function pastikanSaranTerlihat() {
     const box = $('#guideSaran');
     const input = $('#guideInput');
+    const bilah = $('.appbar');
     if (!box || box.hidden || !input) return;
     const vv = window.visualViewport;
-    const batasBawah = vv ? vv.offsetTop + vv.height : window.innerHeight;
-    const ruang = Math.floor(batasBawah - input.getBoundingClientRect().bottom - 16);
-    box.style.maxHeight = Math.max(SARAN_TINGGI_MIN, Math.min(SARAN_TINGGI_MAKS, ruang)) + 'px';
+    const atasLayar = (vv ? vv.offsetTop : 0) + (bilah ? bilah.getBoundingClientRect().height : 0) + 8;
+    const bawahLayar = vv ? vv.offsetTop + vv.height : window.innerHeight;
+    const kurang = box.getBoundingClientRect().bottom + 8 - bawahLayar;
+    const ruang = input.getBoundingClientRect().top - atasLayar;
+    const geser = Math.min(kurang, ruang);
+    if (geser > 4) window.scrollBy({ top: geser, behavior: 'smooth' });
   }
 
   /** Panah atas/bawah: pindahkan sorotan di daftar saran. */
   App.geserSaran = function geserSaran(arah) {
-    const items = $$('#guideSaranDaftar [data-saran]');
+    const items = $$('#guideSaran [data-saran]');
     if (!items.length) return;
     let i = App.state.saranAktif + arah;
     if (i < 0) i = items.length - 1;
@@ -237,7 +264,7 @@
    * Null bila belum jelas — Enter tidak boleh menebak.
    */
   App.saranUntukEnter = function saranUntukEnter() {
-    const items = $$('#guideSaranDaftar [data-saran]');
+    const items = $$('#guideSaran [data-saran]');
     const aktif = items[App.state.saranAktif];
     if (aktif) return aktif.dataset.saran;
     if (items.length === 1) return items[0].dataset.saran;
@@ -248,7 +275,7 @@
 
   /** Jumlah baris yang bisa dipilih di daftar saran yang sedang terbuka. */
   App.jumlahSaran = function jumlahSaran() {
-    return App.saranTerbuka() ? $$('#guideSaranDaftar [data-saran]').length : 0;
+    return App.saranTerbuka() ? $$('#guideSaran [data-saran]').length : 0;
   }
 
   /**
@@ -264,6 +291,7 @@
     App.state.form.lanjutJeda = null;
     $('#guideInput').value = g.guideName;
     App.tutupSaran();
+    tulisPetunjuk('');
     App.showPicked(g);
     App.tampilkanKandidat(null);
     App.saveDraft();
