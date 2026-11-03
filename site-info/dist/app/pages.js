@@ -3,10 +3,11 @@ import {loadLeavesPage} from './leaves.js';
 import {loadAnnouncementsPage} from './announcements.js';
 import {purchasingTitles,purchasingRoutes,loadPurchasingPage} from './purchasing.js';
 import {merchandiseTitles,merchandiseRoutes,loadMerchandisePage} from './merchandise.js';
+import {visitTitles,visitRoutes,loadVisitsPage} from './visits.js';
 import {state,api,permitted} from './api.js';
 import {trainingCalendarView,witaDay} from './training-calendar.js';
 import {esc,icon,avatar,badge,formatDate,formatTime,empty,button,number,options,localToday,labels} from './ui.js';
-export const pageTitles={leaves:'Cuti',briefings:"Briefing Pagi (Wewarah Semeng)",announcements:'Informasi Internal',dashboard:'Dashboard SDM',employees:'Data Pegawai',organization:'Struktur Organisasi',imports:'Tinjau Impor Pegawai',documents:'Regulasi & SOP',training:'Kegiatan & Pelatihan',coaching:'Coaching',security:'Dashboard Keamanan',roster:'Jadwal & Penugasan','roster-settings':'Pengaturan Jadwal',logbook:'Logbook & Patroli',incidents:'Laporan Kejadian',sop:'SOP Keamanan',accounts:'Akun Pengguna',roles:'Role & Izin',audit:'Riwayat Aktivitas',...purchasingTitles,...merchandiseTitles};
+export const pageTitles={leaves:'Cuti',briefings:"Briefing Pagi (Wewarah Semeng)",announcements:'Informasi Internal',dashboard:'Dashboard SDM',employees:'Data Pegawai',organization:'Struktur Organisasi',imports:'Tinjau Impor Pegawai',documents:'Regulasi & SOP',training:'Kegiatan & Pelatihan',coaching:'Coaching',security:'Dashboard Keamanan',roster:'Jadwal & Penugasan','roster-settings':'Pengaturan Jadwal',logbook:'Logbook & Patroli',incidents:'Laporan Kejadian',sop:'SOP Keamanan',accounts:'Akun Pengguna',roles:'Role & Izin',audit:'Riwayat Aktivitas',...purchasingTitles,...merchandiseTitles,...visitTitles};
 export const configNames={posts:'Wilayah & pos',groups:'Kelompok',members:'Anggota kelompok',shifts:'Shift',eligibility:'Kelayakan pos',rules:'Aturan kerja',patterns:'Pola rotasi',bindings:'Anchor & fase',requirements:'Kebutuhan rutin',overrides:'Penyesuaian sementara',unavailability:'Ketidaktersediaan'};
 const rowAction=(type,id)=>`<button class="icon-button" data-action="detail" data-type="${type}" data-id="${esc(id)}" aria-label="Lihat detail">${icon('chevron')}</button>`;
 export const heading=(title,description,actions='')=>`<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(description)}</p></div><div class="actions">${actions}</div></div>`;
@@ -28,6 +29,7 @@ export async function loadPage(route) {
   if(route==='announcements')return loadAnnouncementsPage();
   if(purchasingRoutes.includes(route))return loadPurchasingPage(route);
   if(merchandiseRoutes.includes(route))return loadMerchandisePage(route);
+  if(visitRoutes.includes(route))return loadVisitsPage(route);
   state.route=route;state.page=1;state.filter='';state.unit='';state.category='';
   if(['dashboard','security'].includes(route)){
     state.date=state.date||localToday();
