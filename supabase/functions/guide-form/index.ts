@@ -1,18 +1,21 @@
 // Formulir penilaian guide (tanpa login) — dipanggil Pages Function /api/guide-form/*
-// dengan secret server. Tidak memakai kunci global pg_advisory_xact_lock, dan
-// panggilan ke jembatan Google Spreadsheet berjalan DI LUAR transaksi database
-// (ATR-KM-03, temuan T4): transaksi hanya untuk batas frekuensi, token, dan catatan kiriman.
+// dengan secret server. Tidak memakai kunci global portal: penerimaan penilaian
+// diserialkan dengan kunci transaksi khusus modul kunjungan, supaya pengaman jeda
+// dan koreksi melihat kiriman pos lain. Penyalinan ke spreadsheet tahunan berjalan
+// SESUDAH balasan dikirim (EdgeRuntime.waitUntil), di luar transaksi database.
 import {withSupabase} from 'npm:@supabase/server@1';
 import postgres from 'npm:postgres@3.4.7';
 import {randomUUID} from 'node:crypto';
 import {AppError,assert} from '../_shared/portal/db.mjs';
-import {takeGuideFormIpSlot,admitGuideForm,guideFormContext,guideFormReceipt,recordGuideFormResult,ipFingerprint} from '../_shared/portal/guide-form.mjs';
-import {bridgeConfig,callBridge} from '../_shared/portal/visits-bridge.mjs';
+import {takeGuideFormIpSlot,admitGuideForm,guideFormContext,submitGuideForm,guideFormReceipt,recordGuideFormResult,ipFingerprint} from '../_shared/portal/guide-form.mjs';
+import {syncVisitSheetAfterSubmit,visitSheetConfig} from '../_shared/portal/visit-sheets.mjs';
 let pool;
-async function transaction(client,work){return client.begin(async sql=>{
+async function transaction(client,work,ingest=false){return client.begin(async sql=>{
  await sql.unsafe("SET LOCAL search_path=portal,pg_catalog; SET LOCAL statement_timeout='10s'; SET LOCAL lock_timeout='5s'; SET LOCAL idle_in_transaction_session_timeout='15s';");
+ if(ingest)await sql.unsafe("SELECT pg_advisory_xact_lock(hashtextextended('portal.visits.guide_evaluations',0))");
  return work({inTransaction:true,query:(statement,values=[])=>sql.unsafe(statement,values)});
 });}
+const busyCodes=['23505','40001','40P01','55P03'];
 export default {fetch:withSupabase({auth:'secret'},async req=>{
  const requestId=randomUUID();
  try{
@@ -25,25 +28,31 @@ export default {fetch:withSupabase({auth:'secret'},async req=>{
   assert(b&&['context','submit'].includes(b.operation)&&b.body&&typeof b.body==='object'&&!Array.isArray(b.body),'Permintaan tidak valid.',400);
   const env=Deno.env.toObject();
   if(!pool)pool=postgres(env.SUPABASE_DB_URL,{prepare:false,max:1,idle_timeout:20,connect_timeout:10,onnotice:()=>{}});
-  const bridge=bridgeConfig(env);
   const ipOk=await transaction(pool,db=>takeGuideFormIpSlot(db,b.operation,b.client_ip,b.body));
   assert(ipOk,'Terlalu banyak kiriman. Coba lagi beberapa menit kemudian.',429);
-  const admitted=await transaction(pool,db=>admitGuideForm(db,b.operation,b.body));
-  assert(!admitted.limited,'Terlalu banyak kiriman. Coba lagi beberapa menit kemudian.',429);
-  if(b.operation==='context'){
-   const data=await callBridge(bridge,'form.context',{},{timeoutMs:30000});
-   return Response.json({ok:true,result:guideFormContext(admitted.link,data)},{headers:{'Cache-Control':'no-store'}});
+  // Batas per tautan, aturan terima, dan catatan kiriman dalam SATU transaksi:
+  // HP hanya menerima ✅ bila penilaiannya benar-benar tersimpan.
+  const outcome=await transaction(pool,async db=>{
+   const admitted=await admitGuideForm(db,b.operation,b.body);
+   if(admitted.limited)return admitted;
+   if(b.operation==='context')return {context:await guideFormContext(db,admitted.link)};
+   const result=await submitGuideForm(db,admitted);
+   await recordGuideFormResult(db,admitted,result,ipFingerprint(b.client_ip,env.VISITS_IP_HMAC_KEY));
+   return {receipt:guideFormReceipt(admitted,result),fresh:result.accepted.some(a=>!a.duplicate)};
+  },b.operation==='submit');
+  assert(!outcome.limited,'Terlalu banyak kiriman. Coba lagi beberapa menit kemudian.',429);
+  if(outcome.context)return Response.json({ok:true,result:outcome.context},{headers:{'Cache-Control':'no-store'}});
+  if(outcome.fresh&&visitSheetConfig(env).configured){
+   // Kegagalan penyalinan tidak memengaruhi kiriman: barisnya tetap menunggu di basis data.
+   const task=syncVisitSheetAfterSubmit({runTx:work=>transaction(pool,work),env}).catch(()=>{console.warn(JSON.stringify({event:'visit_sheet_background_failed',request_id:requestId}));});
+   const runtime=Reflect.get(globalThis,'EdgeRuntime');
+   if(runtime&&typeof runtime.waitUntil==='function')runtime.waitUntil(task);
   }
-  const data=admitted.items.length?await callBridge(bridge,'evaluations.submit',{pos:admitted.link.pos,items:admitted.items},{timeoutMs:30000}):{accepted:[],rejected:[]};
-  const receipt=guideFormReceipt(admitted,data);
-  // Penilaian sudah diterima spreadsheet; kegagalan mencatat log tidak boleh
-  // membuat HP mengulang kiriman yang sebenarnya sudah masuk.
-  try{await transaction(pool,db=>recordGuideFormResult(db,admitted.link,receipt,ipFingerprint(b.client_ip,env.VISITS_IP_HMAC_KEY)));}
-  catch{console.warn(JSON.stringify({event:'guide_form_log_failed',request_id:requestId}));}
-  return Response.json({ok:true,result:receipt},{headers:{'Cache-Control':'no-store'}});
+  return Response.json({ok:true,result:outcome.receipt},{headers:{'Cache-Control':'no-store'}});
  }catch(error){
-  if(error instanceof AppError&&error.details?.bridge_code)console.warn(JSON.stringify({event:'visits_bridge_error',request_id:requestId,code:error.details.bridge_code}));
-  const status=error instanceof AppError?error.status:['23505','40001','40P01','55P03'].includes(error?.code)?409:['23502','23503','23514','22P02'].includes(error?.code)?422:503;
-  return Response.json({ok:false,error:error instanceof AppError?error.message:'Kiriman belum dapat dikonfirmasi. HP akan mencoba lagi.',request_id:requestId},{status,headers:{'Cache-Control':'no-store'}});
+  // Kunci sibuk/benturan bersamaan: 503 supaya HP mengulang, bukan menganggapnya ditolak.
+  const status=error instanceof AppError?error.status:busyCodes.includes(error?.code)?503:['23502','23503','23514','22P02'].includes(error?.code)?422:503;
+  if(!(error instanceof AppError))console.warn(JSON.stringify({event:'guide_form_error',request_id:requestId,code:typeof error?.code==='string'?error.code:null}));
+  return Response.json({ok:false,error:error instanceof AppError?error.message:busyCodes.includes(error?.code)?'Kiriman sedang diproses bersamaan. HP akan mencoba lagi.':'Kiriman belum dapat dikonfirmasi. HP akan mencoba lagi.',request_id:requestId},{status,headers:{'Cache-Control':'no-store'}});
  }
 })};

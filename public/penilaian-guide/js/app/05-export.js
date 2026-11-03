@@ -137,11 +137,11 @@
     if (rusak.length) out.push(barisCsv(['Tidak terbaca di perangkat', rusak.length]));
     if (diganti.length) out.push(barisCsv(['Dibetulkan lewat koreksi (tidak ikut rekap)', diganti.length]));
 
-    judul('REKAP HARIAN PER GUIDE — cocokkan dengan tab Rekap A1/A2/D1/D2 di spreadsheet');
+    judul('REKAP HARIAN PER GUIDE — cocokkan dengan Dashboard Kunjungan di portal');
     out.push(barisCsv(['(Tiap penilaian = satu PENGANTARAN. Angka harian adalah JUMLAH seluruh pengantaran hari itu)']));
     out.push(barisCsv(['(UNI FORM bernilai -1 tidak sesuai, +1 sesuai, +2 penampilan bagus — jadi jumlahnya bisa minus)']));
     out.push(barisCsv(['(SERAGAM SESUAI = berapa pengantaran yang bernilai +1 atau +2)']));
-    out.push(barisCsv(['(Kolom REVIEW tidak ada di sini karena tidak diisi lewat aplikasi — lihat tab Rekap di spreadsheet)']));
+    out.push(barisCsv(['(Kolom REVIEW tidak ada di sini karena tidak diisi lewat aplikasi)']));
     out.push(barisCsv(['Tanggal', 'Nama Guide', 'guideId', 'Regu', 'UNI FORM', 'SERAGAM SESUAI',
                        'ID', 'ETIKA', 'ANTAR', 'Dinilai di Pos']));
     harian.forEach(h => out.push(barisCsv([
@@ -161,7 +161,7 @@
 
     judul('RINCIAN SEMUA PENILAIAN');
     out.push(barisCsv(['Tanggal', 'Jam', 'Pos', 'guideId', 'Nama Guide', 'Uniform', 'ID-Card',
-                       'Etika', 'Catatan', 'Status', 'Waktu (UTC, sama dgn spreadsheet)', 'evaluationId']));
+                       'Etika', 'Catatan', 'Status', 'Waktu (UTC, sama dgn portal)', 'evaluationId']));
     baik.forEach(e => out.push(barisCsv([
       DB.tanggalLokal(e.timestamp), jamLokal(e.timestamp), e.pos, e.guideId, e.guideName,
       nilaiUniform(e.criteria?.uniform),
@@ -173,7 +173,7 @@
 
     if (diganti.length) {
       judul('PENILAIAN YANG SUDAH DIBETULKAN — tidak ikut rekap di atas');
-      out.push(barisCsv(['Angka di bawah ini sempat tercatat lalu dibetulkan. Di spreadsheet barisnya berstatus "diganti".']));
+      out.push(barisCsv(['Angka di bawah ini sempat tercatat lalu dibetulkan. Di portal barisnya berstatus "diganti".']));
       out.push(barisCsv(['Tanggal', 'Jam', 'Pos', 'guideId', 'Nama Guide', 'Uniform', 'ID-Card',
                          'Etika', 'Digantikan oleh', 'evaluationId']));
       diganti.forEach(e => out.push(barisCsv([
@@ -185,8 +185,8 @@
 
     if (rusak.length) {
       judul('DATA TIDAK TERBACA DI PERANGKAT INI');
-      out.push(barisCsv(['Nilainya tidak bisa dibuka di HP/tablet ini, tetapi baris dengan evaluationId berikut tetap ada di spreadsheet.']));
-      out.push(barisCsv(['Tanggal', 'Jam', 'Pos', 'Status', 'Waktu (UTC, sama dgn spreadsheet)', 'evaluationId']));
+      out.push(barisCsv(['Nilainya tidak bisa dibuka di HP/tablet ini, tetapi baris dengan evaluationId berikut tetap ada di portal.']));
+      out.push(barisCsv(['Tanggal', 'Jam', 'Pos', 'Status', 'Waktu (UTC, sama dgn portal)', 'evaluationId']));
       rusak.forEach(e => out.push(barisCsv([
         DB.tanggalLokal(e.timestamp), jamLokal(e.timestamp), e.pos,
         e.synced ? 'Terkirim' : 'Menunggu', e.timestamp, e.evaluationId,

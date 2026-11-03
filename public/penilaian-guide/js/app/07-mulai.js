@@ -290,9 +290,8 @@
     Sync.onChange((state, d) => {
       App.setNet(state, d);
       if (state === 'done' && d.sent > 0) {
-        // Rekap di spreadsheet disusun ulang oleh trigger tiap 5 menit, jadi
-        // jeda singkat itu wajar dan bukan tanda data gagal masuk.
-        App.toast(`${d.sent} data terkirim · rekap spreadsheet menyusul ±5 menit`, 'ok', '✅');
+        // Dashboard portal langsung memuat kiriman ini; salinan spreadsheet menyusul otomatis.
+        App.toast(`${d.sent} data terkirim ke portal`, 'ok', '✅');
         App.haptic(20);
       }
       if (state === 'error') App.toast('Gagal kirim, akan dicoba lagi otomatis', 'warn', '⏳');

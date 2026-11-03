@@ -1,112 +1,149 @@
 # Pengelolaan Kunjungan — Penilaian Guide (tahap 1)
 
-Ruang kerja kelima di portal. Penilaian guide di pos pemeriksaan pindah dari aplikasi NilaiGuide (nilaiguide.vercel.app) ke `bpbesakih.com/penilaian-guide/`, tetapi **data tetap di Google Spreadsheet NilaiGuide**: tab Evaluations, Guides, Rekap regu, dan Dasbor tidak berubah. Portal hanya menyimpan tautan pos dan catatan kiriman. Rancangan lengkap ada di PRD (dokumen Project "PRD Modul Pengelolaan Kunjungan").
+Ruang kerja kelima di portal. Penilaian guide di pos pemeriksaan dicatat lewat `bpbesakih.com/penilaian-guide/` (PWA hasil pindahan NilaiGuide) dan **disimpan di basis data portal**. Setiap penilaian disalin otomatis ke **spreadsheet baru** di Google Drive portal: folder `SPH-Portal-Kunjungan`, satu file per tahun (`Penilaian Guide 2026`), satu tab per bulan (`2026-11`). Kolomnya sama dengan tab Evaluations lama: `evaluationId, timestamp, pos, guideId, guideName, uniform, idCard, review, etika, catatan, receivedAt, koreksiDari, status`.
+
+**Aplikasi NilaiGuide (nilaiguide.vercel.app), Apps Script, dan spreadsheet lamanya tidak disentuh.** Repo NilaiGuide hanya dipakai sebagai acuan aturan. HP pos pindah satu per satu; HP yang belum pindah tetap memakai aplikasi lama seperti biasa, dan datanya tetap masuk spreadsheet lama.
+
+> Rancangan sebelumnya (jembatan ke Apps Script NilaiGuide, PR #17) dibatalkan atas permintaan pemilik. Kode jembatan sudah dihapus dari portal dan tidak pernah dipasang di NilaiGuide.
+
+## Alur data
+
+```
+HP pos ──► /api/guide-form (Pages) ──► Edge guide-form ──► basis data portal (visit_evaluations)
+                                              │ sesudah balasan dikirim (EdgeRuntime.waitUntil)
+                                              ▼
+                         Google Drive portal / SPH-Portal-Kunjungan / Penilaian Guide 2026 / tab 2026-11
+```
+
+- HP baru menerima ✅ setelah penilaian tersimpan di basis data portal. Penyalinan ke spreadsheet berjalan sesudahnya dan tidak memengaruhi kiriman; bila Google sedang bermasalah, baris menunggu di portal.
+- Baris ditulis ke **posisi** yang dicatat portal, bukan ditambahkan di bawah. Percobaan ulang setelah gangguan menimpa baris yang sama, sehingga tidak ada baris ganda.
+- Koreksi petugas mengubah status baris lama menjadi `diganti` di portal dan di spreadsheet.
+- Hanya satu penyalinan berjalan pada satu waktu (lease di `visit_sheet_state`). Semua panggilan Google berjalan **di luar** transaksi basis data dan tidak memakai kunci global portal.
+- Pemicu: setiap kiriman pos (dibatasi paling sering 20 detik sekali), dan tombol **Sinkronkan sekarang** di Tautan Pos.
+
+## Aturan terima (dipindah dari `server-gas/03_Ingest.gs`)
+
+| Aturan | Perilaku |
+| --- | --- |
+| Kiriman ulang | `evaluationId` yang sudah tersimpan diakui sebagai duplikat (✅), tidak disimpan dua kali. |
+| Jeda | Guide + pos yang sama < 15 menit (selisih mutlak, lintas HP dan di dalam satu kiriman) ditolak. 15–60 menit diperingatkan aplikasi. |
+| Koreksi | Hanya untuk guide, pos, dan tanggal WITA yang sama; baris lama ditandai `diganti`, tidak dihapus; satu baris hanya bisa dikoreksi sekali. |
+| Guide | Harus terdaftar di Data Guide portal. Guide nonaktif tetap diterima. Nama diambil dari Data Guide, bukan dari HP. |
+| Nilai | Uniform −1/+1/+2, ID-card Ya/Tidak, Etika −5..+5, catatan ≤ 500 huruf (disimpan apa adanya; di spreadsheet ditulis sebagai teks, tidak pernah menjadi rumus). |
+| Jam HP | Jam yang lebih cepat dari server dipotong ke waktu terima, supaya penilaian tidak jatuh di tanggal yang belum terjadi. |
+| Umur kiriman | **Baru:** penilaian yang tertahan di HP lebih dari 30 hari ditolak (pesan jelas di HP). Perlu untuk retensi di bawah. |
+
+## Retensi 6 minggu
+
+Supaya basis data tidak terus membesar, rincian penilaian disimpan 6 minggu (42 hari). Sebagai gambaran, 70–150 penilaian per hari hanya ±3–6 ribu baris per 6 minggu.
+
+1. Sekali sehari (saat penyalinan berjalan), baris yang lebih tua dari 42 hari **dibaca ulang dari spreadsheet dan dicocokkan sel demi sel**.
+2. Hari yang seluruh barisnya cocok dilipat ke `visit_monthly_totals` (jumlah per bulan, per guide, per pos) lalu dihapus dari basis data — dalam satu transaksi.
+3. Baris yang belum tersalin, berbeda isinya (mis. diubah orang di spreadsheet), atau berpindah posisi **tidak dihapus**: baris itu ditulis ulang dulu, dan hari itu serta hari sesudahnya ditahan sampai cocok.
+4. Batas umur kiriman 30 hari lebih pendek dari retensi 42 hari, sehingga kiriman ulang dari HP untuk penilaian yang sudah dihapus selalu ditolak, bukan tercatat dua kali.
+5. Bila Google tidak bisa dihubungi atau Sheets API belum aktif, tidak ada yang dihapus.
+
+Dashboard dan Laporan tetap bisa dibuka untuk bulan lama: angkanya dari ringkasan bulanan, persis sama dengan sebelum dilipat (diuji). Rentang harian yang menyentuh tanggal sebelum batas lipat harus berupa bulan penuh; rincian per penilaian yang lebih tua dari 6 minggu dibuka di spreadsheet.
 
 ## Isi modul
 
 | Bagian | Berkas | Keterangan |
 | --- | --- | --- |
-| Formulir lapangan | `public/penilaian-guide/` → `site-info/dist/penilaian-guide/` | PWA NilaiGuide yang dipindah: offline, terenkripsi, tanpa login. Pos ditentukan tautan pos (token di fragmen URL). |
+| Formulir lapangan | `public/penilaian-guide/` → `site-info/dist/penilaian-guide/` | PWA NilaiGuide yang dipindah: offline, tanpa login. Pos ditentukan tautan pos (token di fragmen URL). |
 | Gateway publik | `site-info/lib/guide-form.mjs`, `site-info/functions/api/guide-form/[[action]].js` | `POST /api/guide-form/{context,submit}`: origin, `CF-Connecting-IP`, badan ≤ 24 KB, lalu ke Edge `guide-form` dengan secret server. |
-| Edge publik | `supabase/functions/guide-form/index.ts` → `supabase/deploy/guide-form/index.ts` (`scripts/build-guide-form.mjs`) | Batas frekuensi, token → tautan aktif, jembatan **di luar** transaksi, tanpa kunci global. |
-| Rute pengelolaan | `lib/visits.mjs` → `_shared/portal/visits.mjs`, disuntikkan ke snapshot `portal-api` oleh `scripts/build-visits-deploy.mjs` | Tautan pos, aktivitas, audit ekspor (database); dashboard, guide, penilaian, REVIEW, kesehatan (jembatan). |
-| Klien jembatan | `lib/visits-bridge.mjs` | Hanya `https://script.google.com/macros/s/…/exec`, mengikuti 302 hanya ke `script.googleusercontent.com` dengan GET tanpa kredensial. |
-| Aturan formulir | `lib/guide-form.mjs` | Pemeriksaan bentuk, batas 60 `context` dan 300 penilaian per 10 menit per tautan dan per IP, catatan kiriman tanpa isi nilai. |
-| Ruang kerja | `public/visits.js` (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide, Penilaian, Tautan Pos, Laporan & Ekspor. |
-| Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `schema.sql` | `guide_form_links`, `guide_form_rate_limits`, `guide_form_submissions`; izin `visits.*`; role `KUNJUNGAN_PENGELOLA` dan `KUNJUNGAN_PIMPINAN`. **IT_ADMIN tidak diberi izin visits.** |
-| Jembatan Apps Script | repo NilaiGuide, branch `claude/jembatan-portal`: `server-gas/13_Jembatan.gs` | Satu aturan terima (`terimaPenilaian_`) untuk portal dan aplikasi lama. Lihat `docs/JEMBATAN-PORTAL.md` di repo itu. |
+| Edge publik | `supabase/functions/guide-form/index.ts` → `supabase/deploy/guide-form/index.ts` (`scripts/build-guide-form.mjs`) | Batas frekuensi, token → tautan aktif, aturan terima di bawah kunci khusus modul, salinan di latar belakang. Tanpa kunci global portal. |
+| Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap dan peringkat (aturan `05_Ringkasan.gs` dan `08_Peringkat.gs`). |
+| Salinan & retensi | `lib/visit-sheets.mjs` | Google Sheets/Drive lewat OAuth yang sama dengan unggah berkas (`GOOGLE_DRIVE_*`), lease, tulis posisional, verifikasi, pelipatan bulanan, pemeriksaan koneksi. |
+| Rute pengelolaan | `lib/visits.mjs` → `_shared/portal/*.mjs`, disuntikkan ke snapshot `portal-api` oleh `scripts/build-visits-deploy.mjs` | Rute basis data di `routeOperation`; `visits/sheet/sync` dan `visits/sheet/check` dicegat sebelum transaksi permintaan. |
+| Formulir pos | `lib/guide-form.mjs` | Pemeriksaan bentuk, batas 60 `context` dan 300 penilaian per 10 menit per tautan dan per IP, catatan kiriman tanpa isi nilai (90 hari). |
+| Ruang kerja | `public/visits.js`, `public/visit-import.js` (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Tautan Pos + Salinan spreadsheet, Laporan & Ekspor. |
+| Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
+| Uji | `tests/visits.test.mjs`, `tests/guide-form-transport.test.mjs`, `scripts/verify-visits-postgres.mjs`, `scripts/verify-guide-form-ui.mjs`, `scripts/fake-google-sheets.mjs` | Google tiruan yang ketat (batas grid, galat bergaya Google); tidak pernah menghubungi Google. |
 
 ## Izin
 
 | Izin | Pengelola | Pimpinan |
 | --- | --- | --- |
 | `visits.dashboard.read`, `visits.guides.read`, `visits.records.read`, `visits.reports.read`, `visits.reports.export` | ya | ya |
-| `visits.guides.manage`, `visits.forms.read`, `visits.forms.manage`, `visits.settings.manage` | ya | — |
+| `visits.guides.manage` (ubah & impor guide), `visits.forms.read`, `visits.forms.manage` (tautan pos), `visits.settings.manage` (sinkronkan & periksa koneksi) | ya | — |
 
-Super Admin memegang semua izin `visits.*`. `visits.settings.manage` sudah ada tetapi belum punya layar; batas frekuensi dan nama pos masih konstanta di `lib/guide-form.mjs`.
+Super Admin memegang semua izin `visits.*`. Alamat file spreadsheet hanya tampil bagi pemegang `visits.settings.manage` atau `visits.reports.export`; aksesnya sendiri tetap diatur berbagi Google Drive.
+
+## Data Guide awal
+
+Buka spreadsheet NilaiGuide lama → tab **Guides** → *File → Download → Microsoft Excel (.xlsx)* atau *CSV*. Di portal: Kunjungan → Data Guide → **Impor berkas**. Berkas dibaca di peramban; portal menampilkan pratinjau (baru/berubah/tetap/baris bermasalah) sebelum diterapkan. ID guide (G-001 …) dipertahankan supaya data lama dan baru bisa digabung; baris tanpa ID diberi ID berikutnya. Guide yang tidak ada di berkas tidak diubah. Spreadsheet lama tidak diubah. Daftar guide asli tidak disimpan di repo.
 
 ## Uji lokal (Windows)
 
-Butuh dua folder: SPH-Portal di branch `claude/pengelolaan-kunjungan`, dan NilaiGuide di branch `claude/jembatan-portal` (lihat bagian NilaiGuide di deskripsi PR).
-
-Cara tercepat, satu perintah, data fiktif, tanpa layanan cloud:
+Tidak perlu folder NilaiGuide dan tidak perlu layanan cloud:
 
 ```powershell
 cd $HOME\Documents\GitHub\SPH-Portal-uji
-node scripts/preview-kunjungan.mjs $HOME\Documents\GitHub\nilaiguide
+node scripts/preview-kunjungan.mjs            # lanjutkan data pratinjau
+node scripts/preview-kunjungan.mjs --reset    # mulai dari awal
 ```
 
 - Portal: http://127.0.0.1:4615/#visits — akun `kunjungan.preview`, `pimpinan.preview`, `admin.preview`, `sdm.preview` (password `Preview2026!`).
-- Formulir Pos 1 dan Pos 3: alamatnya tercetak di terminal (token pratinjau tetap, hanya untuk uji).
-- Jembatan tiruan menjalankan kode Apps Script NilaiGuide yang asli di atas spreadsheet palsu berisi 42 guide fiktif dan riwayat tiga minggu. Isinya disimpan di `data/jembatan-uji/` (diabaikan Git); hapus folder itu untuk mulai dari awal.
+- Formulir Pos 1 dan Pos 3: alamatnya tercetak di terminal (token pratinjau, hanya untuk uji).
+- Data Guide awal berisi 40 guide fiktif; daftar asli bisa dicoba lewat Impor berkas (tersimpan hanya di `data/`).
+- "Spreadsheet" adalah Google tiruan. Isinya ditulis sebagai CSV per tab di `data/pratinjau-kunjungan/google/` supaya bisa dibuka di Excel.
 
 Yang layak dicoba:
 
-1. Buka formulir tanpa token (`/penilaian-guide/`): hanya petunjuk dan kotak tempel tautan.
-2. Buka tautan Pos 1: daftar guide termuat, token hilang dari bilah alamat. Isi penilaian, muat ulang halaman (draf pulih), lalu SIMPAN.
-3. Nilai guide yang sama lagi: aplikasi menahan (< 15 menit). Tekan *Betulkan penilaian itu*, ubah, SIMPAN: baris lama menjadi `diganti` di Penilaian.
-4. Matikan Wi-Fi (atau DevTools → Offline), simpan beberapa penilaian, nyalakan lagi: ⏳ menjadi ✅.
-5. Di portal: Tautan Pos → Ganti tautan Pos 1. HP yang masih memakai tautan lama menampilkan spanduk "Tautan pos sudah diganti" dan antreannya menunggu; buka tautan baru, antrean terkirim.
-6. Data Guide: tambah guide; nama yang sama di regu yang sama ditolak. Guide baru muncul di formulir setelah *Tes Koneksi & Perbarui Daftar Guide*.
-7. Penilaian dan Laporan: ekspor Excel.
-8. Masuk sebagai `pimpinan.preview` (tanpa Tautan Pos dan tanpa ubah guide) dan `sdm.preview` (tanpa ruang kerja Kunjungan).
-
-Memakai server demo biasa (`scripts/demo.mjs` + `server.mjs`) juga bisa. Jalankan jembatan tiruan di terminal lain, lalu isi variabelnya:
-
-```powershell
-node scripts/visits-bridge-dev.mjs $HOME\Documents\GitHub\nilaiguide   # terminal 1
-$env:VISITS_BRIDGE_URL = 'http://127.0.0.1:4620/exec'                    # terminal 2
-$env:VISITS_BRIDGE_KEY = '<kunci yang dicetak terminal 1>'
-node server.mjs
-```
-
-Akun demo tambahan: `kunjungan.demo` dan `pimpinan.kunjungan.demo`. Tautan pos dibuat dari Kunjungan → Tautan Pos.
+1. Formulir tanpa token (`/penilaian-guide/`): hanya petunjuk dan kotak tempel tautan.
+2. Tautan Pos 1: daftar guide termuat, token hilang dari bilah alamat. Isi penilaian, muat ulang (draf pulih), SIMPAN. Lihat CSV tab bulan ini terisi beberapa detik kemudian.
+3. Nilai guide yang sama lagi: aplikasi menahan (< 15 menit). *Betulkan penilaian itu*, ubah, SIMPAN: baris lama menjadi `diganti` di Penilaian dan di CSV.
+4. Matikan Wi-Fi (DevTools → Offline), simpan beberapa penilaian, nyalakan lagi: ⏳ menjadi ✅.
+5. Data Guide → Impor berkas (.xlsx dari Google Sheets atau .csv) → pratinjau → Terapkan.
+6. Tautan Pos → **Periksa koneksi** (empat langkah hijau) dan **Sinkronkan sekarang**. Ganti tautan Pos 1: HP dengan tautan lama menunggu tautan baru; antreannya tidak hilang.
+7. Dashboard, Penilaian, Laporan: ekspor Excel.
+8. Masuk sebagai `pimpinan.preview` (tanpa Tautan Pos, ubah guide, atau sinkronkan) dan `sdm.preview` (tanpa ruang kerja Kunjungan).
 
 Pemeriksaan otomatis:
 
 ```powershell
-node --test tests/*.test.mjs                                   # termasuk tests/visits.test.mjs dan guide-form-transport
-$env:NILAIGUIDE_DIR = "$HOME\Documents\GitHub\nilaiguide"; node --test tests/visits.test.mjs   # + uji ujung-ke-ujung dengan kode Apps Script asli
-node scripts/verify-visits-postgres.mjs $P                     # PGlite: migrasi, Edge guide-form, snapshot portal-api
-node scripts/verify-guide-form-ui.mjs $HOME\Documents\GitHub\nilaiguide   # Playwright, butuh paket playwright
+node --test tests/*.test.mjs                                    # termasuk tests/visits.test.mjs
+node scripts/verify-visits-postgres.mjs <pglite\dist\index.js>  # PGlite: migrasi, Edge guide-form, snapshot portal-api, retensi
+node scripts/verify-guide-form-ui.mjs                           # Playwright: HP pos dan ruang kerja
 ```
 
 ### Batas uji lokal
 
-- Server lokal (SQLite) menjalankan aturan yang sama dari `lib/`, tetapi bukan snapshot `portal-api` produksi. Tambalan produksi (Superadmin/IT-admin) diuji lewat `verify-visits-postgres.mjs` di atas snapshot yang sudah ditambal, bukan di Supabase sungguhan.
-- Jembatan tiruan bukan Google Apps Script: kuota, waktu kunci 20 detik, pengalihan 302 asli, dan trigger rekap tidak tercakup. Uji `health` dan satu kiriman ke **salinan** spreadsheet setelah jembatan dipasang.
-- PWA terpasang di layar utama (Android/iPhone), service worker setelah versi baru, dan kamera QR hanya bisa dicek di HP sungguhan.
-- REVIEW di Laporan kosong di jembatan tiruan karena tab Rekap regu tidak disusun di sana.
+- **Google tiruan bukan Google.** Izin token OAuth, status Google Sheets API di project Google Cloud, kuota, dan bentuk galat asli hanya bisa dipastikan di produksi lewat tombol **Periksa koneksi** (tidak membuat atau mengubah berkas).
+- Server lokal (SQLite) menjalankan aturan yang sama dari `lib/`, tetapi bukan snapshot `portal-api` produksi. Tambalan produksi diuji lewat `verify-visits-postgres.mjs` di atas snapshot yang sudah ditambal (PGlite), bukan di Supabase sungguhan.
+- `EdgeRuntime.waitUntil` disimulasikan; batas waktu latar belakang Supabase (wall clock) tidak diuji. Setiap percobaan penyalinan dibatasi 60 detik (20 detik dari tombol portal) dan berhenti dengan aman bila waktunya habis; total latar belakang paling lama ±2 menit.
+- PWA terpasang di layar utama (Android/iPhone), pembaruan service worker, dan kamera QR hanya bisa dicek di HP sungguhan.
 
 ## Rilis (oleh pemilik repo)
 
-Urutan mengikuti PRD: Apps Script dulu, lalu Supabase, lalu Pages.
+1. **Google Cloud** (project pemilik OAuth client SPH Portal): APIs & Services → Library → **Google Sheets API → Enable**. Refresh token yang dipakai unggah berkas tidak perlu diganti selama izinnya mencakup Drive (`drive` atau `drive.file`); tombol Periksa koneksi di langkah 7 memastikannya.
+2. **Supabase Secrets**: `VISITS_IP_HMAC_KEY` (acak, ≥ 32 karakter). `GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, `GOOGLE_DRIVE_REFRESH_TOKEN` sudah ada dan otomatis terbaca fungsi baru.
+3. **Migrasi** di SQL Editor, berurutan: `20261103100000_visit_management.sql`, lalu `20261104090000_visit_portal_storage.sql`.
+4. **Edge Function `guide-form`** (baru): deploy dari `supabase/deploy/guide-form/index.ts`, `verify_jwt=false` seperti fungsi portal lain (autentikasi lewat `withSupabase({auth:'secret'})`). Pages Function `/api/guide-form/*` memakai `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, dan `PORTAL_ORIGIN` yang sudah ada.
+5. **Edge Function `portal-api`**: pastikan versi aktif sama dengan snapshot sebelum modul ini (SHA-256 `fd304a9e5a5b3e846bacdb2a428a2b7dc1210133ecd3be683441d4aff6100580`). Bila sama, deploy `supabase/deploy/portal-api/index.ts`. Bila berbeda, unduh versi aktif lalu jalankan `node scripts/build-visits-deploy.mjs <berkas-aktif.ts> <sha256>`.
+6. **Merge** PR ke `master`: Pages menayangkan ruang kerja dan formulir versi baru.
+7. **Persiapan**: beri role Pengelola/Pimpinan Kunjungan di Role & Izin → impor tab Guides → Tautan Pos → **Periksa koneksi** → buat tautan Pos 1 dan Pos 3.
+8. **Pilot**: satu HP di Pos 1 memakai tautan portal selama dua hari, HP lain tetap di aplikasi lama. Cocokkan Dashboard portal dengan spreadsheet `Penilaian Guide 2026`. Setelah itu pindahkan HP satu per satu (di aplikasi lama: Tertunda 0 dan Ditahan 0 sebelum pindah). Aplikasi lama cukup tidak dipakai lagi setelah semua HP pindah; NilaiGuide tidak perlu diubah.
 
-1. **NilaiGuide**: merge `claude/jembatan-portal`, `npm run build:gas`, tempel `Code.gs`, Save. Script Properties: `JEMBATAN_KUNCI` (acak, ≥ 48 karakter) dan `TERIMA_APLIKASI_LAMA=true`. Deploy → Manage deployments → deployment lama → *New version*. Deploy → *New deployment* (Execute as: Me, Who has access: Anyone) untuk jembatan; salin alamat `/exec`-nya.
-2. **Uji jembatan** ke salinan spreadsheet: operasi `health` dan `form.context` dengan kunci.
-3. **Supabase Secrets**: `VISITS_BRIDGE_URL` (alamat `/exec` jembatan), `VISITS_BRIDGE_KEY` (sama dengan `JEMBATAN_KUNCI`), `VISITS_IP_HMAC_KEY` (acak, ≥ 32 karakter).
-4. **Migrasi**: jalankan `supabase/migrations/20261103100000_visit_management.sql` di SQL Editor.
-5. **Edge Function `guide-form`** (baru): deploy dari `supabase/deploy/guide-form/index.ts`, `verify_jwt=false` seperti fungsi portal lain (autentikasi lewat `withSupabase({auth:'secret'})`). Pages Function `/api/guide-form/*` memakai `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, dan `PORTAL_ORIGIN` yang sudah ada.
-6. **Edge Function `portal-api`**: pastikan versi yang sedang aktif sama dengan snapshot di `master` (SHA-256 `fd304a9e5a5b3e846bacdb2a428a2b7dc1210133ecd3be683441d4aff6100580`). Bila sama, deploy `supabase/deploy/portal-api/index.ts` dari branch ini. Bila berbeda, unduh versi aktif lalu jalankan ulang `node scripts/build-visits-deploy.mjs <versi-aktif.ts> <sha256>` dan deploy hasilnya. Catat nomor versi sebelumnya untuk rollback. Periksa `/api/health` 200.
-7. **Merge** PR ke `master`: Pages menayangkan `/penilaian-guide/`, ruang kerja Kunjungan, `_headers`, dan `/api/guide-form/*`.
-8. **Akun**: beri role Pengelola/Pimpinan Kunjungan di Role & Izin, lalu buat tautan Pos 1 dan Pos 3.
-9. **Pilot dan cutover** sesuai PRD: satu HP Pos 1 dua hari, lalu per HP (Tertunda 0 dan Ditahan 0 di aplikasi lama sebelum pindah), lalu `TERIMA_APLIKASI_LAMA=false`, dan arsipkan deployment lama setelah 14 hari.
+Rollback: HP kembali ke aplikasi lama (masih tayang dan tidak berubah) dan tautan pos dicabut; Pages → deployment sebelumnya; `portal-api` → versi sebelumnya. Migrasi aditif dan tidak dihapus. Spreadsheet baru tetap ada di Drive.
 
-Rollback: kembalikan HP ke aplikasi lama (`TERIMA_APLIKASI_LAMA=true`), deploy ulang versi `portal-api` sebelumnya, cabut tautan pos. Migrasi aditif dan tidak dihapus.
+## Keputusan yang dipakai
 
-## Keputusan yang dipakai sementara
+- Penyimpanan: basis data portal + salinan spreadsheet baru (keputusan pemilik, 3 November). Retensi 42 hari, umur kiriman 30 hari, ringkasan bulanan untuk periode lama.
+- Satu spreadsheet per tahun, satu tab per bulan (WITA), kolom sama dengan tab Evaluations lama (kolom `review` diisi 0).
+- Data Guide awal dari impor berkas tab Guides; ID lama dipertahankan.
+- REVIEW belum dipakai (tidak ada di Dashboard, Laporan, dan ekspor).
+- Nama kembar di regu yang sama ditolak di form satuan; di impor hanya diperingatkan.
+- Batas frekuensi formulir: 60 `context` dan 300 penilaian per 10 menit, per tautan dan per IP. Alamat `/penilaian-guide/`, nama ruang kerja "Kunjungan".
 
-Keputusan terbuka PRD diisi dengan usulan PRD dan bisa diubah sebelum rilis:
+## Data lama
 
-- Etika bawaan tetap 0 (teks aplikasi sekarang). Bila diputuskan +1, ubah `TUT` di `public/penilaian-guide/js/app/06-status.js`, teks bantuan di `index.html`, dan nilai awal formulir.
-- Token tautan: hash + salinan privat (pola `/cuti/`), dihapus saat dicabut atau diganti.
-- Umur antrean yang diterima jembatan: 60 hari; cap waktu > 10 menit di depan jam server ditolak.
-- Batas frekuensi: 60 `context` dan 300 penilaian per 10 menit, per tautan dan per IP.
-- Alamat `/penilaian-guide/`, nama ruang kerja "Kunjungan".
+Spreadsheet NilaiGuide lama tetap menjadi arsip dan tidak diubah. Cara ekspor yang efektif disiapkan di tahap berikutnya. Karena kolom spreadsheet baru sama dengan tab Evaluations lama, kedua sumber bisa digabung tanpa mengubah format.
 
 ## Tindak lanjut
 
-- Layar Pengaturan modul untuk `visits.settings.manage` (batas frekuensi, nama pos).
-- Kebijakan privasi portal: formulir penilaian guide, nama guide sebagai data pribadi, penyimpanan di Google Spreadsheet (ATR-KM-10).
-- *Protected range* tab Evaluations dan Guides di Sheets (ATR-KM-08).
+- Cara ekspor/arsip data NilaiGuide lama (tanpa mengubah aplikasi dan spreadsheetnya).
+- Penyalinan terjadwal (pg_cron + pg_net) bila kiriman pos jarang; sekarang penyalinan dipicu kiriman dan tombol portal.
+- Layar Pengaturan modul untuk batas frekuensi dan nama pos.
+- Kebijakan privasi portal: formulir penilaian guide, nama guide sebagai data pribadi, salinan di Google Drive portal (ATR-KM-10).
 - Rekonsiliasi sumber `supabase/functions/portal-api/index.ts` dan `router.mjs` dengan snapshot produksi (temuan T1); rute visits saat ini hanya masuk lewat `build-visits-deploy.mjs`, seperti modul Cuti.

@@ -21,13 +21,13 @@ export async function handleGuideForm(request,env,fetchImpl=globalThis.fetch.bin
   let body;try{body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{return respond({error:'Isi permintaan tidak valid.'},400);}
   if(!body||typeof body!=='object'||Array.isArray(body)||typeof body.token!=='string'||!/^[a-f0-9]{64}$/.test(body.token))return respond({error:'Tautan pos tidak aktif. Minta tautan pos terbaru kepada pengelola kunjungan.'},404);
   const base=new URL(env.SUPABASE_URL);if(base.protocol!=='https:'||!base.hostname.endsWith('.supabase.co')||base.username||base.password||!env.SUPABASE_SECRET_KEY)throw new Error('Invalid configuration');
-  // Batas waktu berjenjang: HP 35 detik, Pages ke Edge 32 detik, Edge ke jembatan 30 detik.
+  // Batas waktu berjenjang: HP 35 detik, Pages ke Edge 32 detik.
   const upstream=await fetchImpl(`${base.origin}/functions/v1/guide-form`,{method:'POST',redirect:'manual',headers:{apikey:env.SUPABASE_SECRET_KEY,'Content-Type':'application/json','x-region':'ap-southeast-1'},body:JSON.stringify({operation:action,client_ip:ip,body}),signal:AbortSignal.timeout(32000)});
   const data=await upstream.json();
   if(!upstream.ok){
    const known=[400,403,404,409,413,415,422,429,503].includes(upstream.status),status=known?upstream.status:503,message=typeof data?.error==='string'&&data.error.length<=300?data.error:'';
-   // Pesan 503 hanya diteruskan bila berasal dari fungsi guide-form (spreadsheet sibuk/tidak terjangkau).
-   const safe=known&&message&&(status!==503||/^(Spreadsheet|Jembatan|Kiriman)/.test(message));
+   // Pesan 503 hanya diteruskan bila berasal dari fungsi guide-form sendiri.
+   const safe=known&&message&&(status!==503||/^Kiriman /.test(message));
    return respond({error:safe?message:'Kiriman belum dapat dikonfirmasi. HP akan mencoba lagi.'},status);
   }
   if(data.ok!==true||!data.result||typeof data.result!=='object')throw new Error('Invalid response');

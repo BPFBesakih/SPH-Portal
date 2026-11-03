@@ -4,13 +4,14 @@ import {randomBytes} from 'node:crypto';
 import {all, one, insert, update, tx, audit as localAudit, assert, date, now, today} from './db.mjs';
 import {digest, has as localHas} from './auth.mjs';
 import {guidePosts} from './guide-form.mjs';
+import {reguCodes, parseGuideId, visitGuideList, saveVisitGuide, importVisitGuides, visitRecordPage, visitOverview} from './visit-data.mjs';
+import {visitSheetStatus} from './visit-sheets.mjs';
 const localDeps = {
   has: localHas,
   audit: localAudit
 };
 const posts = [1, 3];
-const regu = ['A1', 'A2', 'D1', 'D2'];
-const status = ['aktif', 'diganti'];
+const statuses = ['aktif', 'diganti'];
 const linkView = async (db, link) => link && ({
   id: link.id,
   pos: Number(link.pos),
@@ -27,10 +28,6 @@ async function requireAny(db, user, codes, has, message = 'Akses modul kunjungan
   }
   assert(allowed, message, 403);
 }
-const month = v => {
-  assert(typeof v === 'string' && (/^\d{4}-(0[1-9]|1[0-2])$/).test(v), 'Bulan tidak valid.');
-  return v;
-};
 function range(url) {
   const from = date(url?.searchParams.get('from') || today().slice(0, 8) + '01', 'Tanggal mulai'), to = date(url?.searchParams.get('to') || today(), 'Tanggal akhir');
   assert(from <= to, 'Tanggal mulai harus sebelum tanggal akhir.');
@@ -169,109 +166,69 @@ export async function visitRoutes({db, user, p, method, body: b = {}, url}, deps
       };
     });
   }
-  assert(false, 'Alamat API tidak ditemukan.', 404);
-}
-export function isVisitBridgeRequest(path, method) {
-  return method === 'GET' && ['visits/overview', 'visits/guides', 'visits/records', 'visits/reviews', 'visits/health'].includes(path) || method === 'POST' && path === 'visits/guides';
-}
-export async function visitBridgePlan({db, user, p, method, body: b = {}, url}, deps = localDeps) {
-  const path = p.join('/'), {has} = deps;
-  if (!isVisitBridgeRequest(path, method)) return undefined;
-  assert(!user.must_change_password, 'Anda wajib mengganti password sementara terlebih dahulu.', 428);
-  if (path === 'visits/overview') {
+  if (p[1] === 'overview' && p.length === 2 && method === 'GET') {
     await requireAny(db, user, ['visits.dashboard.read', 'visits.reports.read'], has);
-    return {
-      operation: 'overview',
-      payload: range(url)
-    };
+    const r = range(url);
+    return await visitOverview(db, r.from, r.to);
   }
-  if (path === 'visits/records') {
+  if (p[1] === 'records' && p.length === 2 && method === 'GET') {
     await requireAny(db, user, ['visits.records.read'], has);
-    const r = range(url), q = url.searchParams;
-    const limit = Number(q.get('limit') || 200), offset = Number(q.get('offset') || 0);
+    const r = range(url), q = url.searchParams, limit = Number(q.get('limit') || 200), offset = Number(q.get('offset') || 0);
     assert(Number.isInteger(limit) && limit >= 1 && limit <= 1000 && Number.isInteger(offset) && offset >= 0 && offset <= 200000, 'Halaman tidak valid.');
-    const payload = {
+    const filter = {
       ...r,
       limit,
       offset
     };
     if (q.get('pos')) {
-      payload.pos = Number(q.get('pos'));
-      assert([1, 2, 3].includes(payload.pos), 'Pos tidak valid.');
+      filter.pos = Number(q.get('pos'));
+      assert(posts.includes(filter.pos), 'Pos tidak valid.');
     }
     if (q.get('regu')) {
-      payload.regu = q.get('regu');
-      assert(regu.includes(payload.regu), 'Regu tidak valid.');
+      filter.regu = q.get('regu');
+      assert(reguCodes.includes(filter.regu), 'Regu tidak valid.');
     }
     if (q.get('status')) {
-      payload.status = q.get('status');
-      assert(status.includes(payload.status), 'Status tidak valid.');
+      filter.status = q.get('status');
+      assert(statuses.includes(filter.status), 'Status tidak valid.');
     }
     if (q.get('guide')) {
-      payload.guideId = q.get('guide');
-      assert((/^G-\d{1,7}$/).test(payload.guideId), 'Guide tidak valid.');
+      const parsed = parseGuideId(q.get('guide'));
+      assert(parsed, 'Guide tidak valid.');
+      filter.guideId = parsed.id;
     }
-    return {
-      operation: 'records.list',
-      payload
-    };
+    return await visitRecordPage(db, filter);
   }
-  if (path === 'visits/reviews') {
-    await requireAny(db, user, ['visits.reports.read'], has);
-    return {
-      operation: 'reviews.month',
-      payload: {
-        month: month(url.searchParams.get('month') || today().slice(0, 7))
-      }
-    };
-  }
-  if (path === 'visits/health') {
-    await requireAny(db, user, ['visits.forms.read', 'visits.forms.manage', 'visits.dashboard.read'], has);
-    return {
-      operation: 'health',
-      payload: {}
-    };
-  }
-  if (method === 'GET') {
+  if (p[1] === 'guides' && p.length === 2 && method === 'GET') {
     await requireAny(db, user, ['visits.guides.read', 'visits.guides.manage'], has);
     return {
-      operation: 'guides.list',
-      payload: {}
+      items: await visitGuideList(db),
+      can_manage: await has(db, user, 'visits.guides.manage')
     };
   }
-  assert(await has(db, user, 'visits.guides.manage'), 'Hanya pengelola kunjungan yang dapat mengubah data guide.', 403);
-  assert(b.guideId === undefined || b.guideId === null || b.guideId === '' || typeof b.guideId === 'string' && (/^G-\d{1,7}$/).test(b.guideId), 'ID guide tidak valid.');
-  assert(typeof b.guideName === 'string' && b.guideName.trim().length > 0 && b.guideName.length <= 120, 'Nama guide wajib diisi (maksimal 120 huruf).');
-  assert(['Asing', 'Domestik'].includes(b.kategori), 'Kategori harus Asing atau Domestik.');
-  const codes = (Array.isArray(b.regu) ? b.regu : String(b.regu || '').split(',')).map(x => String(x).trim()).filter(Boolean);
-  assert(codes.length > 0 && codes.length <= 2 && codes.every(c => regu.includes(c)), 'Pilih regu yang valid.');
-  assert(typeof b.aktif === 'boolean', 'Status aktif wajib dipilih.');
-  const payload = {
-    guideName: b.guideName.trim(),
-    kategori: b.kategori,
-    regu: codes.join(', '),
-    aktif: b.aktif
-  };
-  if (b.guideId) payload.guideId = b.guideId;
-  return {
-    operation: 'guides.upsert',
-    payload,
-    audit: {
-      action: b.guideId ? 'UPDATE' : 'CREATE',
-      type: 'visit_guides',
-      summary: {
-        kategori: payload.kategori,
-        regu: payload.regu,
-        aktif: payload.aktif
-      }
-    }
-  };
-}
-export async function visitBridgeFinish({db, user, plan, data}, deps = localDeps) {
-  if (plan.audit) {
-    const {audit} = deps;
-    assert(typeof data.guideId === 'string', 'Jawaban spreadsheet tidak lengkap.', 503);
-    await audit(db, user, data.created ? 'CREATE' : plan.audit.action, plan.audit.type, data.guideId, plan.audit.summary);
+  if (p[1] === 'guides' && method === 'POST' && (p.length === 2 || p.length === 3 && p[2] === 'import')) {
+    assert(await has(db, user, 'visits.guides.manage'), 'Hanya pengelola kunjungan yang dapat mengubah data guide.', 403);
+    return await tx(db, async () => p.length === 2 ? await saveVisitGuide(db, user, b, audit) : await importVisitGuides(db, user, b, audit));
   }
-  return data;
+  if (p[1] === 'sheet' && p.length === 2 && method === 'GET') {
+    await requireAny(db, user, ['visits.dashboard.read', 'visits.forms.read', 'visits.settings.manage'], has);
+    const status = await visitSheetStatus(db), manage = await has(db, user, 'visits.settings.manage');
+    const links = manage || await has(db, user, 'visits.reports.export');
+    return {
+      ...status,
+      files: links ? status.files : status.files.map(f => ({
+        year: f.year
+      })),
+      folder_url: links ? status.folder_url : null,
+      can_sync: manage
+    };
+  }
+  assert(false, 'Alamat API tidak ditemukan.', 404);
+}
+export const isVisitSheetAction = (path, method) => method === 'POST' && (path === 'visits/sheet/sync' || path === 'visits/sheet/check');
+export async function authorizeVisitSheetAction({db, user}, deps = localDeps) {
+  const {has} = deps;
+  assert(!user.must_change_password, 'Anda wajib mengganti password sementara terlebih dahulu.', 428);
+  assert(await has(db, user, 'visits.settings.manage'), 'Hanya pengelola kunjungan yang dapat menjalankan penyalinan spreadsheet.', 403);
+  return true;
 }

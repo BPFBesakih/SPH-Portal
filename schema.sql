@@ -310,8 +310,7 @@ CREATE TABLE IF NOT EXISTS merchandise_stock_movements (
  quantity_delta INTEGER NOT NULL, balance_before INTEGER, balance_after INTEGER NOT NULL CHECK(balance_after>=0), reason TEXT NOT NULL,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id));
 CREATE INDEX IF NOT EXISTS merchandise_stock_product_idx ON merchandise_stock_movements(product_id,created_at);
--- Pengelolaan Kunjungan: penilaian guide tinggal di Google Spreadsheet NilaiGuide.
--- Portal hanya menyimpan tautan pos dan catatan kiriman (tanpa nama guide/nilai/catatan).
+-- Pengelolaan Kunjungan: tautan pos dan catatan kiriman (catatan tanpa nama guide/nilai/catatan).
 CREATE TABLE IF NOT EXISTS guide_form_links (
  id TEXT PRIMARY KEY, pos INTEGER NOT NULL CHECK(pos IN(1,3)), label TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash)=64),
  share_token TEXT CHECK(share_token IS NULL OR length(share_token)=64), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
@@ -326,3 +325,38 @@ CREATE TABLE IF NOT EXISTS guide_form_submissions (
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS guide_form_submissions_pos_time ON guide_form_submissions(pos,received_at);
 CREATE INDEX IF NOT EXISTS guide_form_submissions_time ON guide_form_submissions(received_at);
+-- Penilaian guide disimpan di portal (6 minggu) dan disalin ke spreadsheet tahunan di Drive portal.
+CREATE TABLE IF NOT EXISTS visit_guides (
+ id TEXT PRIMARY KEY CHECK(id GLOB 'G-[0-9]*' AND length(id) BETWEEN 3 AND 9), seq INTEGER NOT NULL UNIQUE CHECK(seq BETWEEN 1 AND 9999999),
+ name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 120 AND name=trim(name)), kategori TEXT NOT NULL CHECK(kategori IN('Asing','Domestik')),
+ regu TEXT NOT NULL CHECK(regu IN('A1','A2','D1','D2') OR (length(regu)=6 AND substr(regu,1,2) IN('A1','A2','D1','D2') AND substr(regu,3,2)=', ' AND substr(regu,5,2) IN('A1','A2','D1','D2'))),
+ is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), updated_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS visit_evaluations (
+ id TEXT PRIMARY KEY CHECK(length(id)=36), link_id TEXT REFERENCES guide_form_links(id), pos INTEGER NOT NULL CHECK(pos IN(1,3)),
+ guide_id TEXT NOT NULL REFERENCES visit_guides(id), guide_name TEXT NOT NULL CHECK(length(guide_name) BETWEEN 1 AND 120),
+ uniform INTEGER NOT NULL CHECK(uniform IN(-1,1,2)), id_card INTEGER NOT NULL CHECK(id_card IN(0,1)), review INTEGER NOT NULL DEFAULT 0 CHECK(review BETWEEN 0 AND 20),
+ etika INTEGER NOT NULL CHECK(etika BETWEEN -5 AND 5), catatan TEXT NOT NULL DEFAULT '' CHECK(length(catatan)<=500),
+ evaluated_at TEXT NOT NULL CHECK(length(evaluated_at)=24), wita_date TEXT NOT NULL CHECK(length(wita_date)=10), received_at TEXT NOT NULL,
+ koreksi_dari TEXT CHECK(koreksi_dari IS NULL OR koreksi_dari<>id), status TEXT NOT NULL DEFAULT 'aktif' CHECK(status IN('aktif','diganti')), replaced_by TEXT,
+ sheet_tab TEXT, sheet_row INTEGER CHECK(sheet_row IS NULL OR sheet_row>=2), sheet_dirty INTEGER NOT NULL DEFAULT 0 CHECK(sheet_dirty IN(0,1)),
+ sheet_synced_at TEXT, sheet_verified_at TEXT,
+ CHECK((sheet_tab IS NULL)=(sheet_row IS NULL)), CHECK(status='aktif' OR replaced_by IS NOT NULL));
+CREATE INDEX IF NOT EXISTS visit_evaluations_date ON visit_evaluations(wita_date);
+CREATE INDEX IF NOT EXISTS visit_evaluations_guide_pos_time ON visit_evaluations(guide_id,pos,evaluated_at);
+CREATE INDEX IF NOT EXISTS visit_evaluations_unsynced ON visit_evaluations(received_at,id) WHERE sheet_row IS NULL;
+CREATE INDEX IF NOT EXISTS visit_evaluations_dirty ON visit_evaluations(sheet_tab,sheet_row) WHERE sheet_dirty=1;
+CREATE UNIQUE INDEX IF NOT EXISTS visit_evaluations_sheet_position ON visit_evaluations(sheet_tab,sheet_row) WHERE sheet_row IS NOT NULL;
+CREATE TABLE IF NOT EXISTS visit_monthly_totals (
+ month TEXT NOT NULL CHECK(length(month)=7), guide_id TEXT NOT NULL, pos INTEGER NOT NULL CHECK(pos IN(0,1,3)),
+ antar INTEGER NOT NULL CHECK(antar>=0), uniform INTEGER NOT NULL, uniform_patuh INTEGER NOT NULL CHECK(uniform_patuh>=0), id_card INTEGER NOT NULL CHECK(id_card>=0),
+ review INTEGER NOT NULL CHECK(review>=0), etika INTEGER NOT NULL, hari INTEGER NOT NULL CHECK(hari>=0), updated_at TEXT NOT NULL, PRIMARY KEY(month,guide_id,pos));
+CREATE TABLE IF NOT EXISTS visit_sheet_files (year INTEGER PRIMARY KEY CHECK(year BETWEEN 2026 AND 2100), spreadsheet_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS visit_sheet_tabs (
+ title TEXT PRIMARY KEY CHECK(length(title)=7), year INTEGER NOT NULL REFERENCES visit_sheet_files(year), sheet_id INTEGER NOT NULL CHECK(sheet_id>=0),
+ next_row INTEGER NOT NULL CHECK(next_row>=2), row_count INTEGER NOT NULL CHECK(row_count>=1), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS visit_sheet_state (
+ id INTEGER PRIMARY KEY CHECK(id=1), folder_id TEXT, lease_owner TEXT, lease_until TEXT, last_attempt_at TEXT, last_success_at TEXT,
+ last_error TEXT CHECK(last_error IS NULL OR length(last_error)<=300), last_error_at TEXT, last_retention_at TEXT, folded_through TEXT, updated_at TEXT NOT NULL,
+ CHECK((lease_owner IS NULL)=(lease_until IS NULL)));
+INSERT OR IGNORE INTO visit_sheet_state(id,updated_at) VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
