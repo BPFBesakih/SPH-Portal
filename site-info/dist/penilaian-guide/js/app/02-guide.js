@@ -2,8 +2,8 @@
    Daftar guide — muat, saring, cocokkan nama
    Berkas 3 dari 8 — lapisan UI Penilaian Guide Besakih
 
-   TUGAS    : Muat daftar guide dari tautan pos, penyaringan kategori/regu, pencocokan nama yang
-              ambigu.
+   TUGAS    : Muat daftar guide dari tautan pos, penyaringan kategori/regu, daftar saran
+              nama, pencocokan nama yang ambigu.
    LARANGAN : Nama ambigu tidak boleh ditebak diam-diam — "Darta" cocok untuk 14
               orang.
 
@@ -15,7 +15,7 @@
   'use strict';
 
   const App = window.App;
-  const { $, esc } = App;
+  const { $, $$, esc } = App;
 
   /**
    * Daftar guide hanya datang dari tautan pos (ATR-FL-05, KM-07):
@@ -75,15 +75,227 @@
 
   App.fillGuideInputs = function fillGuideInputs() {
     const list = App.guidesTersaring();
-    const dl = $('#guideList');
-    dl.innerHTML = list.map(g =>
-      `<option value="${esc(g.guideName)}">${esc(App.labelRegu(g.regu))}</option>`
-    ).join('');
     const total = App.state.guides.length;
     $('#guideCount').textContent = list.length === total
       ? `${total} guide aktif tersedia.`
       : `Menampilkan ${list.length} dari ${total} guide.`;
+    if (App.saranTerbuka()) App.tampilkanSaran();
     if (App.state.current === 'guides') App.renderGuideCards();
+  }
+
+  /* ---------------------------------------------------------
+     Daftar saran nama guide — pengganti <datalist>.
+
+     <datalist> tidak bisa diandalkan untuk daftar ini: Firefox menampilkan
+     label <option> (dulu "Asing · Regu 1") MENGGANTIKAN namanya, sementara
+     Chrome menampilkan keduanya. Akibatnya di Firefox semua baris terbaca
+     sama. Selain itu nama yang kembar tidak bisa dibedakan, karena yang
+     dikirim datalist hanya teks nama.
+
+     Perilakunya mengikuti pemilih nama di formulir coaching dan patroli
+     (public/employee-picker.js): daftar baru muncul setelah 2 huruf, paling
+     banyak 8 baris, menyatu di bawah kotak nama (tidak melayang), dan baris
+     keterangan di bawahnya selalu memberi tahu keadaan pencarian. Bedanya,
+     setiap baris membawa ID · regu dan memilih guide lewat guideId (unik),
+     karena nama guide bisa kembar.
+     --------------------------------------------------------- */
+
+  // Sama dengan pemilih nama coaching/patroli.
+  const SARAN_MIN_HURUF = 2;
+  const SARAN_MAKS = 8;
+  const PETUNJUK_AWAL = 'Ketik minimal 2 huruf nama guide, lalu pilih dari daftar.';
+
+  // Huruf kecil, spasi dirapikan: "  i  WAYAN " sama dengan "i wayan".
+  const rapikan = s => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+  /** Label filter yang sedang aktif, mis. "Asing · Regu 1". */
+  const labelFilter = () => {
+    const kat = $('#filterKategori') ? $('#filterKategori').value : '';
+    const rg = $('#filterRegu') ? $('#filterRegu').value : '';
+    return [kat, rg ? `Regu ${rg}` : ''].filter(Boolean).join(' · ');
+  };
+
+  /**
+   * Baris keterangan di bawah kotak nama. Selama mencari, isinya keadaan
+   * pencarian; selain itu petunjuk awal + jumlah guide sesuai filter.
+   */
+  const tulisPetunjuk = (teks) => {
+    const el = $('#guidePetunjuk');
+    const jumlah = $('#guideCount');
+    if (el) el.textContent = teks || PETUNJUK_AWAL;
+    if (jumlah) jumlah.hidden = !!teks;
+  };
+
+  /**
+   * Guide yang cocok dengan ketikan. Setiap kata yang diketik harus ada di
+   * nama (urutan bebas), atau ketikan cocok dengan ID guide. Urutan hasil:
+   * ID persis, nama yang diawali ketikan, kata yang diawali ketikan, lalu
+   * sisanya — masing-masing tetap urut nama seperti kiriman portal.
+   */
+  App.cariSaran = function cariSaran(teks, daftar) {
+    const q = rapikan(teks);
+    if (!q) return daftar.slice();
+    const kata = q.split(' ');
+    const hasil = [];
+    daftar.forEach((g, i) => {
+      const nama = rapikan(g.guideName);
+      const id = rapikan(g.guideId);
+      let peringkat;
+      if (id === q) peringkat = 0;
+      else if (nama.startsWith(q)) peringkat = 1;
+      else if (kata.every(k => nama.includes(k))) peringkat = (' ' + nama).includes(' ' + kata[0]) ? 2 : 3;
+      else if (id.includes(q)) peringkat = 4;
+      else return;
+      hasil.push({ g, peringkat, i });
+    });
+    // Indeks asal ikut dibandingkan: sort di WebView lama belum tentu stabil.
+    return hasil.sort((a, b) => a.peringkat - b.peringkat || a.i - b.i).map(x => x.g);
+  }
+
+  App.saranTerbuka = function saranTerbuka() {
+    const box = $('#guideSaran');
+    return !!box && !box.hidden;
+  }
+
+  /**
+   * Cari ulang sesuai ketikan dan filter, lalu tampilkan atau tutup daftar.
+   * Tidak membuka apa pun selama ketikan masih nama guide yang sudah dipilih
+   * — mengetuk lagi kotak yang sudah terisi tidak memunculkan daftar.
+   */
+  App.tampilkanSaran = function tampilkanSaran() {
+    const box = $('#guideSaran');
+    const input = $('#guideInput');
+    if (!box || !input) return;
+    const teks = String(input.value || '').trim();
+    const dipilih = App.state.form.guide;
+    if (input.disabled || !App.state.guides.length ||
+        (dipilih && rapikan(dipilih.guideName) === rapikan(teks))) {
+      App.tutupSaran(); tulisPetunjuk(''); return;
+    }
+    if (rapikan(teks).length < SARAN_MIN_HURUF) { App.tutupSaran(); tulisPetunjuk(''); return; }
+
+    const filter = labelFilter();
+    let cocok = App.cariSaran(teks, App.guidesTersaring());
+    let lintasFilter = false;
+    // Sama seperti saat menyimpan (guideUntukSimpan): bila tak ada yang cocok
+    // di filter, cari di semua guide — regu tiap baris tetap terlihat.
+    if (!cocok.length && filter) {
+      cocok = App.cariSaran(teks, App.state.guides);
+      lintasFilter = cocok.length > 0;
+    }
+    const tampil = cocok.slice(0, SARAN_MAKS);
+    if (!tampil.length) {
+      App.tutupSaran();
+      tulisPetunjuk(`Guide tidak ditemukan${filter ? ` di ${filter} maupun regu lain` : ''}. Coba bagian nama lainnya.`);
+      return;
+    }
+    tulisPetunjuk(
+      (lintasFilter ? `Tidak ada di ${filter}. Dari kategori/regu lain: ` : '') +
+      (cocok.length > tampil.length
+        ? `Menampilkan ${tampil.length} dari ${cocok.length} hasil. Perjelas pencarian untuk mempersempit hasil.`
+        : `${cocok.length} guide ditemukan. Pilih guide yang sesuai.`));
+
+    const baruDibuka = box.hidden;
+    App.state.saranAktif = -1;
+    input.removeAttribute('aria-activedescendant');
+    box.innerHTML = tampil.map((g, i) =>
+      `<button type="button" class="saran-item" id="saran-${i}" role="option" tabindex="-1" ` +
+      `aria-selected="false" data-saran="${esc(g.guideId)}">` +
+      `<span class="saran-nama">${esc(g.guideName)}</span>` +
+      `<span class="saran-meta">${esc(g.guideId)} · ${esc(App.labelRegu(g.regu) || 'tanpa regu')}</span>` +
+      `</button>`).join('');
+    box.scrollTop = 0;
+    box.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    if (baruDibuka) App.pastikanSaranTerlihat();
+  }
+
+  App.tutupSaran = function tutupSaran() {
+    const box = $('#guideSaran');
+    const input = $('#guideInput');
+    App.state.saranAktif = -1;
+    if (input) {
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+    }
+    if (!box || box.hidden) return;
+    box.hidden = true;
+    box.innerHTML = '';
+  }
+
+  /**
+   * Kotak nama di formulir ini ada di tengah layar, jadi di HP daftar yang baru
+   * muncul bisa tertutup keyboard. Halaman digeser seperlunya saja — sampai
+   * daftar terlihat, tanpa mendorong kotak nama ke balik bilah judul.
+   */
+  App.pastikanSaranTerlihat = function pastikanSaranTerlihat() {
+    const box = $('#guideSaran');
+    const input = $('#guideInput');
+    const bilah = $('.appbar');
+    if (!box || box.hidden || !input) return;
+    const vv = window.visualViewport;
+    const atasLayar = (vv ? vv.offsetTop : 0) + (bilah ? bilah.getBoundingClientRect().height : 0) + 8;
+    const bawahLayar = vv ? vv.offsetTop + vv.height : window.innerHeight;
+    const kurang = box.getBoundingClientRect().bottom + 8 - bawahLayar;
+    const ruang = input.getBoundingClientRect().top - atasLayar;
+    const geser = Math.min(kurang, ruang);
+    if (geser > 4) window.scrollBy({ top: geser, behavior: 'smooth' });
+  }
+
+  /** Panah atas/bawah: pindahkan sorotan di daftar saran. */
+  App.geserSaran = function geserSaran(arah) {
+    const items = $$('#guideSaran [data-saran]');
+    if (!items.length) return;
+    let i = App.state.saranAktif + arah;
+    if (i < 0) i = items.length - 1;
+    if (i >= items.length) i = 0;
+    App.state.saranAktif = i;
+    items.forEach((el, j) => {
+      el.classList.toggle('aktif', j === i);
+      el.setAttribute('aria-selected', j === i ? 'true' : 'false');
+    });
+    $('#guideInput').setAttribute('aria-activedescendant', items[i].id);
+    items[i].scrollIntoView({ block: 'nearest' });
+  }
+
+  /**
+   * guideId yang dipilih tombol Enter: baris yang disorot, satu-satunya
+   * baris, atau satu-satunya baris yang namanya persis sama dengan ketikan.
+   * Null bila belum jelas — Enter tidak boleh menebak.
+   */
+  App.saranUntukEnter = function saranUntukEnter() {
+    const items = $$('#guideSaran [data-saran]');
+    const aktif = items[App.state.saranAktif];
+    if (aktif) return aktif.dataset.saran;
+    if (items.length === 1) return items[0].dataset.saran;
+    const q = rapikan($('#guideInput').value);
+    const persis = items.filter(el => rapikan(el.querySelector('.saran-nama').textContent) === q);
+    return persis.length === 1 ? persis[0].dataset.saran : null;
+  }
+
+  /** Jumlah baris yang bisa dipilih di daftar saran yang sedang terbuka. */
+  App.jumlahSaran = function jumlahSaran() {
+    return App.saranTerbuka() ? $$('#guideSaran [data-saran]').length : 0;
+  }
+
+  /**
+   * Guide dipilih dari daftar saran. Ditentukan lewat guideId — dua guide
+   * boleh bernama persis sama, jadi nama saja tidak cukup.
+   */
+  App.pilihSaran = function pilihSaran(id) {
+    const g = App.findGuideById(id);
+    if (!g) return;
+    App.state.form.guide = g;
+    // Ganti guide berarti situasinya lain: persetujuan jeda untuk guide
+    // sebelumnya tidak boleh ikut terbawa.
+    App.state.form.lanjutJeda = null;
+    $('#guideInput').value = g.guideName;
+    App.tutupSaran();
+    tulisPetunjuk('');
+    App.showPicked(g);
+    App.tampilkanKandidat(null);
+    App.saveDraft();
+    $('#draftNote').hidden = false;
   }
 
   /**

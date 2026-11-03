@@ -22,6 +22,9 @@
                        catatan: '', lanjutJeda: null };
     App.tampilkanPos();
     $('#guideInput').value = '';
+    // Kotak kosong: daftar saran tertutup dan keterangannya kembali ke petunjuk
+    // awal. Dijaga: selama pembaruan, HP bisa sesaat memuat 02-guide.js lama.
+    if (App.tampilkanSaran) App.tampilkanSaran();
     $('#catatan').value = '';
     $('#guidePicked').classList.add('hidden');
     App.tampilkanKandidat(null);
@@ -120,7 +123,7 @@
     const tampil = kandidat.slice(0, 6);
     el.innerHTML = 'Maksud Anda: ' + tampil.map(g =>
       `<button type="button" class="chip" data-guide="${esc(g.guideName)}" data-guide-id="${esc(g.guideId)}">` +
-      `${esc(g.guideName)} <small>· ${esc(App.labelRegu(g.regu))}</small></button>`
+      `${esc(g.guideName)} <small>· ${esc(g.guideId)} · ${esc(App.labelRegu(g.regu))}</small></button>`
     ).join(' ') + (kandidat.length > tampil.length
       ? ` <small>(+${kandidat.length - tampil.length} lainnya — ketik lebih lengkap)</small>` : '');
     el.hidden = false;

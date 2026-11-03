@@ -24,6 +24,9 @@
 
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0}
+/* Bilah judul tetap di atas: kotak isian yang digulir ke layar (mis. saat
+   keyboard HP muncul) berhenti di bawahnya, bukan tertutup. */
+html{scroll-padding-top:calc(72px + env(safe-area-inset-top))}
 body{
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   font-size:17px; line-height:1.45; color:var(--teks); background:var(--bg);
@@ -144,6 +147,21 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
 .sublbl{display:block;font-size:14px;font-weight:600;color:var(--abu);margin-bottom:4px}
 
 .picked{background:var(--hijau-muda);border-radius:12px;padding:10px 14px;font-size:15px;font-weight:600;color:var(--hijau-tua)}
+
+/* Daftar saran nama guide (pengganti <datalist>). Seperti pemilih nama
+   formulir coaching/patroli: menyatu di bawah kotak nama, bukan melayang
+   menutupi tombol penilaian. */
+.saran-wrap{display:flex;flex-direction:column;gap:8px}
+.saran{max-height:320px;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  background:var(--putih);border:1px solid var(--garis);border-radius:12px}
+.saran-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
+  min-height:var(--tap);padding:9px 14px;border:0;border-top:1px solid var(--abu-muda);
+  background:var(--putih);font-family:inherit;text-align:left;color:var(--teks);cursor:pointer}
+.saran-item:first-child{border-top:0}
+.saran-item:active,.saran-item.aktif{background:var(--hijau-muda)}
+@media(hover:hover){.saran-item:hover{background:var(--hijau-muda)}}
+.saran-nama{font-size:17px;font-weight:700;line-height:1.3;overflow-wrap:anywhere}
+.saran-meta{font-size:14px;line-height:1.3;color:var(--abu)}
 
 /* ------------------------- Kriteria ------------------------- */
 .criterion{display:flex;align-items:center;justify-content:space-between;gap:12px;
