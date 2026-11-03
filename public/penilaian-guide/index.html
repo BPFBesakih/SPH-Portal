@@ -143,8 +143,18 @@
           </div>
         </div>
 
-        <input id="guideInput" class="bigselect" list="guideList" placeholder="Ketik nama atau pilih…" required
-               inputmode="search" aria-describedby="guideHelp">
+        <!-- Daftar saran digambar sendiri (02-guide.js), bukan <datalist>: Firefox
+             menampilkan label <option> MENGGANTIKAN nilainya, sehingga setiap baris
+             terbaca "Asing · Regu 1" tanpa nama guide. -->
+        <div class="saran-wrap">
+          <input id="guideInput" class="bigselect" placeholder="Ketik nama atau pilih…" required
+                 inputmode="search" role="combobox" aria-autocomplete="list" aria-expanded="false"
+                 aria-controls="guideSaranDaftar" aria-describedby="guideHelp">
+          <div id="guideSaran" class="saran" hidden></div>
+        </div>
+        <!-- Tidak dipakai lagi (kotak nama tidak memakai atribut list). Dibiarkan
+             kosong supaya HP yang sesaat masih memuat 02-guide.js lama dari cache
+             tidak galat saat mengisinya. Boleh dihapus pada rilis berikutnya. -->
         <datalist id="guideList"></datalist>
         <div id="guideHelp" class="help">Ketik sebagian nama untuk mencari. <span id="guideCount"></span></div>
         <div id="guideAmbigu" class="help" hidden></div>

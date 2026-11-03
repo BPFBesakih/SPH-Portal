@@ -108,7 +108,75 @@
       App.state.form.lanjutJeda = null;
       App.saveDraft();
       $('#draftNote').hidden = false;
+      if (App.tampilkanSaran) App.tampilkanSaran();
     });
+
+    // Daftar saran nama guide (pengganti <datalist>, lihat 02-guide.js).
+    const guideInput = $('#guideInput');
+    const guideSaran = $('#guideSaran');
+    // Selama pembaruan, HP bisa sesaat memuat index.html atau 02-guide.js lama
+    // dari cache (keduanya diperbarui terpisah). Tanpa penjagaan ini, satu galat
+    // di sini menghentikan semua binding di bawahnya, termasuk tombol SIMPAN.
+    if (guideSaran && App.tampilkanSaran) {
+      guideInput.addEventListener('focus', () => {
+        App.tampilkanSaran();
+        // Di HP keyboard menutup hampir separuh layar. Kotak nama digeser ke atas
+        // supaya daftar saran di bawahnya terlihat beberapa baris, bukan satu.
+        if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+          setTimeout(() => {
+            if (document.activeElement !== guideInput) return;
+            const halus = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            guideInput.scrollIntoView({ block: 'start', behavior: halus ? 'smooth' : 'auto' });
+          }, 300);
+        }
+      });
+      // Kotak yang masih fokus diketuk lagi setelah daftarnya ditutup (Esc/pilih).
+      guideInput.addEventListener('click', () => { if (!App.saranTerbuka()) App.tampilkanSaran(); });
+      guideInput.addEventListener('keydown', e => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (!App.saranTerbuka()) App.tampilkanSaran();
+          App.geserSaran(e.key === 'ArrowDown' ? 1 : -1);
+        } else if (e.key === 'Enter' && App.jumlahSaran()) {
+          // Enter memilih baris yang disorot, satu-satunya baris, atau nama yang
+          // persis sama (saranUntukEnter), dan tidak mengirim formulir selama
+          // pilihan nama masih terbuka.
+          e.preventDefault();
+          const id = App.saranUntukEnter();
+          if (id) App.pilihSaran(id);
+        } else if (e.key === 'Escape' && App.saranTerbuka()) {
+          e.preventDefault();
+          App.tutupSaran();
+        }
+      });
+      // Ditutup sedikit tertunda, supaya ketukan pada baris saran sempat diproses
+      // di peramban yang memindahkan fokus lebih dulu.
+      guideInput.addEventListener('blur', () => {
+        setTimeout(() => { if (document.activeElement !== guideInput) App.tutupSaran(); }, 150);
+      });
+      // Ketukan di luar kotak nama menutup daftar. Di iOS kotak nama tidak selalu
+      // kehilangan fokus saat tombol lain diketuk, jadi blur saja tidak cukup.
+      document.addEventListener('click', e => {
+        if (App.saranTerbuka() && !e.target.closest('.saran-wrap')) App.tutupSaran();
+      });
+      // Fokus tetap di kotak nama selama baris saran ditekan.
+      guideSaran.addEventListener('mousedown', e => e.preventDefault());
+      guideSaran.addEventListener('click', e => {
+        const item = e.target.closest('[data-saran]');
+        if (!item) return;
+        App.pilihSaran(item.dataset.saran);
+        // Keyboard HP ditutup: langkah berikutnya menekan tombol penilaian.
+        guideInput.blur();
+      });
+      const ukurSaran = () => { if (App.saranTerbuka()) App.ukurSaran(); };
+      window.addEventListener('resize', ukurSaran);
+      window.addEventListener('scroll', ukurSaran, { passive: true });
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', ukurSaran);
+        window.visualViewport.addEventListener('scroll', ukurSaran);
+      }
+    }
+
     $('#catatan').addEventListener('input', e => { App.state.form.catatan = e.target.value; App.saveDraft(); });
 
     $$('.criterion').forEach(c => {

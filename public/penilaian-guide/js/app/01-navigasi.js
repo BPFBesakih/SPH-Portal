@@ -31,6 +31,8 @@
     $('#btnBack').classList.toggle('hidden', akar);
     $('#btnMenu').classList.toggle('hidden', !akar);
     App.closeDrawer();
+    // Dijaga: selama pembaruan, HP bisa sesaat memuat 02-guide.js lama dari cache.
+    if (App.tutupSaran) App.tutupSaran();
     window.scrollTo(0, 0);
     if (location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
 

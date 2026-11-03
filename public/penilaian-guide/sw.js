@@ -3,7 +3,7 @@
    Lingkup: /penilaian-guide/ saja. Menyimpan app shell; balasan /api/
    TIDAK PERNAH disimpan (ATR-FL-15). Naikkan CACHE bersama APP_VERSION.
    ========================================================= */
-const CACHE = 'bpb-penilaian-guide-v2.1.0';
+const CACHE = 'bpb-penilaian-guide-v2.1.1';
 const SHELL = [
   './',
   './index.html',

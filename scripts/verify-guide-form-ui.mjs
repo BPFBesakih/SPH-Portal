@@ -4,6 +4,7 @@
 //
 // Portal SQLite di memori + Google Drive/Sheets TIRUAN (scripts/fake-google-sheets.mjs),
 // data guide fiktif. Memeriksa skenario UJI-01/02/03/05/10/13/17/27 PRD di HP pos,
+// daftar saran nama guide (nama + ID · regu, filter, keyboard, nama kembar),
 // salinan spreadsheet di latar belakang, serta Data Guide (impor .csv), Dashboard,
 // dan Tautan Pos (periksa koneksi, sinkronkan) di portal.
 // Playwright diambil dari PLAYWRIGHT_MODULE bila diisi, selain itu dari `playwright`.
@@ -26,6 +27,8 @@ const db=openDb(':memory:');seedPermissions(db);
 const user=insert(db,'users',{username:'kunjungan.uji',password_hash:hashPasswordSync('UjiKunjungan!2026'),status:'ACTIVE',must_change_password:0,failed_login_count:0,password_changed_at:now()});
 insert(db,'user_roles',{user_id:user.id,role_id:one(db,"SELECT id FROM roles WHERE code='KUNJUNGAN_PENGELOLA'").id,scope_kind:'ALL'});
 let seq=0;for(const regu of ['A1','A2','D1','D2'])for(let i=1;i<=10;i++){seq++;insert(db,'visit_guides',{id:`G-${String(seq).padStart(3,'0')}`,seq,name:`Guide Contoh ${regu}-${String(i).padStart(2,'0')}`,kategori:regu.startsWith('A')?'Asing':'Domestik',regu,is_active:1});}
+// Dua guide bernama persis sama: daftar saran harus membedakannya lewat ID dan regu.
+for(const [id,regu] of [['G-090','A1'],['G-091','D2']])insert(db,'visit_guides',{id,seq:Number(id.slice(2)),name:'Guide Kembar Uji',kategori:regu.startsWith('A')?'Asing':'Domestik',regu,is_active:1});
 const tokens={1:'1'.repeat(64),3:'3'.repeat(64)};
 for(const pos of [1,3])insert(db,'guide_form_links',{pos,label:guidePosts[pos],token_hash:digest(tokens[pos]),share_token:tokens[pos],is_active:1,created_by:user.id});
 const google=createFakeGoogle();
@@ -40,11 +43,33 @@ try{
   page.on('pageerror',e=>errors.push(e.message));
   const until=async(test,label,ms=20000)=>{const end=Date.now()+ms;for(;;){const c=await page.evaluate(()=>DB.counts());if(test(c))return c;if(Date.now()>end)throw new Error(`Menunggu ${label}: ${JSON.stringify(c)}`);await page.waitForTimeout(250);}};
   const rows=()=>one(db,'SELECT count(*) n FROM visit_evaluations').n;
-  const pick=async(name,uniform='1',id='1')=>{await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput',name);await page.dispatchEvent('#guideInput','input');await page.click(`.criterion[data-crit="idCard"] .seg[data-val="${id}"]`);await page.click(`.criterion[data-crit="uniform"] .seg[data-val="${uniform}"]`);};
+  // Baris daftar saran nama guide: ID, nama, dan keterangan ID · regu.
+  const saran=()=>page.$$eval('#guideSaran .saran-item',els=>els.map(e=>({id:e.dataset.saran,nama:e.querySelector('.saran-nama').textContent,meta:e.querySelector('.saran-meta').textContent})));
+  const pilihSaran=async name=>{const ids=(await saran()).filter(r=>r.nama===name).map(r=>r.id);assert.equal(ids.length,1,`satu saran bernama ${name}`);await page.click(`#guideSaran [data-saran="${ids[0]}"]`);};
+  const pick=async(name,uniform='1',id='1')=>{await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput',name);await pilihSaran(name);await page.click(`.criterion[data-crit="idCard"] .seg[data-val="${id}"]`);await page.click(`.criterion[data-crit="uniform"] .seg[data-val="${uniform}"]`);};
   await page.goto(base+'/penilaian-guide/');await page.waitForTimeout(800);await page.click('#tutSkip').catch(()=>{});
-  await check('UJI-02 tanpa token hanya petunjuk tautan, tanpa daftar guide',async()=>{assert(await page.isVisible('#view-tautan'));assert.equal(await page.$$eval('#guideList option',o=>o.length),0);});
-  await page.goto(base+'/penilaian-guide/#'+tokens[1]);await page.waitForFunction(()=>document.querySelectorAll('#guideList option').length>30);
+  await check('UJI-02 tanpa token hanya petunjuk tautan, tanpa daftar guide',async()=>{assert(await page.isVisible('#view-tautan'));assert.equal(await page.evaluate(()=>App.state.guides.length),0);assert.equal((await saran()).length,0);});
+  await page.goto(base+'/penilaian-guide/#'+tokens[1]);await page.waitForFunction(()=>App.state.guides.length>30);
   await check('UJI-01 tautan pos tersimpan, guide dari Data Guide portal termuat, token hilang dari alamat',async()=>{assert(!page.url().includes(tokens[1]));assert.match(await page.textContent('#posLabel'),/Pos 1/);});
+  // Dulu <datalist>: Firefox menampilkan label "Asing · Regu 1" menggantikan nama guide.
+  await check('Daftar saran menampilkan nama guide beserta ID dan regu, bukan hanya "Asing · Regu 1"',async()=>{
+    await page.evaluate(()=>App.go('nilai'));await page.click('#guideInput');assert(await page.isVisible('#guideSaran'));assert.equal((await saran()).length,42);
+    await page.fill('#guideInput','contoh a1');const rows=await saran();assert.equal(rows.length,10);
+    assert(rows.every(r=>/^Guide Contoh A1-\d\d$/.test(r.nama)&&/^G-\d{3} · Asing · Regu 1$/.test(r.meta)),JSON.stringify(rows));
+    await page.keyboard.press('Escape');assert(await page.isHidden('#guideSaran'));
+  });
+  await check('Filter Kategori/Regu menyaring saran; nama dari regu lain tetap ditawarkan dengan keterangan',async()=>{
+    await page.selectOption('#filterKategori','Domestik');await page.selectOption('#filterRegu','2');
+    await page.fill('#guideInput','contoh');const rows=await saran();assert.equal(rows.length,10);assert(rows.every(r=>r.meta.endsWith('Domestik · Regu 2')));
+    await page.fill('#guideInput','A1-03');assert.match(await page.textContent('#guideSaran'),/Tidak ada di Domestik · Regu 2/);assert.deepEqual((await saran()).map(r=>r.nama),['Guide Contoh A1-03']);
+    await page.selectOption('#filterKategori','');await page.selectOption('#filterRegu','');await page.fill('#guideInput','');
+  });
+  await check('Keyboard: panah bawah lalu Enter memilih saran tanpa mengirim formulir',async()=>{
+    await page.evaluate(()=>{window.__kirim=0;document.querySelector('#formEval').addEventListener('submit',()=>window.__kirim++);});
+    await page.fill('#guideInput','contoh d1');await page.keyboard.press('ArrowDown');await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');
+    assert.equal(await page.inputValue('#guideInput'),'Guide Contoh D1-02');assert.equal(await page.evaluate(()=>App.state.form.guide.guideId),'G-022');
+    assert(await page.isHidden('#guideSaran'));assert.equal(await page.evaluate(()=>window.__kirim),0);
+  });
   await pick('Guide Contoh A1-03','2');await page.click('.criterion[data-crit="etika"] [data-step="1"]');await page.fill('#catatan','=IMPORTDATA("x")');await page.dispatchEvent('#catatan','input');await page.waitForTimeout(600);
   await check('UJI-13 draf pulih setelah dimuat ulang',async()=>{await page.reload();await page.waitForTimeout(1000);await page.evaluate(()=>App.go('nilai'));assert.equal(await page.inputValue('#guideInput'),'Guide Contoh A1-03');assert.equal(await page.inputValue('#catatan'),'=IMPORTDATA("x")');assert.equal(await page.textContent('#etikaNilai'),'+1');});
   await page.click('#btnSave');await until(c=>c.synced===1,'kiriman pertama');await settle();
@@ -60,6 +85,14 @@ try{
   assert.equal((await page.evaluate(()=>DB.counts())).pending,3);
   await ctx.setOffline(false);await page.evaluate(()=>window.dispatchEvent(new Event('online')));await until(c=>c.pending===0&&c.synced===5,'antrean offline');
   await check('UJI-03 tiga penilaian offline terkirim setelah online',async()=>{assert.equal(rows(),5);});
+  await check('Nama kembar: saran membedakan ID/regu, dan guide yang dipilih tersimpan lewat guideId',async()=>{
+    await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput','kembar');
+    assert.deepEqual((await saran()).map(r=>[r.id,r.nama,r.meta]),[['G-090','Guide Kembar Uji','G-090 · Asing · Regu 1'],['G-091','Guide Kembar Uji','G-091 · Domestik · Regu 2']]);
+    await page.click('#guideSaran [data-saran="G-091"]');assert(await page.isHidden('#guideSaran'));assert.match(await page.textContent('#guidePicked'),/G-091/);
+    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');await page.click('.criterion[data-crit="uniform"] .seg[data-val="1"]');
+    await page.click('#btnSave');await until(c=>c.synced===6,'nama kembar');
+    assert.deepEqual(all(db,"SELECT guide_id FROM visit_evaluations WHERE guide_name='Guide Kembar Uji'").map(r=>r.guide_id),['G-091']);
+  });
   await page.evaluate(()=>App.go('tautan'));await page.fill('#tautanInput',`${base}/penilaian-guide/#${tokens[3]}`);await page.click('#formTautan button[type=submit]');await page.waitForTimeout(1200);
   await check('UJI-27 tempel tautan Pos 3; pemilih pos muncul',async()=>{assert(await page.isVisible('#homePos'));assert.equal((await page.$$eval('#homePos option',o=>o.length)),2);});
   const csv=await page.evaluate(async()=>{let out='';const orig=App.download;App.download=(n,c)=>{out=c;};await App.exportCsv();App.download=orig;return out;});
@@ -75,7 +108,7 @@ try{
   await settle();
   await check('Dashboard menghitung penilaian dari portal dan menampilkan status salinan',async()=>{
     await portal.goto(base+'/#visits-records');await portal.goto(base+'/#visits');await portal.waitForSelector('.stat-value');
-    const values=await portal.$$eval('.stat-card .stat-value',els=>els.map(e=>e.textContent.trim()));assert.equal(values[0],'4','4 pengantaran aktif (1 diganti)');
+    const values=await portal.$$eval('.stat-card .stat-value',els=>els.map(e=>e.textContent.trim()));assert.equal(values[0],'5','5 pengantaran aktif (1 diganti), termasuk nama kembar');
     assert.match(await portal.textContent('main'),/semua baris sudah tersalin/);
   });
   const file=resolve(dataDir,'Guides.csv');

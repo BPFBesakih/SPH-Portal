@@ -46,6 +46,8 @@
      */
     koreksi: null,
     guideKategoriFilter: '',
+    // Baris daftar saran nama guide yang disorot panah atas/bawah; -1 = tidak ada.
+    saranAktif: -1,
     tutIndex: 0,
     initialised: false,
   };
@@ -54,7 +56,7 @@
   // beriringan: kalau APP_VERSION mandek, laporan staff ("versi berapa yang
   // muncul di layar Tentang?") tidak bisa dipakai memastikan HP mana yang
   // sudah menerima pembaruan.
-  const APP_VERSION = '2.0.0';
+  const APP_VERSION = '2.1.1';
 
   const $ = s => document.querySelector(s);
 
