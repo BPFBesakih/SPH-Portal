@@ -3,9 +3,9 @@ import {binaryUploadType,readBinaryUpload,UploadBodyError} from './site-info/lib
 import {quickReportManagement,publicQuickReport,takeQuickReportSlot} from './lib/quick-reports.mjs';
 import {publicCoachingLink,takeCoachingLinkSlot} from './lib/coaching-links.mjs';
 import {briefingRoutes,publicBriefingLink,takeBriefingLinkSlot} from './lib/briefings.mjs';
-import {visitRoutes,visitBridgePlan,visitBridgeFinish} from './lib/visits.mjs';
-import {takeGuideFormIpSlot,admitGuideForm,guideFormContext,guideFormReceipt,recordGuideFormResult,ipFingerprint} from './lib/guide-form.mjs';
-import {bridgeConfig,callBridge} from './lib/visits-bridge.mjs';
+import {visitRoutes,isVisitSheetAction,authorizeVisitSheetAction} from './lib/visits.mjs';
+import {takeGuideFormIpSlot,admitGuideForm,guideFormContext,submitGuideForm,guideFormReceipt,recordGuideFormResult,ipFingerprint} from './lib/guide-form.mjs';
+import {runVisitSheetSync,checkVisitSheetConnection,syncVisitSheetAfterSubmit,visitSheetConfig} from './lib/visit-sheets.mjs';
 import {createServer} from 'node:http';
 import {readFileSync,existsSync,statSync} from 'node:fs';
 import {resolve,extname} from 'node:path';
@@ -34,9 +34,12 @@ async function jsonBody(req,limit) {
   assert((req.headers['content-type']||'').startsWith('application/json'),'Gunakan Content-Type application/json.',415);
   try{const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));assert(body&&typeof body==='object'&&!Array.isArray(body),'Isi permintaan harus objek.');return body;}catch(e){if(e instanceof AppError)throw e;throw new AppError(400,'JSON tidak valid.');}
 }
-export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'data'),origin=process.env.APP_ORIGIN||'http://127.0.0.1:3000',visitsBridge=bridgeConfig(process.env,{allowLocal:process.env.NODE_ENV!=='production'}),bridgeFetch=globalThis.fetch,ipKey=process.env.VISITS_IP_HMAC_KEY}={}) {
+export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'data'),origin=process.env.APP_ORIGIN||'http://127.0.0.1:3000',sheetEnv=process.env,sheetFetch,sheetAuto=visitSheetConfig(sheetEnv).configured,ipKey=process.env.VISITS_IP_HMAC_KEY}={}) {
   if(process.env.NODE_ENV==='production')assert(origin.startsWith('https://')&&process.env.COOKIE_SECURE==='true','Mode produksi memerlukan APP_ORIGIN HTTPS dan COOKIE_SECURE=true.');
   seedPermissions(db);const attempts=new Map();
+  // Penyalinan spreadsheet: transaksi pendek per langkah, panggilan Google di antaranya.
+  const runTx=work=>tx(db,()=>work(db)),sheetTasks=new Set();
+  const track=task=>{sheetTasks.add(task);task.catch(error=>console.warn('[salinan-spreadsheet]',error.message)).finally(()=>sheetTasks.delete(task));};
   function rateLimit(req,key){const ip=req.socket.remoteAddress||'unknown',k=ip+key,entry=attempts.get(k)||{count:0,until:Date.now()+15*60000};if(entry.until<Date.now()){entry.count=0;entry.until=Date.now()+15*60000;}entry.count++;attempts.set(k,entry);if(attempts.size>5000)for(const [key,v]of attempts)if(v.until<Date.now())attempts.delete(key);assert(entry.count<=30,'Terlalu banyak percobaan. Coba lagi 15 menit kemudian.',429);}
   const server=createServer(async(req,res)=> {
     const requestId=uid();res.setHeader('X-Request-Id',requestId);
@@ -80,15 +83,22 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
         const result=tx(db,()=>publicBriefingLink(db,p[1],body,dataDir,requestId));send(result);return;
       }
       if(p[0]==='guide-form'){
-        // Formulir pos tanpa login. Panggilan spreadsheet berjalan di luar transaksi.
+        // Formulir pos tanpa login. Penyalinan ke spreadsheet berjalan sesudah balasan dikirim.
         assert(method==='POST'&&p.length===2&&!url.search,'Alamat tidak ditemukan.',404);
         assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Buka formulir melalui tautan pos.',403);
         const ip=req.socket.remoteAddress||'';
         assert(tx(db,()=>takeGuideFormIpSlot(db,p[1],ip,body)),'Terlalu banyak kiriman. Coba lagi beberapa menit kemudian.',429);
-        const admitted=tx(db,()=>admitGuideForm(db,p[1],body));assert(!admitted.limited,'Terlalu banyak kiriman. Coba lagi beberapa menit kemudian.',429);
-        if(p[1]==='context'){send(guideFormContext(admitted.link,await callBridge(visitsBridge,'form.context',{},{fetchImpl:bridgeFetch,timeoutMs:30000})));return;}
-        const data=admitted.items.length?await callBridge(visitsBridge,'evaluations.submit',{pos:admitted.link.pos,items:admitted.items},{fetchImpl:bridgeFetch,timeoutMs:30000}):{accepted:[],rejected:[]};
-        const receipt=guideFormReceipt(admitted,data);try{tx(db,()=>recordGuideFormResult(db,admitted.link,receipt,ipFingerprint(ip,ipKey)));}catch(error){console.warn(`[${requestId}] catatan kiriman gagal`,error.message);}send(receipt);return;
+        const outcome=tx(db,()=>{
+          const admitted=admitGuideForm(db,p[1],body);if(admitted.limited)return admitted;
+          if(p[1]==='context')return {context:guideFormContext(db,admitted.link)};
+          const result=submitGuideForm(db,admitted);recordGuideFormResult(db,admitted,result,ipFingerprint(ip,ipKey));
+          return {receipt:guideFormReceipt(admitted,result),fresh:result.accepted.some(a=>!a.duplicate)};
+        });
+        assert(!outcome.limited,'Terlalu banyak kiriman. Coba lagi beberapa menit kemudian.',429);
+        if(outcome.context){send(outcome.context);return;}
+        send(outcome.receipt);
+        if(outcome.fresh&&sheetAuto)track(syncVisitSheetAfterSubmit({runTx,env:sheetEnv,fetchImpl:sheetFetch}));
+        return;
       }
       if(p[0]==='auth'&&p[1]==='login'&&method==='POST') {
         rateLimit(req,'login');const result=await login(db,body,req);res.setHeader('Set-Cookie',[cookie('besakih_session',result.token,true,result.hours*3600),cookie('besakih_csrf',result.csrfToken,false,result.hours*3600)]);send({user:result.user,csrfToken:result.csrfToken});return;
@@ -105,8 +115,10 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(p[0]==='auth'&&p[1]==='logout'&&method==='POST'){run(db,'UPDATE auth_sessions SET revoked_at=? WHERE id=?',now(),user.session.id);res.setHeader('Set-Cookie',[cookie('besakih_session','',true,0),cookie('besakih_csrf','',false,0)]);send({ok:true});return;}
       if(p[0]==='auth'&&p[1]==='password'&&method==='POST'){await changePassword(db,user,body);send({ok:true});return;}
       assert(!user.must_change_password,'Anda wajib mengganti password sementara terlebih dahulu.',428);
-      const bridgePlan=visitBridgePlan({db,user,p,method,body,url});
-      if(bridgePlan){const data=await callBridge(visitsBridge,bridgePlan.operation,bridgePlan.payload,{fetchImpl:bridgeFetch});send(bridgePlan.audit?tx(db,()=>visitBridgeFinish({db,user,plan:bridgePlan,data})):visitBridgeFinish({db,user,plan:bridgePlan,data}));return;}
+      if(isVisitSheetAction(p.join('/'),method)){
+        authorizeVisitSheetAction({db,user});
+        send(p[2]==='sync'?await runVisitSheetSync({runTx,env:sheetEnv,fetchImpl:sheetFetch,trigger:'manual'}):await checkVisitSheetConnection({runTx,env:sheetEnv,fetchImpl:sheetFetch}));return;
+      }
       if(p[0]==='merchandise'){const result=merchandiseRoutes({db,user,p,method,body,url});assert(result!==undefined,'Alamat API tidak ditemukan.',404);send(result);return;}
       if(p[0]==='dashboard'&&method==='GET'){send(dashboard(db,user,url.searchParams.get('module')||'hr',url.searchParams.get('as_of')||undefined));return;}
       if(p[0]==='lookups'&&method==='GET'){send(lookups(db,user,url.searchParams.get('purpose')||'employees',url.searchParams.get('session_id')));return;}
@@ -131,7 +143,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
     }
   });
   server.requestTimeout=30000;server.headersTimeout=15000;
-  return {server,db};
+  return {server,db,sheetTasks};
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   const app=createApp();const port=Number(process.env.PORT)||3000,host=process.env.HOST||'127.0.0.1';app.server.listen(port,host,()=>console.log(`Portal Besakih: http://${host==='0.0.0.0'?'localhost':host}:${port}`));
