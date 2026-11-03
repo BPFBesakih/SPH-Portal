@@ -216,9 +216,10 @@ async function exportRecords(){
  const rows=[];
  for(let offset=0;;offset+=1000){const page=await api(`visits/records?${recordQuery(offset)}`);rows.push(...page.items);if(!page.more)break;if(offset>=49000)throw new Error('Lebih dari 50.000 baris. Persempit rentang tanggal.');}
  if(!rows.length)throw new Error('Tidak ada penilaian pada saringan ini.');
- const summary=await api(`visits/overview?${range()}`);
+ // Rentang yang memotong data lama (422) tetap bisa diekspor rinciannya, tanpa ringkasan.
+ const summary=await api(`visits/overview?${range()}`).catch(error=>{if(error.status===422)return null;throw error;});
  const columns=['evaluationId','timestamp','tanggal','pos','guideId','guideName','regu','uniform','idCard','etika','catatan','receivedAt','koreksiDari','status','digantiOleh'].map(key=>({header:key,key,kind:['pos','uniform','idCard','etika'].includes(key)?'number':key==='catatan'?'notes':'text',width:key==='catatan'?40:undefined}));
- download(createXlsx([{name:'Penilaian',columns,rows},{name:'Ringkasan per guide',columns:guideColumns,rows:summary.perGuide}]),`penilaian-guide-${M.from}-sd-${M.to}.xlsx`);
+ download(createXlsx([{name:'Penilaian',columns,rows},...(summary?[{name:'Ringkasan per guide',columns:guideColumns,rows:summary.perGuide}]:[])]),`penilaian-guide-${M.from}-sd-${M.to}.xlsx`);
  await post('visits/exports',{kind:'records',from:M.from,to:M.to,rows:rows.length});
  toast(`${number(rows.length)} penilaian diekspor.`);
 }
