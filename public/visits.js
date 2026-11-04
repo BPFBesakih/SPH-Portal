@@ -2,12 +2,13 @@ import {api,post,permitted,refresh,state} from './api.js';
 import {esc,icon,toast,dialog,formDialog,localToday,formatDate,formatTime,number} from './ui.js';
 import {createXlsx} from './xlsx-export.js';
 import {encodeQR} from './vendor/qr.js';
-import {readGuideFile} from './visit-import.js';
+import {readGuideFile,readHistoryFile,historyParts} from './visit-import.js';
 
 // Ruang kerja Pengelolaan Kunjungan. Penilaian guide masuk dari tautan pos ke basis
 // data portal, lalu disalin otomatis ke spreadsheet tahunan di Google Drive portal.
-// Rincian penilaian disimpan 6 minggu; periode lebih lama dihitung dari ringkasan
-// bulanan, rinciannya di spreadsheet. Aplikasi NilaiGuide lama tidak disentuh.
+// Rincian penilaian disimpan 6 minggu; periode lebih lama dihitung dari rekap harian,
+// rinciannya di spreadsheet. Riwayat NilaiGuide masuk sekali lewat migrasi awal
+// (kartu di Laporan & Ekspor); aplikasi dan spreadsheet NilaiGuide tidak disentuh.
 export const visitTitles={
  visits:'Dashboard Kunjungan',
  'visits-guides':'Data Guide',
@@ -128,6 +129,103 @@ function importDialog(){
  });
 }
 
+/* ---------- Migrasi awal riwayat NilaiGuide ---------- */
+const historyReasonOrder=['MASUK','DIGANTI','POS2','BENTROK','DUPLIKAT','ID','TANGGAL','POS','GUIDE','ID_PORTAL'];
+function confirmDialog(title,message,action,kind='primary'){
+ return new Promise(resolve=>{
+  const el=dialog(title,`<p>${message}</p><div class="form-actions"><button type="button" class="button outlined" data-close>Kembali</button><button type="button" class="button ${kind}" data-confirm>${esc(action)}</button></div>`);
+  let ok=false;el.querySelector('[data-confirm]').addEventListener('click',()=>{ok=true;el.close();});el.addEventListener('close',()=>resolve(ok),{once:true});
+ });
+}
+// Gabungan hasil per bagian: jumlah per alasan dan tabel per bulan.
+function mergeHistory(parts,duplicates=0){
+ const counts=Object.fromEntries(historyReasonOrder.map(k=>[k,0])),months=new Map(),problems=[];let first=null,last=null;
+ counts.DUPLIKAT+=duplicates;
+ for(const p of parts){
+  for(const k of historyReasonOrder)counts[k]+=p.counts?.[k]||0;
+  for(const m of p.months||[]){const t=months.get(m.month)||{month:m.month,antar:0,uniform:0,uniform_patuh:0,id_card:0,etika:0,diganti:0,pos2:0,lainnya:0};for(const k of Object.keys(t))if(k!=='month')t[k]+=m[k]||0;months.set(m.month,t);}
+  if(p.first&&(!first||p.first<first))first=p.first;if(p.last&&(!last||p.last>last))last=p.last;
+  for(const x of p.problems||[])if(problems.length<200)problems.push(x);
+ }
+ return {counts,months:[...months.values()].sort((a,b)=>a.month<b.month?-1:1),first,last,problems};
+}
+const monthName=m=>formatDate(m+'-01',{month:'long',year:'numeric'});
+function historySummary(s,reasons){
+ const skipped=['DIGANTI','POS2','BENTROK','DUPLIKAT'].reduce((n,k)=>n+s.counts[k],0),rejected=['ID','TANGGAL','POS','GUIDE','ID_PORTAL'].reduce((n,k)=>n+s.counts[k],0);
+ const countRows=historyReasonOrder.filter(k=>k==='MASUK'||s.counts[k]).map(k=>`<tr><td>${esc(reasons?.[k]||k)}</td><td><strong>${number(s.counts[k])}</strong></td></tr>`);
+ const monthRows=s.months.filter(m=>m.antar||m.pos2||m.diganti||m.lainnya).map(m=>`<tr><td>${esc(monthName(m.month))}</td><td><strong>${number(m.antar)}</strong></td><td>${pct(m.antar?m.uniform_patuh/m.antar:null)}</td><td>${pct(m.antar?m.id_card/m.antar:null)}</td><td>${dec(m.antar?m.etika/m.antar:null)}</td><td>${number(m.pos2)}</td><td>${number(m.diganti)}</td><td>${number(m.lainnya)}</td></tr>`);
+ return `<div class="notice ${rejected?'warning':''}">${icon(rejected?'incident':'check')}<div><strong>${number(s.counts.MASUK)} penilaian masuk ke rekap${s.first?`, ${esc(formatDate(s.first))} – ${esc(formatDate(s.last))}`:''}</strong><p>${number(skipped)} dilewati · ${number(rejected)} ditolak. Yang disimpan hanya rekap harian per guide; catatan, jam, dan nama petugas tetap di spreadsheet NilaiGuide.</p></div></div>
+  <h3 class="visit-import-title">Cocokkan dengan tab Dasbor NilaiGuide</h3>
+  <p class="muted text-small">Angka per bulan dari baris yang masuk. Bandingkan dengan baris TOTAL tab Dasbor NilaiGuide bulan yang sama: selisih pengantaran seharusnya hanya kolom Pos 2 dan Lainnya (ditolak atau bentrok). Nilai REVIEW tidak diimpor.</p>
+  ${table(['Bulan','Pengantaran','% Uniform','% ID-Card','Rata Etika','Pos 2','Dikoreksi','Lainnya'],monthRows,'Tidak ada baris yang masuk.')}
+  <h3 class="visit-import-title">Rincian per alasan</h3>${table(['Keterangan','Baris'],countRows)}
+  ${s.problems.length?`<h3 class="visit-import-title">Baris yang perlu dicek (${number(s.problems.length)}${s.problems.length>=200?' pertama':''})</h3>${table(['Baris berkas','Keterangan'],s.problems.map(x=>`<tr><td>${number(x.line)}</td><td>${esc(reasons?.[x.reason]||x.reason)}</td></tr>`))}`:''}`;
+}
+function historyCard(h){
+ if(!h?.can_manage)return '';
+ const c=h.current,note='Sekali saja, setelah semua HP pos memakai tautan portal. Spreadsheet NilaiGuide tidak diubah dan tetap menjadi arsip.';
+ if(!c)return card('Migrasi awal NilaiGuide',note,`<div class="card-body"><p>Unduh spreadsheet NilaiGuide lewat <em>File → Download → Microsoft Excel (.xlsx)</em>, lalu pilih berkasnya di sini. Pratinjau tidak menyimpan apa pun; angka per bulan bisa dicocokkan dulu dengan tab Dasbor NilaiGuide.</p></div>`,btn('Mulai migrasi awal','history-start','upload','primary'));
+ const meta=`<p class="muted text-small">Berkas <strong>${esc(c.file_name)}</strong> · ${number(c.rows_total)} baris · dimulai ${esc(when(c.created_at))}</p>`;
+ if(c.status==='menyusun')return card('Migrasi awal NilaiGuide belum selesai',`${number(c.parts_done.length)} dari ${number(c.parts_total)} bagian sudah diterima. Belum dihitung di Dashboard maupun Laporan.`,`<div class="card-body">${meta}<p>Lanjutkan dengan memilih berkas yang <strong>sama</strong>, atau batalkan untuk mulai dari awal.</p></div>`,`${btn('Lanjutkan','history-start','upload','primary')}${btn('Batalkan','history-cancel','close','outlined')}`);
+ const counts=c.ringkasan?.counts||{},skipped=['DIGANTI','POS2','BENTROK','DUPLIKAT'].reduce((n,k)=>n+(counts[k]||0),0),rejected=['ID','TANGGAL','POS','GUIDE','ID_PORTAL'].reduce((n,k)=>n+(counts[k]||0),0);
+ return card('Migrasi awal NilaiGuide',`Diterapkan ${when(c.finished_at)}. Riwayat ${c.first_day?`${formatDate(c.first_day)} – ${formatDate(c.last_day)}`:''} ikut dihitung di Dashboard dan Laporan.`,
+  `<div class="card-body">${meta}<div class="visit-sheet-grid"><div><span class="muted">Masuk ke rekap</span><strong>${number(counts.MASUK||0)}</strong></div><div><span class="muted">Dilewati</span><strong>${number(skipped)}</strong></div><div><span class="muted">Ditolak</span><strong>${number(rejected)}</strong></div></div>
+  <p class="muted text-small">Ada yang janggal? Batalkan migrasi: seluruh hasilnya dihapus dan angka kembali seperti sebelum impor. Setelah itu berkas bisa diimpor ulang.</p></div>`,btn('Batalkan migrasi','history-cancel','close','outlined'));
+}
+function historyDialog(h){
+ const current=h.current?.status==='menyusun'?h.current:null;
+ const el=dialog(current?'Lanjutkan migrasi awal NilaiGuide':'Migrasi awal NilaiGuide',`<p>Pilih <strong>unduhan seluruh spreadsheet NilaiGuide</strong> (.xlsx), atau .csv tab <strong>Evaluations</strong>. Berkas dibaca di peramban ini; yang dikirim ke portal hanya ID penilaian, waktu, pos, guide, dan nilainya.</p>
+ <p class="muted">Lakukan setelah HP terakhir pindah ke tautan portal: penilaian yang masuk ke aplikasi lama sesudah berkas diunduh tidak ikut. Data Guide harus sudah diimpor, karena guide dicocokkan lewat ID G-….</p>
+ ${current?`<div class="notice">${icon('document')}<div><strong>Pilih berkas yang sama: ${esc(current.file_name)}</strong><p>${number(current.parts_done.length)} dari ${number(current.parts_total)} bagian sudah diterima; sisanya akan dikirim.</p></div></div>`:''}
+ <label class="field full visit-import-file"><span>Berkas .xlsx atau .csv</span><input type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-history-file></label>
+ <p class="muted" data-history-progress role="status"></p><div data-history-result></div>
+ <div class="form-actions"><button type="button" class="button outlined" data-close>Tutup</button><button type="button" class="button primary" data-history-apply disabled>${icon('upload')}<span>${current?'Lanjutkan migrasi':'Terapkan migrasi'}</span></button></div>`,{wide:true});
+ const input=el.querySelector('[data-history-file]'),result=el.querySelector('[data-history-result]'),progress=el.querySelector('[data-history-progress]'),applyButton=el.querySelector('[data-history-apply]');
+ let file=null,parts=null,busy=false;
+ const meta=()=>({name:file.fileName,sha256:file.sha256,rows_total:file.rowsTotal,parts_total:parts.length});
+ input.addEventListener('change',async()=>{
+  file=null;parts=null;applyButton.disabled=true;result.innerHTML='';progress.textContent='Membaca berkas…';
+  try{
+   const read=await readHistoryFile(input.files[0]);
+   if(current&&read.sha256!==current.file_sha256)throw new Error(`Berkas ini berbeda dengan ${current.file_name} yang sedang dimigrasikan. Pilih berkas yang sama, atau tutup lalu batalkan migrasi itu.`);
+   const split=historyParts(read.rows);if(!split.length)throw new Error('Sheet Evaluations tidak berisi penilaian.');
+   if(current&&split.length!==current.parts_total)throw new Error('Pembagian berkas berbeda dengan migrasi yang sedang berjalan. Batalkan migrasi itu lalu mulai ulang.');
+   const checked=[];
+   for(let i=0;i<split.length;i++){progress.textContent=`Memeriksa bagian ${i+1} dari ${split.length}…`;checked.push(await post('visits/history/import',{mode:'preview',file:{name:read.fileName,sha256:read.sha256,rows_total:read.rowsTotal,parts_total:split.length},part:i,rows:split[i]}));}
+   const summary=mergeHistory(checked,read.duplicates);
+   progress.textContent=`${number(read.rowsTotal)} baris dari sheet ${read.sheet?`"${read.sheet}"`:'berkas'}. Pratinjau — belum ada yang disimpan.`;
+   result.innerHTML=historySummary(summary,h.reasons);
+   file=read;parts=split;applyButton.disabled=!summary.counts.MASUK;
+  }catch(error){progress.textContent='';result.innerHTML=`<div class="notice error">${icon('incident')}<div><strong>Berkas belum dapat dipakai</strong><p>${esc(error.message)}</p></div></div>`;}
+ });
+ applyButton.addEventListener('click',async()=>{
+  if(!file||!parts||busy)return;
+  if(!current&&!await confirmDialog('Terapkan migrasi awal?',`Riwayat dari <strong>${esc(file.fileName)}</strong> akan ikut dihitung di Dashboard dan Laporan. Migrasi hanya bisa dilakukan sekali; bila ada yang salah, batalkan lalu impor ulang.`,'Terapkan'))return;
+  busy=true;applyButton.disabled=true;input.disabled=true;
+  try{
+   let importId=current?.id||null,done=new Set(current?.parts_done||[]);
+   for(let i=0;i<parts.length;i++){
+    if(done.has(i))continue;
+    progress.textContent=`Mengirim bagian ${i+1} dari ${parts.length}…`;
+    const r=await post('visits/history/import',{mode:'apply',file:meta(),part:i,rows:parts[i],...(importId?{import_id:importId}:{})});
+    importId=r.import.id;done=new Set(r.import.parts_done);
+   }
+   progress.textContent='Menyelesaikan migrasi…';
+   const finished=await post('visits/history/finish',{import_id:importId});
+   toast(`Migrasi awal selesai: ${number(finished.import.ringkasan.counts.MASUK)} penilaian NilaiGuide masuk ke rekap.`);el.close();refresh();
+  }catch(error){
+   busy=false;input.disabled=false;progress.textContent='';
+   result.insertAdjacentHTML('afterbegin',`<div class="notice error">${icon('incident')}<div><strong>Migrasi terhenti</strong><p>${esc(error.message)} Bagian yang sudah terkirim tersimpan; tutup jendela ini lalu pilih <em>Lanjutkan</em> dengan berkas yang sama, atau batalkan.</p></div></div>`);
+   refresh();
+  }
+ });
+}
+async function cancelHistory(){
+ const c=M.history?.current;if(!c)return;
+ if(!await confirmDialog('Batalkan migrasi awal?',`Seluruh rekap dari <strong>${esc(c.file_name)}</strong> dihapus dari portal, sehingga Dashboard dan Laporan kembali seperti sebelum impor. Spreadsheet NilaiGuide tidak terpengaruh. Setelah itu migrasi bisa diulang.`,'Batalkan migrasi','danger'))return;
+ await post('visits/history/cancel',{import_id:c.id});toast('Migrasi awal dibatalkan.');refresh();
+}
+
 /* ---------- Penilaian ---------- */
 function recordRow(r){
  const replaced=r.status==='diganti';
@@ -206,7 +304,8 @@ function reportsPage(){
  return `${head('Laporan & Ekspor',`Ringkasan bulan ${formatDate(M.month+'-01',{month:'long',year:'numeric'})} per guide, dengan aturan blok TOTAL rekap regu NilaiGuide.`,canExport?btn('Ekspor Excel','export-report','download','primary'):'')}
  <div class="toolbar"><label class="field"><span>Bulan</span><input type="month" data-visit-field="month" value="${esc(M.month)}" max="${localToday().slice(0,7)}"></label>${btn('Tampilkan','apply-month','filter','outlined')}</div>
  <div class="stats-grid">${stat('Pengantaran',number(d.ringkasan.pengantaran))}${stat('Guide dinilai',number(d.ringkasan.guideDinilai))}${stat('Taat Uniform',pct(d.ringkasan.persenUniform))}${stat('Taat ID-Card',pct(d.ringkasan.persenId))}</div>
- ${card('Ringkasan per guide','Total = Uniform + ID + Etika. Diurut rata-rata per pengantaran.',table(['Guide','Regu','Pengantaran','Hari','Uniform','ID','Etika','Total','Rata-rata'],perGuide))}
+ <div class="visit-stack">${card('Ringkasan per guide','Total = Uniform + ID + Etika. Diurut rata-rata per pengantaran.',table(['Guide','Regu','Pengantaran','Hari','Uniform','ID','Etika','Total','Rata-rata'],perGuide))}
+ ${historyCard(M.history)}</div>
  <p class="muted visit-note">${esc(periodNote(d).trim())} Diperbarui ${when(d.diperbarui)}.</p>`;
 }
 const monthEnd=month=>{const [y,m]=month.split('-').map(Number);const last=new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);return last>localToday()?localToday():last;};
@@ -239,7 +338,7 @@ export async function loadVisitsPage(route){
   if(route==='visits-guides'){M.guides=(await api('visits/guides')).items;return guidesPage();}
   if(route==='visits-records'){await loadRecords();return recordsPage();}
   if(route==='visits-links'){const [links,sheet]=await Promise.all([api('visits/links'),api('visits/sheet').catch(()=>null)]);M.links=links;M.sheet=sheet;return linksPage();}
-  if(route==='visits-reports'){M.report=await api(`visits/overview?from=${M.month}-01&to=${monthEnd(M.month)}`);return reportsPage();}
+  if(route==='visits-reports'){const [report,history]=await Promise.all([api(`visits/overview?from=${M.month}-01&to=${monthEnd(M.month)}`),permitted('visits.settings.manage')?api('visits/history').catch(()=>null):null]);M.report=report;M.history=history;return reportsPage();}
  }catch(error){if(error.name==='AbortError')throw error;return unavailable(visitTitles[route],error);}
  return unavailable(visitTitles[route]);
 }
@@ -260,6 +359,8 @@ export function bindVisitsPage(){
    if(action==='records-more'){await loadRecords(true);root.innerHTML=recordsPage();return;}
    if(action==='export-records'){await exportRecords();return;}
    if(action==='export-report'){await exportReport();return;}
+   if(action==='history-start'){historyDialog(M.history);return;}
+   if(action==='history-cancel'){await cancelHistory();return;}
    if(action.startsWith('sheet-')){await sheetAction(action);return;}
    if(action.startsWith('link-')){await linkAction(action,Number(el.dataset.pos));return;}
   }catch(error){toast(error.message,true);}

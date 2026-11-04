@@ -38,12 +38,14 @@ HP pos ──► /api/guide-form (Pages) ──► Edge guide-form ──► bas
 Supaya basis data tidak terus membesar, rincian penilaian disimpan 6 minggu (42 hari). Sebagai gambaran, 70–150 penilaian per hari hanya ±3–6 ribu baris per 6 minggu.
 
 1. Sekali sehari (saat penyalinan berjalan), baris yang lebih tua dari 42 hari **dibaca ulang dari spreadsheet dan dicocokkan sel demi sel**.
-2. Hari yang seluruh barisnya cocok dilipat ke `visit_monthly_totals` (jumlah per bulan, per guide, per pos) lalu dihapus dari basis data — dalam satu transaksi.
+2. Hari yang seluruh barisnya cocok dilipat ke **`visit_daily_totals`** (jumlah per hari, per guide, per pos) lalu dihapus dari basis data — dalam satu transaksi. `visit_monthly_totals` masih ikut diisi supaya `portal-api` versi sebelumnya tetap benar bila perlu rollback.
 3. Baris yang belum tersalin, berbeda isinya (mis. diubah orang di spreadsheet), atau berpindah posisi **tidak dihapus**: baris itu ditulis ulang dulu, dan hari itu serta hari sesudahnya ditahan sampai cocok.
 4. Batas umur kiriman 30 hari lebih pendek dari retensi 42 hari, sehingga kiriman ulang dari HP untuk penilaian yang sudah dihapus selalu ditolak, bukan tercatat dua kali.
 5. Bila Google tidak bisa dihubungi atau Sheets API belum aktif, tidak ada yang dihapus.
 
-Dashboard dan Laporan tetap bisa dibuka untuk bulan lama: angkanya dari ringkasan bulanan, persis sama dengan sebelum dilipat (diuji). Rentang harian yang menyentuh tanggal sebelum batas lipat harus berupa bulan penuh; rincian per penilaian yang lebih tua dari 6 minggu dibuka di spreadsheet.
+Dashboard dan Laporan bisa dibuka untuk **rentang tanggal mana pun** — juga minggu dan bulan lama: angkanya dari rincian (6 minggu terakhir) ditambah rekap harian, persis sama dengan sebelum dilipat (diuji untuk setiap hari). Rincian per penilaian yang lebih tua dari 6 minggu dibuka di spreadsheet.
+
+> Migrasi `20261104120000_visit_daily_totals_history.sql` harus dijalankan **sebelum pelipatan pertama** (paling cepat ±16 Desember 2026, 42 hari setelah penilaian portal pertama). Migrasi itu menolak berjalan bila `visit_monthly_totals` sudah berisi, supaya tidak ada bulan yang hanya punya ringkasan bulanan.
 
 ## Isi modul
 
@@ -52,20 +54,20 @@ Dashboard dan Laporan tetap bisa dibuka untuk bulan lama: angkanya dari ringkasa
 | Formulir lapangan | `public/penilaian-guide/` → `site-info/dist/penilaian-guide/` | PWA NilaiGuide yang dipindah: offline, tanpa login. Pos ditentukan tautan pos (token di fragmen URL). |
 | Gateway publik | `site-info/lib/guide-form.mjs`, `site-info/functions/api/guide-form/[[action]].js` | `POST /api/guide-form/{context,submit}`: origin, `CF-Connecting-IP`, badan ≤ 24 KB, lalu ke Edge `guide-form` dengan secret server. |
 | Edge publik | `supabase/functions/guide-form/index.ts` → `supabase/deploy/guide-form/index.ts` (`scripts/build-guide-form.mjs`) | Batas frekuensi, token → tautan aktif, aturan terima di bawah kunci khusus modul, salinan di latar belakang. Tanpa kunci global portal. |
-| Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap dan peringkat (aturan `05_Ringkasan.gs` dan `08_Peringkat.gs`). |
+| Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap dan peringkat (aturan `05_Ringkasan.gs` dan `08_Peringkat.gs`), rekap per hari untuk rentang bebas, migrasi awal NilaiGuide. |
 | Salinan & retensi | `lib/visit-sheets.mjs` | Google Sheets/Drive lewat OAuth yang sama dengan unggah berkas (`GOOGLE_DRIVE_*`), lease, tulis posisional, verifikasi, pelipatan bulanan, pemeriksaan koneksi. |
 | Rute pengelolaan | `lib/visits.mjs` → `_shared/portal/*.mjs`, disuntikkan ke snapshot `portal-api` oleh `scripts/build-visits-deploy.mjs` | Rute basis data di `routeOperation`; `visits/sheet/sync` dan `visits/sheet/check` dicegat sebelum transaksi permintaan. |
 | Formulir pos | `lib/guide-form.mjs` | Pemeriksaan bentuk, batas 60 `context` dan 300 penilaian per 10 menit per tautan dan per IP, catatan kiriman tanpa isi nilai (90 hari). |
-| Ruang kerja | `public/visits.js`, `public/visit-import.js` (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Tautan Pos + Salinan spreadsheet, Laporan & Ekspor. |
-| Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
-| Uji | `tests/visits.test.mjs`, `tests/guide-form-transport.test.mjs`, `scripts/verify-visits-postgres.mjs`, `scripts/verify-guide-form-ui.mjs`, `scripts/fake-google-sheets.mjs` | Google tiruan yang ketat (batas grid, galat bergaya Google); tidak pernah menghubungi Google. |
+| Ruang kerja | `public/visits.js`, `public/visit-import.js` (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Tautan Pos + Salinan spreadsheet, Laporan & Ekspor (+ kartu Migrasi awal NilaiGuide). |
+| Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `…/20261104120000_visit_daily_totals_history.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_daily_totals`, `visit_history_import`, `visit_history_ids`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
+| Uji | `tests/visits.test.mjs`, `tests/visit-history.test.mjs`, `tests/guide-form-transport.test.mjs`, `scripts/verify-visits-postgres.mjs`, `scripts/verify-guide-form-ui.mjs`, `scripts/fake-google-sheets.mjs` | Google tiruan yang ketat (batas grid, galat bergaya Google); tidak pernah menghubungi Google. |
 
 ## Izin
 
 | Izin | Pengelola | Pimpinan |
 | --- | --- | --- |
 | `visits.dashboard.read`, `visits.guides.read`, `visits.records.read`, `visits.reports.read`, `visits.reports.export` | ya | ya |
-| `visits.guides.manage` (ubah & impor guide), `visits.forms.read`, `visits.forms.manage` (tautan pos), `visits.settings.manage` (sinkronkan & periksa koneksi) | ya | — |
+| `visits.guides.manage` (ubah & impor guide), `visits.forms.read`, `visits.forms.manage` (tautan pos), `visits.settings.manage` (sinkronkan, periksa koneksi, migrasi awal NilaiGuide) | ya | — |
 
 Super Admin memegang semua izin `visits.*`. Alamat file spreadsheet hanya tampil bagi pemegang `visits.settings.manage` atau `visits.reports.export`; aksesnya sendiri tetap diatur berbagi Google Drive.
 
@@ -97,14 +99,15 @@ Yang layak dicoba:
 5. Data Guide → Impor berkas (.xlsx dari Google Sheets atau .csv) → pratinjau → Terapkan.
 6. Tautan Pos → **Periksa koneksi** (empat langkah hijau) dan **Sinkronkan sekarang**. Ganti tautan Pos 1: HP dengan tautan lama menunggu tautan baru; antreannya tidak hilang.
 7. Dashboard, Penilaian, Laporan: ekspor Excel.
-8. Masuk sebagai `pimpinan.preview` (tanpa Tautan Pos, ubah guide, atau sinkronkan) dan `sdm.preview` (tanpa ruang kerja Kunjungan).
+8. Laporan & Ekspor → **Mulai migrasi awal** → pilih unduhan .xlsx spreadsheet NilaiGuide (atau salinannya) → pratinjau per bulan → Terapkan. Pilih bulan Maret, dll. di Laporan: angka NilaiGuide ikut terhitung. **Batalkan migrasi** mengembalikan angka seperti semula. Data pratinjau tetap di `data/` dan tidak dikirim ke mana pun.
+9. Masuk sebagai `pimpinan.preview` (tanpa Tautan Pos, ubah guide, atau sinkronkan) dan `sdm.preview` (tanpa ruang kerja Kunjungan).
 
 Pemeriksaan otomatis:
 
 ```powershell
 node --test tests/*.test.mjs                                    # termasuk tests/visits.test.mjs
-node scripts/verify-visits-postgres.mjs <pglite\dist\index.js>  # PGlite: migrasi, Edge guide-form, snapshot portal-api, retensi
-node scripts/verify-guide-form-ui.mjs                           # Playwright: HP pos dan ruang kerja
+node scripts/verify-visits-postgres.mjs <pglite\dist\index.js>  # PGlite: migrasi, Edge guide-form, snapshot portal-api, retensi, migrasi awal
+node scripts/verify-guide-form-ui.mjs                           # Playwright: HP pos dan ruang kerja (termasuk migrasi awal)
 ```
 
 ### Batas uji lokal
@@ -127,22 +130,43 @@ node scripts/verify-guide-form-ui.mjs                           # Playwright: HP
 
 Rollback: HP kembali ke aplikasi lama (masih tayang dan tidak berubah) dan tautan pos dicabut; Pages → deployment sebelumnya; `portal-api` → versi sebelumnya. Migrasi aditif dan tidak dihapus. Spreadsheet baru tetap ada di Drive.
 
+### Rilis rekap harian + migrasi awal (PR `claude/kunjungan-rekap-harian-migrasi`)
+
+Harus selesai **sebelum ±16 Desember 2026** (pelipatan pertama). Urutan:
+
+1. SQL Editor: `20261104120000_visit_daily_totals_history.sql`. Bila muncul *"visit_monthly_totals sudah terisi"*, berhenti dan laporkan — jangan dipaksa.
+2. Edge Function `guide-form`: deploy `supabase/deploy/guide-form/index.ts` (pelipatan berjalan dari fungsi ini).
+3. Edge Function `portal-api`: pastikan SHA-256 versi aktif `8ad551a8e95663b17d245be8864512dd50a2b7467ccb05d1f997cdfddd95355a` (PR #19), lalu deploy `supabase/deploy/portal-api/index.ts`. Bila berbeda, unduh versi aktif lalu jalankan `node scripts/build-visits-deploy.mjs` dari snapshot sebelum modul Kunjungan (lihat langkah 5 di atas).
+4. Merge PR: Pages menayangkan kartu Migrasi awal.
+
+Rollback: `portal-api` dan `guide-form` → versi sebelumnya (keduanya tetap mengisi/membaca `visit_monthly_totals`), Pages → deployment sebelumnya. Tabel baru dibiarkan. Migrasi awal yang sudah diterapkan bisa dibatalkan dari kartunya kapan pun sebelum rollback.
+
 ## Keputusan yang dipakai
 
-- Penyimpanan: basis data portal + salinan spreadsheet baru (keputusan pemilik, 3 November). Retensi 42 hari, umur kiriman 30 hari, ringkasan bulanan untuk periode lama.
+- Penyimpanan: basis data portal + salinan spreadsheet baru (keputusan pemilik, 3 November). Retensi 42 hari, umur kiriman 30 hari, rekap harian untuk periode lama (4 November; sebelumnya ringkasan bulanan).
+- Riwayat NilaiGuide: diekspor **sekali** sebagai migrasi awal; sesudahnya penilaian hanya lewat portal. Pos 2 dan REVIEW tidak diimpor (keputusan pemilik, 4 November).
 - Satu spreadsheet per tahun, satu tab per bulan (WITA), kolom sama dengan tab Evaluations lama (kolom `review` diisi 0).
 - Data Guide awal dari impor berkas tab Guides; ID lama dipertahankan.
 - REVIEW belum dipakai (tidak ada di Dashboard, Laporan, dan ekspor).
 - Nama kembar di regu yang sama ditolak di form satuan; di impor hanya diperingatkan.
 - Batas frekuensi formulir: 60 `context` dan 300 penilaian per 10 menit, per tautan dan per IP. Alamat `/penilaian-guide/`, nama ruang kerja "Kunjungan".
 
-## Data lama
+## Migrasi awal NilaiGuide
 
-Spreadsheet NilaiGuide lama tetap menjadi arsip dan tidak diubah. Cara ekspor yang efektif disiapkan di tahap berikutnya. Karena kolom spreadsheet baru sama dengan tab Evaluations lama, kedua sumber bisa digabung tanpa mengubah format.
+Spreadsheet NilaiGuide lama tetap menjadi arsip dan tidak diubah. Riwayatnya masuk ke portal **sekali** lewat Laporan & Ekspor → kartu **Migrasi awal NilaiGuide** (izin `visits.settings.manage`):
+
+1. Lakukan setelah HP terakhir pindah ke tautan portal dan Data Guide sudah diimpor (guide dicocokkan lewat ID `G-…`).
+2. Di spreadsheet NilaiGuide: *File → Download → Microsoft Excel (.xlsx)* (seluruh spreadsheet; portal membuka tab **Evaluations** saja). CSV tab Evaluations juga diterima.
+3. Berkas dibaca di peramban. Yang dikirim ke portal hanya `evaluationId`, `timestamp`, `pos`, `guideId`, `uniform`, `idCard`, `etika`, `status` — **tanpa catatan, nama petugas, atau jam terima**. Dikirim per bagian (≤ 800 baris, ≤ 100 KB) karena batas badan permintaan portal 128 KB.
+4. **Pratinjau** tidak menyimpan apa pun: jumlah masuk/dilewati/ditolak, tabel per bulan untuk dicocokkan dengan tab Dasbor NilaiGuide, dan nomor baris yang bermasalah.
+5. **Terapkan**: portal menyimpan rekap harian per guide per pos (`visit_daily_totals`, sumber `nilaiguide`) dan daftar ID yang sudah diimpor (`visit_history_ids`). Bila koneksi putus, bagian yang sudah diterima tersimpan; pilih **Lanjutkan** dengan berkas yang sama (dicek lewat SHA-256). Riwayat baru dihitung di Dashboard dan Laporan setelah semua bagian diterima.
+6. **Batalkan migrasi** menghapus seluruh rekap NilaiGuide dan ID-nya; angka kembali seperti sebelum impor, lalu migrasi bisa diulang. Hanya satu migrasi aktif pada satu waktu.
+
+Aturan baca mengikuti NilaiGuide: tanggal seri Sheets dibaca sebagai jam WITA; Uniform seperti `normalUniform_` (TRUE +1, FALSE/0/kosong −1, dibatasi −1..+2); ID-card `Number(x)` → 1/0; Etika dibatasi −5..+5; baris `diganti` dilewati. Selain itu dilewati: Pos 2, ID ganda di berkas, dan baris yang bentrok (< 15 menit, guide + pos sama) dengan penilaian portal. Ditolak: ID bukan UUID, tanggal di luar 1 Januari 2026 – hari ini, pos tidak dikenal, guide tidak ada di Data Guide, ID yang sudah tersimpan di portal. REVIEW tidak diimpor (diisi 0).
 
 ## Tindak lanjut
 
-- Cara ekspor/arsip data NilaiGuide lama (tanpa mengubah aplikasi dan spreadsheetnya).
+- Dashboard (rentang preset, pembanding, tren, cakupan), laporan mingguan dan bulanan, ekspor Excel, dan tampilan cetak A4 — PR berikutnya. Format NILAI REWARD rekap regu menunggu revisi pemilik.
 - Penyalinan terjadwal (pg_cron + pg_net) bila kiriman pos jarang; sekarang penyalinan dipicu kiriman dan tombol portal.
 - Layar Pengaturan modul untuk batas frekuensi dan nama pos.
 - Kebijakan privasi portal: formulir penilaian guide, nama guide sebagai data pribadi, salinan di Google Drive portal (ATR-KM-10).

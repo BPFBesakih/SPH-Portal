@@ -4,7 +4,7 @@ import {randomBytes} from 'node:crypto';
 import {all, one, insert, update, tx, audit as localAudit, assert, date, now, today} from './db.mjs';
 import {digest, has as localHas} from './auth.mjs';
 import {guidePosts} from './guide-form.mjs';
-import {reguCodes, parseGuideId, visitGuideList, saveVisitGuide, importVisitGuides, visitRecordPage, visitOverview} from './visit-data.mjs';
+import {reguCodes, parseGuideId, visitGuideList, saveVisitGuide, importVisitGuides, visitRecordPage, visitOverview, visitHistoryStatus, importVisitHistory, finishVisitHistory, cancelVisitHistory} from './visit-data.mjs';
 import {visitSheetStatus} from './visit-sheets.mjs';
 const localDeps = {
   has: localHas,
@@ -209,6 +209,19 @@ export async function visitRoutes({db, user, p, method, body: b = {}, url}, deps
   if (p[1] === 'guides' && method === 'POST' && (p.length === 2 || p.length === 3 && p[2] === 'import')) {
     assert(await has(db, user, 'visits.guides.manage'), 'Hanya pengelola kunjungan yang dapat mengubah data guide.', 403);
     return await tx(db, async () => p.length === 2 ? await saveVisitGuide(db, user, b, audit) : await importVisitGuides(db, user, b, audit));
+  }
+  if (p[1] === 'history' && p.length === 2 && method === 'GET') {
+    await requireAny(db, user, ['visits.settings.manage', 'visits.dashboard.read', 'visits.reports.read'], has);
+    return {
+      ...await visitHistoryStatus(db),
+      can_manage: await has(db, user, 'visits.settings.manage')
+    };
+  }
+  if (p[1] === 'history' && p.length === 3 && method === 'POST' && ['import', 'finish', 'cancel'].includes(p[2])) {
+    assert(await has(db, user, 'visits.settings.manage'), 'Hanya pengelola kunjungan yang dapat menjalankan migrasi awal NilaiGuide.', 403);
+    if (p[2] === 'import') return await tx(db, async () => await importVisitHistory(db, user, b, audit));
+    if (p[2] === 'finish') return await tx(db, async () => await finishVisitHistory(db, user, b, audit));
+    return await tx(db, async () => await cancelVisitHistory(db, user, b, audit));
   }
   if (p[1] === 'sheet' && p.length === 2 && method === 'GET') {
     await requireAny(db, user, ['visits.dashboard.read', 'visits.forms.read', 'visits.settings.manage'], has);

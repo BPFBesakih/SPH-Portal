@@ -6,7 +6,8 @@
 // data guide fiktif. Memeriksa skenario UJI-01/02/03/05/10/13/17/27 PRD di HP pos,
 // daftar saran nama guide (nama + ID · regu, filter, keyboard, nama kembar),
 // salinan spreadsheet di latar belakang, serta Data Guide (impor .csv), Dashboard,
-// dan Tautan Pos (periksa koneksi, sinkronkan) di portal.
+// migrasi awal NilaiGuide (pratinjau, putus lalu lanjutkan, batalkan), dan Tautan Pos
+// (periksa koneksi, sinkronkan) di portal.
 // Playwright diambil dari PLAYWRIGHT_MODULE bila diisi, selain itu dari `playwright`.
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
@@ -18,6 +19,7 @@ import {createServer} from 'node:net';
 import {openDb,insert,one,all,now} from '../lib/db.mjs';
 import {seedPermissions,digest,hashPasswordSync} from '../lib/auth.mjs';
 import {guidePosts} from '../lib/guide-form.mjs';
+import {visitDayRows} from '../lib/visit-data.mjs';
 import {createFakeGoogle} from './fake-google-sheets.mjs';
 import {createApp} from '../server.mjs';
 
@@ -156,12 +158,72 @@ try{
     await portal.click('[data-import-apply]');await portal.waitForSelector('text=1 guide ditambahkan, 1 diperbarui');
     assert.equal(one(db,"SELECT name FROM visit_guides WHERE id='G-002'").name,'Guide Contoh A1-02 (ganti)');assert.equal(one(db,"SELECT is_active FROM visit_guides WHERE id='G-043'").is_active,0);
   });
+  // Unduhan seluruh spreadsheet NilaiGuide: tab Dasbor lebih dulu, tab Evaluations dengan
+  // tanggal sebagai nomor seri (jam WITA), kolom tambahan yang tidak dikirim, 1.004 baris → 2 bagian.
+  const serial=(m,d,h)=>String(Date.UTC(2026,m-1,d,h,0)/86400000+25569);
+  const evalStrings=['evaluationId','timestamp','pos','guideId','guideName','uniform','idCard','etika','catatan','status','aktif','diganti','Catatan rahasia petugas'];
+  const col=i=>'ABCDEFGHIJ'[i],inl=t=>`<c t="inlineStr"><is><t>${t}</t></is></c>`,num=v=>`<c><v>${v}</v></c>`,bool=v=>`<c t="b"><v>${v?1:0}</v></c>`;
+  const evalRow=(r,cells)=>`<row r="${r}">${cells.map((c,j)=>c.replace('<c',`<c r="${col(j)}${r}"`)).join('')}</row>`;
+  const uuid=i=>`00000000-0000-4000-8000-${String(i).padStart(12,'0')}`;
+  const evalRows=[evalRow(1,evalStrings.slice(0,10).map((_,i)=>s(i)))];let masuk=0;
+  for(let i=0;i<1000;i++){const pos=i%10===9?2:i%2?3:1;if(pos!==2)masuk++;const day=new Date(Date.UTC(2026,2,1+Math.floor(i/12)));
+    evalRows.push(evalRow(i+2,[inl(uuid(i)),num(serial(day.getUTCMonth()+1,day.getUTCDate(),8+i%12)),num(pos),inl(`G-${String(1+i%40).padStart(3,'0')}`),inl('Nama di NilaiGuide'),i%3===0?bool(true):i%3===1?num(2):bool(false),bool(i%4!==0),num(i%5-2),s(12),s(10)]));}
+  // Dikoreksi (status diganti), guide tak dikenal, ID bukan UUID, dan ID ganda.
+  evalRows.push(evalRow(1002,[inl(uuid(5000)),num(serial(4,1,9)),num(1),inl('G-001'),inl('x'),bool(true),bool(true),num(0),inl(''),s(11)]));
+  evalRows.push(evalRow(1003,[inl(uuid(5001)),num(serial(4,1,10)),num(1),inl('G-999'),inl('x'),bool(true),bool(true),num(0),inl(''),s(10)]));
+  evalRows.push(evalRow(1004,[inl('bukan-uuid'),num(serial(4,1,11)),num(3),inl('G-001'),inl('x'),bool(true),bool(true),num(0),inl(''),s(10)]));
+  evalRows.push(evalRow(1005,[inl(uuid(0)),num(serial(3,1,8)),num(1),inl('G-001'),inl('x'),bool(true),bool(true),num(0),inl(''),s(10)]));
+  const historyFile=resolve(dataDir,'NilaiGuide.xlsx');
+  writeFileSync(historyFile,zip([
+    ['xl/workbook.xml',`<?xml version="1.0" encoding="UTF-8"?><workbook ${ns}><sheets><sheet name="Dasbor" sheetId="1" r:id="rId7"/><sheet name="Evaluations" sheetId="2" r:id="rId8"/><sheet name="Guides" sheetId="3" r:id="rId9"/></sheets></workbook>`],
+    ['xl/_rels/workbook.xml.rels','<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId7" Type="worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId8" Type="worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId9" Type="worksheet" Target="worksheets/sheet3.xml"/></Relationships>'],
+    ['xl/sharedStrings.xml',`<?xml version="1.0" encoding="UTF-8"?><sst ${ns} count="${evalStrings.length}" uniqueCount="${evalStrings.length}">${evalStrings.map(t=>`<si><t>${t}</t></si>`).join('')}</sst>`],
+    ['xl/worksheets/sheet1.xml',`<?xml version="1.0" encoding="UTF-8"?><worksheet ${ns}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>TOTAL</t></is></c></row></sheetData></worksheet>`],
+    ['xl/worksheets/sheet2.xml',`<?xml version="1.0" encoding="UTF-8"?><worksheet ${ns}><sheetData>${evalRows.join('')}</sheetData></worksheet>`],
+    ['xl/worksheets/sheet3.xml',`<?xml version="1.0" encoding="UTF-8"?><worksheet ${ns}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>guideId</t></is></c></row></sheetData></worksheet>`]]));
+  const historyTotal=()=>visitDayRows(db,'2026-01-01','2026-06-30').reduce((n,r)=>n+r.n.antar,0);
+  const historyCard=()=>portal.textContent('main');
+  let sent=[],failPart=1;
+  await portal.route('**/api/visits/history/import',route=>{const body=JSON.parse(route.request().postData());sent.push({mode:body.mode,part:body.part,bytes:route.request().postData().length,keys:Object.keys(body),catatan:route.request().postData().includes('rahasia')});
+    if(body.mode==='apply'&&body.part===failPart){failPart=null;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Koneksi terputus (uji).'})});}
+    return route.continue();});
+  await check('Migrasi awal NilaiGuide: pratinjau .xlsx tanpa menyimpan; hanya kolom rekap yang dikirim, per bagian ≤100 KB',async()=>{
+    await portal.goto(base+'/#visits-reports');await portal.waitForSelector('[data-visit="history-start"]');assert.match(await historyCard(),/Migrasi awal NilaiGuide/);
+    await portal.click('[data-visit="history-start"]');await portal.setInputFiles('[data-history-file]',historyFile);await portal.waitForSelector('[data-history-result] .notice');
+    const text=await portal.textContent('[data-history-result]');
+    assert.match(text,new RegExp(`${masuk} penilaian masuk ke rekap`),text);assert.match(text,/Maret 2026/);assert.match(text,/Mei 2026/);
+    assert.match(text,/evaluationId bukan UUID/);assert.match(text,/Baris berkas/);
+    assert.match(await portal.textContent('[data-history-progress]'),/1\.004 baris dari sheet "Evaluations"\. Pratinjau/);
+    assert.deepEqual(sent.map(x=>[x.mode,x.part]),[['preview',0],['preview',1]]);assert(sent.every(x=>x.bytes<100000&&!x.catatan),JSON.stringify(sent.map(x=>x.bytes)));
+    assert.equal(one(db,'SELECT count(*) n FROM visit_history_import').n,0);assert.equal(one(db,"SELECT count(*) n FROM visit_daily_totals WHERE sumber='nilaiguide'").n,0);
+  });
+  await check('Migrasi awal NilaiGuide: koneksi putus di bagian 2 → belum dihitung; Lanjutkan dengan berkas sama menyelesaikannya',async()=>{
+    sent=[];await portal.click('[data-history-apply]');await portal.waitForSelector('dialog [data-confirm]');await portal.click('dialog [data-confirm]');
+    await portal.waitForSelector('text=Migrasi terhenti');assert.match(await portal.textContent('[data-history-result]'),/Koneksi terputus \(uji\)/);
+    assert.equal(one(db,'SELECT status FROM visit_history_import').status,'menyusun');assert.equal(historyTotal(),0,'impor yang belum selesai tidak ikut dihitung');
+    await portal.click('dialog[open] [data-close]');await portal.waitForSelector('text=Migrasi awal NilaiGuide belum selesai');assert.match(await historyCard(),/1 dari 2 bagian sudah diterima/);
+    await portal.click('[data-visit="history-start"]');await portal.waitForSelector('text=Pilih berkas yang sama: NilaiGuide.xlsx');
+    await portal.setInputFiles('[data-history-file]',historyFile);await portal.waitForSelector('[data-history-result] .notice');
+    sent=[];await portal.click('[data-history-apply]');await portal.waitForSelector(`text=Migrasi awal selesai: ${masuk} penilaian`);
+    assert.deepEqual(sent.map(x=>[x.mode,x.part]),[['apply',1]],'bagian yang sudah diterima tidak dikirim ulang');
+    assert.equal(historyTotal(),masuk);assert.equal(one(db,'SELECT status FROM visit_history_import').status,'aktif');
+    // Teks toast juga memuat "masuk ke rekap": tunggu kartunya di halaman, bukan toast.
+    await portal.waitForFunction(()=>/Masuk ke rekap/.test(document.querySelector('main').textContent),null,{timeout:15000});assert.match(await historyCard(),/1 Mar 2026|1 Maret 2026/);
+  });
+  await check('Migrasi awal NilaiGuide: dibatalkan → rekapnya hilang, kartu kembali ke awal',async()=>{
+    await portal.click('[data-visit="history-cancel"]');await portal.waitForSelector('dialog [data-confirm]');await portal.click('dialog [data-confirm]');
+    await portal.waitForSelector('text=Migrasi awal dibatalkan.');await portal.waitForSelector('[data-visit="history-start"]');
+    assert.equal(historyTotal(),0);assert.equal(one(db,"SELECT count(*) n FROM visit_daily_totals WHERE sumber='nilaiguide'").n,0);
+    assert.equal(one(db,'SELECT status FROM visit_history_import').status,'dibatalkan');
+  });
+  await portal.unroute('**/api/visits/history/import');
   await check('Tautan Pos: periksa koneksi dan sinkronkan salinan spreadsheet',async()=>{
     await portal.goto(base+'/#visits-links');await portal.waitForSelector('text=Salinan spreadsheet');
     await portal.click('[data-visit="sheet-check"]');await portal.waitForSelector('.visit-check');
     assert.equal(await portal.$$eval('.visit-check li.ok',els=>els.length),4);await portal.click('dialog [data-close]');
     await portal.click('[data-visit="sheet-sync"]');await portal.waitForSelector('text=baris baru disalin');
-    assert.match(await portal.textContent('main'),/Penilaian Guide \d{4}/);
+    // Setelah sinkron halaman dimuat ulang; tunggu sampai selesai, jangan membaca "Memuat data…".
+    await portal.waitForFunction(()=>/Penilaian Guide \d{4}/.test(document.querySelector('main').textContent),null,{timeout:15000});
   });
   assert.deepEqual(portalErrors,[]);
   console.log(`${checks} pemeriksaan UI penilaian guide lulus.`);

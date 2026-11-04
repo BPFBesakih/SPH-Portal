@@ -188,6 +188,26 @@ var formGuideList = async (db) => (await all(db, "SELECT id,name,kategori,regu F
   kategori: g.kategori,
   regu: g.regu
 }));
+var historyRules = Object.freeze({
+  mulai: "2026-01-01",
+  barisPerBagian: 800,
+  bagianMaks: 200,
+  barisMaks: 1e5,
+  catatanMaks: 100
+});
+var historyReasons = Object.freeze({
+  MASUK: "Masuk ke rekap",
+  DIGANTI: "Dilewati: sudah dikoreksi (status diganti), sama dengan rekap NilaiGuide",
+  POS2: "Dilewati: Pos 2 (riwayat Pos 2 tidak diimpor)",
+  BENTROK: "Dilewati: guide dan pos yang sama sudah dinilai lewat portal dalam jeda 15 menit",
+  DUPLIKAT: "Dilewati: evaluationId sama dengan baris lain di berkas",
+  ID: "Ditolak: evaluationId bukan UUID",
+  TANGGAL: "Ditolak: timestamp kosong, tidak terbaca, atau di luar 1 Januari 2026 sampai hari ini",
+  POS: "Ditolak: pos bukan 1 atau 3",
+  GUIDE: "Ditolak: guideId tidak terdaftar di Data Guide",
+  ID_PORTAL: "Ditolak: evaluationId sama dengan penilaian yang sudah ada di portal"
+});
+var historyReasonKeys = Object.keys(historyReasons);
 
 // supabase/functions/_shared/portal/guide-form.mjs
 var guidePosts = {
@@ -1054,6 +1074,9 @@ async function foldVerifiedDays(db, owner, cutoff) {
   for (const g of groups) await run(db, `INSERT INTO visit_monthly_totals(month,guide_id,pos,antar,uniform,uniform_patuh,id_card,review,etika,hari,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(month,guide_id,pos) DO UPDATE SET antar=visit_monthly_totals.antar+excluded.antar,uniform=visit_monthly_totals.uniform+excluded.uniform,uniform_patuh=visit_monthly_totals.uniform_patuh+excluded.uniform_patuh,
   id_card=visit_monthly_totals.id_card+excluded.id_card,review=visit_monthly_totals.review+excluded.review,etika=visit_monthly_totals.etika+excluded.etika,hari=visit_monthly_totals.hari+excluded.hari,updated_at=excluded.updated_at`, g.month, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), Number(g.hari), stamp);
+  for (const g of await all(db, `SELECT wita_date AS day,guide_id,pos,count(*) AS antar,sum(uniform) AS uniform,sum(CASE WHEN uniform>=1 THEN 1 ELSE 0 END) AS uniform_patuh,sum(id_card) AS id_card,sum(review) AS review,sum(etika) AS etika FROM visit_evaluations WHERE status='aktif' AND wita_date<=? GROUP BY wita_date,guide_id,pos`, through)) await run(db, `INSERT INTO visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at) VALUES(?,?,?,'portal',?,?,?,?,?,?,?)
+   ON CONFLICT(day,guide_id,pos,sumber) DO UPDATE SET antar=visit_daily_totals.antar+excluded.antar,uniform=visit_daily_totals.uniform+excluded.uniform,uniform_patuh=visit_daily_totals.uniform_patuh+excluded.uniform_patuh,
+   id_card=visit_daily_totals.id_card+excluded.id_card,review=visit_daily_totals.review+excluded.review,etika=visit_daily_totals.etika+excluded.etika,updated_at=excluded.updated_at`, g.day, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), stamp);
   const days = Number((await one(db, "SELECT count(DISTINCT wita_date) AS n FROM visit_evaluations WHERE wita_date<=?", through)).n);
   const deleted = (await run(db, "DELETE FROM visit_evaluations WHERE wita_date<=?", through)).changes;
   await run(db, "UPDATE visit_sheet_state SET folded_through=?,updated_at=? WHERE id=1", through, stamp);
