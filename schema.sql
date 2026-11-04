@@ -360,3 +360,22 @@ CREATE TABLE IF NOT EXISTS visit_sheet_state (
  last_error TEXT CHECK(last_error IS NULL OR length(last_error)<=300), last_error_at TEXT, last_retention_at TEXT, folded_through TEXT, updated_at TEXT NOT NULL,
  CHECK((lease_owner IS NULL)=(lease_until IS NULL)));
 INSERT OR IGNORE INTO visit_sheet_state(id,updated_at) VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+-- Rekap harian per guide per pos: hasil lipatan retensi (sumber 'portal') dan
+-- migrasi awal riwayat NilaiGuide (sumber 'nilaiguide'). Tanpa jam, catatan, atau petugas.
+CREATE TABLE IF NOT EXISTS visit_daily_totals (
+ day TEXT NOT NULL CHECK(length(day)=10), guide_id TEXT NOT NULL REFERENCES visit_guides(id), pos INTEGER NOT NULL CHECK(pos IN(1,3)),
+ sumber TEXT NOT NULL CHECK(sumber IN('portal','nilaiguide')),
+ antar INTEGER NOT NULL CHECK(antar>0), uniform INTEGER NOT NULL, uniform_patuh INTEGER NOT NULL CHECK(uniform_patuh>=0), id_card INTEGER NOT NULL CHECK(id_card>=0),
+ review INTEGER NOT NULL DEFAULT 0 CHECK(review>=0), etika INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(day,guide_id,pos,sumber));
+-- Migrasi awal riwayat NilaiGuide: paling banyak satu yang terbuka (menyusun/aktif).
+CREATE TABLE IF NOT EXISTS visit_history_import (
+ id TEXT PRIMARY KEY CHECK(length(id)=36), status TEXT NOT NULL CHECK(status IN('menyusun','aktif','dibatalkan')),
+ terbuka INTEGER UNIQUE CHECK(terbuka IS NULL OR terbuka=1),
+ file_name TEXT NOT NULL CHECK(length(file_name) BETWEEN 1 AND 200), file_sha256 TEXT NOT NULL CHECK(length(file_sha256)=64),
+ rows_total INTEGER NOT NULL CHECK(rows_total BETWEEN 1 AND 100000), parts_total INTEGER NOT NULL CHECK(parts_total BETWEEN 1 AND 200),
+ parts_done TEXT NOT NULL DEFAULT '[]', ringkasan TEXT NOT NULL DEFAULT '{}', first_day TEXT, last_day TEXT,
+ created_by TEXT REFERENCES users(id), created_at TEXT NOT NULL, finished_at TEXT, cancelled_by TEXT REFERENCES users(id), cancelled_at TEXT,
+ CHECK((status IN('menyusun','aktif') AND terbuka=1) OR (status='dibatalkan' AND terbuka IS NULL)));
+CREATE TABLE IF NOT EXISTS visit_history_ids (
+ id TEXT PRIMARY KEY CHECK(length(id)=36), import_id TEXT NOT NULL REFERENCES visit_history_import(id));
+CREATE INDEX IF NOT EXISTS visit_history_ids_import ON visit_history_ids(import_id);

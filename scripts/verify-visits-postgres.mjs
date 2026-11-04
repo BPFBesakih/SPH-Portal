@@ -7,7 +7,9 @@
 // kunci global, salinan spreadsheet di latar belakang lewat EdgeRuntime.waitUntil),
 // snapshot portal-api yang sudah ditambal (status galat tetap, penyalinan di luar
 // transaksi permintaan dan tanpa kunci global), serta retensi 6 minggu di PostgreSQL
-// (UPDATE … FROM VALUES, ON CONFLICT, pelipatan ke visit_monthly_totals).
+// (UPDATE … FROM VALUES, ON CONFLICT, pelipatan ke rekap harian + ringkasan bulanan),
+// migrasi awal riwayat NilaiGuide lewat gateway yang ditambal, dan migrasi basis data
+// yang menolak berjalan bila ringkasan bulanan sudah terisi.
 // Google tidak pernah dihubungi: semua panggilan ke Google tiruan (scripts/fake-google-sheets.mjs).
 import assert from 'node:assert/strict';
 import {readFileSync,readdirSync} from 'node:fs';
@@ -28,10 +30,11 @@ const check=async(name,work)=>{await work();console.log('PASS '+name);checks++;}
 const cronShim=`CREATE SCHEMA IF NOT EXISTS cron;CREATE TABLE IF NOT EXISTS cron.job(jobid bigserial PRIMARY KEY,jobname text UNIQUE,schedule text NOT NULL,command text NOT NULL);
 CREATE OR REPLACE FUNCTION cron.schedule(job_name text,schedule text,command text) RETURNS bigint LANGUAGE sql AS $shim$ INSERT INTO cron.job(jobname,schedule,command) VALUES(job_name,schedule,command) ON CONFLICT(jobname) DO UPDATE SET schedule=EXCLUDED.schedule,command=EXCLUDED.command RETURNING jobid $shim$;`;
 const pgliteSql=sql=>sql.replace(/^\s*CREATE EXTENSION IF NOT EXISTS pg_cron\b[^;]*;\s*$/im,cronShim).replace(/^\s*COMMENT ON EXTENSION pg_cron\b[^;]*;\s*$/im,'');
-const visitTables=['guide_form_links','guide_form_rate_limits','guide_form_submissions','visit_guides','visit_evaluations','visit_monthly_totals','visit_sheet_files','visit_sheet_tabs','visit_sheet_state'];
+const visitTables=['guide_form_links','guide_form_rate_limits','guide_form_submissions','visit_guides','visit_evaluations','visit_monthly_totals','visit_sheet_files','visit_sheet_tabs','visit_sheet_state','visit_daily_totals','visit_history_import','visit_history_ids'];
 const DAY=86400000,globalLock='734829610160009';
+const bootstrapSql=`CREATE ROLE anon NOLOGIN;CREATE ROLE authenticated NOLOGIN;CREATE ROLE service_role NOLOGIN BYPASSRLS;CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,email_confirmed_at timestamptz,encrypted_password text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid REFERENCES auth.users(id));CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;GRANT USAGE ON SCHEMA auth TO authenticated;`;
 try{
-  await pg.exec(`CREATE ROLE anon NOLOGIN;CREATE ROLE authenticated NOLOGIN;CREATE ROLE service_role NOLOGIN BYPASSRLS;CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,email_confirmed_at timestamptz,encrypted_password text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid REFERENCES auth.users(id));CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;GRANT USAGE ON SCHEMA auth TO authenticated;`);
+  await pg.exec(bootstrapSql);
   const directory=new URL('../supabase/migrations/',import.meta.url);
   for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')).sort())await pg.exec(pgliteSql(readFileSync(new URL(name,directory),'utf8')));
   await pg.exec('SET search_path=portal,pg_catalog');
@@ -161,12 +164,12 @@ try{
     assert.equal(synced.ok,true,synced.error);assert.equal(synced.written,1);
     assert(!statements.some(s=>s.includes(globalLock)),'penyalinan tidak memakai kunci global portal');
   });
-  await check('retention on PostgreSQL: rescans moved rows, folds verified days into monthly totals, keeps figures identical',async()=>{
+  await check('retention on PostgreSQL: rescans moved rows, folds verified days into daily and monthly totals, keeps figures identical',async()=>{
     const pos1={id:link.link.id,pos:1},oldNow=Date.now()-50*DAY,oldDay=witaDate(oldNow-DAY),base=Date.parse(`${oldDay}T08:00:00+08:00`);
     const items=[0,1,2,3].map(i=>({evaluationId:randomUUID(),guideId:i%2?'G-003':'G-001',guideName:'x',pos:1,timestamp:new Date(base+i*20*60000).toISOString(),criteria:{uniform:i?1:2,idCard:i!==1,etika:i-1},catatan:''}));
     const result=await atomic(()=>ingestGuideEvaluations(db,pos1,items,oldNow));assert.equal(result.accepted.length,4);
     const today=witaDate(Date.now()),from=`${oldDay.slice(0,7)}-01`,figures=o=>JSON.stringify({...o,diperbarui:null,periode:null});
-    const before=await atomic(()=>visitOverview(db,from,today));
+    const before=await atomic(()=>visitOverview(db,from,today)),beforeDay=await atomic(()=>visitOverview(db,oldDay,oldDay));
     let r=await runVisitSheetSync({runTx,env,trigger:'manual',retention:'skip'});assert.equal(r.ok,true,r.error);
     // Pengguna mengurutkan tab lama: posisi dibaca ulang (UPDATE … FROM VALUES) sebelum verifikasi.
     google.sortTab(oldDay.slice(0,7),4);
@@ -178,7 +181,47 @@ try{
     assert.equal((await one(db,'SELECT count(*)::int n FROM visit_evaluations WHERE wita_date<=?',r.status.folded_through)).n,0);
     assert.equal((await one(db,"SELECT antar FROM visit_monthly_totals WHERE month=? AND guide_id='*' AND pos=0",oldDay.slice(0,7))).antar,4);
     assert.equal(figures(await atomic(()=>visitOverview(db,from,today))),figures(before));
+    assert.equal((await one(db,"SELECT sum(antar)::int n FROM visit_daily_totals WHERE sumber='portal' AND day=?",oldDay)).n,4,'rekap harian ikut terisi');
+    assert.equal(figures(await atomic(()=>visitOverview(db,oldDay,oldDay))),figures(beforeDay),'satu hari yang sudah dilipat tetap bisa dihitung');
     assert.equal(google.rows(oldDay.slice(0,7)).filter(x=>x.length).length,4,'spreadsheet tetap memuat rinciannya');
+  });
+  await check('NilaiGuide history import on PostgreSQL through the patched gateway: preview, resent part, finish, once only, cancel',async()=>{
+    const wita=(day,hour)=>new Date(`${day}T${hour}:00+08:00`).toISOString();
+    const rows=[[2,randomUUID(),wita('2026-03-02','09:00'),1,'G-001',2,1,3,'aktif'],[3,randomUUID(),wita('2026-03-02','10:00'),3,'G-003','TRUE',true,-2,'aktif'],[4,randomUUID(),wita('2026-03-03','09:00'),2,'G-001',1,1,1,'aktif'],[5,randomUUID(),wita('2026-03-03','11:00'),1,'G-001',1,1,1,'diganti']];
+    const second=[[6,randomUUID(),wita('2026-04-01','08:00'),1,'G-003',-1,0,0,'aktif']];
+    const file={name:'Basis Data 2026.xlsx',sha256:'c'.repeat(64),rows_total:5,parts_total:2};
+    await assert.rejects(route(leader,'visits/history/import','POST',{mode:'preview',file,part:0,rows}),e=>e instanceof api.AppError&&e.status===403);
+    const p=await route(manager,'visits/history/import','POST',{mode:'preview',file,part:0,rows});
+    assert.deepEqual([p.counts.MASUK,p.counts.POS2,p.counts.DIGANTI],[2,1,1]);
+    assert.equal((await one(db,'SELECT count(*)::int n FROM visit_history_import')).n,0,'pratinjau tidak menyimpan');
+    const first=await route(manager,'visits/history/import','POST',{mode:'apply',file,part:0,rows});const id=first.import.id;
+    assert.equal((await route(manager,'visits/history/import','POST',{mode:'apply',file,part:0,rows,import_id:id})).ulang,true);
+    await assert.rejects(route(manager,'visits/history/finish','POST',{import_id:id}),e=>e instanceof api.AppError&&e.status===409);
+    await route(manager,'visits/history/import','POST',{mode:'apply',file,part:1,rows:second,import_id:id});
+    const done=await route(manager,'visits/history/finish','POST',{import_id:id});assert.equal(done.import.status,'aktif');
+    const march=await route(leader,'visits/overview','GET',{},'from=2026-03-01&to=2026-03-31');assert.equal(march.ringkasan.pengantaran,2);assert.equal(march.ringkasan.hariDinilai,1);
+    await assert.rejects(route(manager,'visits/history/import','POST',{mode:'apply',file,part:0,rows}),e=>e instanceof api.AppError&&e.status===409,'hanya sekali');
+    // Batasan UNIQUE: dua migrasi terbuka tidak mungkin, bahkan lewat SQL langsung.
+    await assert.rejects(pg.query("INSERT INTO portal.visit_history_import(id,status,terbuka,file_name,file_sha256,rows_total,parts_total,created_at) VALUES($1,'menyusun',1,'x',$2,1,1,'2026-01-01T00:00:00.000Z')",[randomUUID(),'d'.repeat(64)]));
+    const status=await route(leader,'visits/history');assert.equal(status.current.ringkasan.counts.MASUK,3);assert.equal(status.can_manage,false);
+    const cancelled=await route(manager,'visits/history/cancel','POST',{import_id:id});assert.equal(cancelled.import.status,'dibatalkan');
+    assert.equal((await route(leader,'visits/overview','GET',{},'from=2026-03-01&to=2026-04-30')).ringkasan.pengantaran,0);
+    assert.equal((await one(db,"SELECT count(*)::int n FROM visit_daily_totals WHERE sumber='nilaiguide'")).n,0);
+    assert.equal((await one(db,"SELECT count(*)::int n FROM audit_events WHERE object_type='visit_history_import' AND action IN('IMPORT_START','IMPORT','IMPORT_CANCEL')")).n,3);
+  });
+
+  await check('daily-totals migration refuses to run once monthly totals exist, so no folded month silently loses its figures',async()=>{
+    const fresh=new PGlite();
+    try{
+      await fresh.exec(bootstrapSql);
+      const names=readdirSync(directory).filter(n=>n.endsWith('.sql')).sort(),last=names.indexOf('20261104120000_visit_daily_totals_history.sql');
+      assert(last>0,'migrasi rekap harian ada');
+      for(const name of names.slice(0,last))await fresh.exec(pgliteSql(readFileSync(new URL(name,directory),'utf8')));
+      await fresh.exec("INSERT INTO portal.visit_monthly_totals(month,guide_id,pos,antar,uniform,uniform_patuh,id_card,review,etika,hari,updated_at) VALUES('2026-11','*',0,1,1,1,1,0,1,1,'2026-12-20T00:00:00.000Z')");
+      await assert.rejects(fresh.exec(pgliteSql(readFileSync(new URL(names[last],directory),'utf8'))),e=>/visit_monthly_totals sudah terisi/.test(e.message));
+      await fresh.exec('ROLLBACK');
+      assert.equal((await fresh.query("SELECT to_regclass('portal.visit_daily_totals') AS t")).rows[0].t,null,'tidak ada yang dibuat');
+    }finally{await fresh.close();}
   });
   console.log(`${checks} visits PostgreSQL checks passed.`);
 }finally{globalThis.fetch=realFetch;globalThis.Deno=priorDeno;globalThis.EdgeRuntime=priorRuntime;delete globalThis.__visitsFixture;await pg.close();}

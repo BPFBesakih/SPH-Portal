@@ -230,7 +230,7 @@ test('sheet copy survives failures without duplicates: lost network, crash befor
   assert.equal(r.status.pending,0);assert(google.tab(month).rowCount>rowsBefore);assert.equal(sheetIds(google,month).length,1108);
 });
 
-test('retention: rows older than 6 weeks are verified cell by cell, folded into monthly totals, then deleted — figures stay identical',async t=>{
+test('retention: rows older than 6 weeks are verified cell by cell, folded into daily totals, then deleted — figures stay identical for any day range',async t=>{
   const f=fixture(t),google=createFakeGoogle(),pos1=f.link(1),pos3=f.link(3);
   const oldNow=Date.now()-50*DAY,oldDay=witaDate(oldNow-DAY),base=Date.parse(`${oldDay}T08:00:00+08:00`);
   f.ingest(pos1,[0,1,2,3,4,5].map(i=>at(base+i*20*60000,{criteria:{uniform:i%3?1:2,idCard:i!==2,etika:i-2}})),oldNow);
@@ -239,6 +239,9 @@ test('retention: rows older than 6 weeks are verified cell by cell, folded into 
   const today=witaDate(Date.now()),from=`${oldDay.slice(0,7)}-01`;
   const figures=o=>JSON.stringify({...o,diperbarui:null,periode:null});
   const before=visitOverview(f.db,from,today);
+  // Rentang harian yang memotong hari-hari yang akan dilipat: dulu harus bulan penuh.
+  let cut=shiftDate(shiftDate(shiftDate(today,-visitRules.retensiHari),-1),-1);if(cut.endsWith('-01'))cut=shiftDate(cut,-1);
+  const beforeCut=visitOverview(f.db,cut,today),beforeOldDay=visitOverview(f.db,oldDay,oldDay);
   // Tersalin tanpa retensi, lalu satu sel diubah orang di spreadsheet.
   let r=await sync(f,google,{retention:'skip'});assert.equal(r.ok,true,r.error);
   const victim=one(f.db,"SELECT * FROM visit_evaluations WHERE guide_id='G-003' ORDER BY wita_date DESC LIMIT 1");
@@ -255,8 +258,11 @@ test('retention: rows older than 6 weeks are verified cell by cell, folded into 
   const allIds=google.spreadsheets().flatMap(b=>b.tabs.filter(x=>x.title!=='Petunjuk').flatMap(x=>sheetIds(google,x.title)));
   assert.equal(allIds.length,9,'spreadsheet tetap memuat semuanya');
   assert.equal(f.route(f.users.leader,'records','GET',{},`from=${from}&to=${today}`).items.length,1);
-  let cut=shiftDate(r.status.folded_through,-1);if(cut.endsWith('-01'))cut=shiftDate(cut,-1);
-  assert.throws(()=>f.route(f.users.leader,'overview','GET',{},`from=${cut}&to=${today}`),e=>e.status===422&&/bulan penuh/.test(e.message));
+  assert.equal(figures(f.route(f.users.leader,'overview','GET',{},`from=${cut}&to=${today}`)),figures(beforeCut),'rentang harian di atas hari yang dilipat');
+  assert.equal(figures(visitOverview(f.db,oldDay,oldDay)),figures(beforeOldDay),'satu hari yang sudah dilipat');
+  const daily=all(f.db,"SELECT * FROM visit_daily_totals WHERE sumber='portal' ORDER BY day,guide_id,pos");
+  assert.equal(daily.reduce((n,d)=>n+Number(d.antar),0),8,'rekap harian memuat semua pengantaran aktif yang dilipat');
+  assert(daily.every(d=>d.day<=r.status.folded_through));
   // Kiriman ulang penilaian yang sudah dilipat ditolak karena umurnya, bukan tersimpan ganda.
   assert.equal(f.ingest(pos1,[at(base)]).rejected[0].reason,'WAKTU');
 });
