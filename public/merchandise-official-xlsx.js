@@ -13,7 +13,7 @@ const styleXml='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
 '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border>'+
 '<left style="thin"><color rgb="FF000000"/></left><right style="thin"><color rgb="FF000000"/></right><top style="thin"><color rgb="FF000000"/></top><bottom style="thin"><color rgb="FF000000"/></bottom><diagonal/></border></borders>'+
 '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'+
-'<cellXfs count="11">'+
+'<cellXfs count="13">'+
 '<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'+// 0 default
 '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'+// 1 title
 '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'+// 2 letterhead
@@ -25,6 +25,8 @@ const styleXml='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
 '<xf numFmtId="0" fontId="2" fillId="0" borderId="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left"/></xf>'+// 8 total
 '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1" applyAlignment="1"><alignment wrapText="1" vertical="center"/></xf>'+// 9 note
 '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>'+// 10 section
+'<xf numFmtId="165" fontId="0" fillId="0" borderId="1" applyBorder="1" applyNumberFormat="1"/>'+ //11 dates
+'<xf numFmtId="166" fontId="0" fillId="0" borderId="1" applyBorder="1" applyNumberFormat="1"/>'+ //12 datetime
 '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
 const cText=(ref,text,style=0)=>text===null||text===undefined||text===''?'':'<c r="'+ref+'" s="'+style+'" t="inlineStr"><is><t xml:space="preserve">'+escapeXml(text)+'</t></is></c>';
 const cNum=(ref,value,style=4)=>value===null||value===undefined||value===''?'':'<c r="'+ref+'" s="'+style+'"><v>'+asNumber(value)+'</v></c>';
@@ -120,7 +122,7 @@ function genericXml(sheet){
       if(v===null||v===undefined)return '';
       if(c.kind==='date'||c.kind==='datetime'){
         const numeric=dateSerial(v);
-        return numeric===null?cText(ref,v,5):cNum(ref,numeric,c.kind==='date'?4:4);
+        return numeric===null?cText(ref,v,5):cNum(ref,numeric,c.kind==='date'?11:12);
       }
       if(c.kind==='number'||c.kind==='money')return cNum(ref,v,c.kind==='money'?6:4);
       return cText(ref,v,c.kind==='notes'?9:5);
