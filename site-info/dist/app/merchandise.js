@@ -140,9 +140,13 @@ async function exportMonthlyReport(){
   if(!allowed('merchandise.reports.export'))return;
   const {merchandiseMonthlyWorkbook}=await import('./merchandise-report-xlsx.js');
   const ledger=(await api('merchandise/stock')).items;
+  const logoUrl=new URL('./assets/bp-besakih.png',import.meta.url);
+  const logoResponse=await fetch(logoUrl);
+  if(!logoResponse.ok)throw new Error('Logo resmi BPFKSPA gagal dimuat. Silakan coba kembali.');
+  const logoBytes=new Uint8Array(await logoResponse.arrayBuffer());
   const result=merchandiseMonthlyWorkbook({
     from:M.from,to:M.to,stock:M.report.stock,sales:M.report.sales,
-    movements:ledger,canCost:allowed('merchandise.catalog.costs'),today:localToday()
+    movements:ledger,canCost:allowed('merchandise.catalog.costs'),today:localToday(),logoBytes
   });
   await post('merchandise/reports/export',{period:M.from+'/'+M.to,format:'DAILY_STOCK'});
   saveBlob(result.blob,result.filename);
