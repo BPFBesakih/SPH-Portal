@@ -33,6 +33,7 @@ export const driveModuleFolders=Object.freeze({
  sop:'SPH-Portal-SOP',pelatihan:'SPH-Portal-Pelatihan',pegawai:'SPH-Portal-Pegawai',
  patroli:'SPH-Portal-Patroli',kejadian:'SPH-Portal-Kejadian',informasi:'SPH-Portal-Informasi',
  pengadaan:'SPH-Portal-Pengadaan',website:'SPH-Portal-Website',coaching:'SPH-Portal-Coaching',briefing:'SPH-Portal-Briefing',
+ absensi:'SPH-Portal-Absensi',
 });
 export function driveModuleForOperation(path,body={}){
  const resource=typeof path==='string'?path.split('/')[0]:'';
@@ -139,6 +140,13 @@ export function createDriveStorage(env,fetchImpl,options={}){
    const chunks=[];let size=0;const reader=r.body.getReader();
    try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>10*1024*1024){await reader.cancel();throw new AppError(503,'Berkas melebihi ukuran yang diizinkan.');}chunks.push(value);}}finally{reader.releaseLock();}
    return Buffer.concat(chunks);
+  },
+  // Hapus satu berkas milik portal (retensi selfie Absensi). Berkas yang sudah tidak ada
+  // dilaporkan 404 supaya pemanggil bisa menandainya terhapus.
+  async remove(id){
+   await ownedMetadata(id);
+   try{await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`,{method:'DELETE',headers:await headers()},'cleanup');}
+   catch(error){if(error instanceof AppError&&error.details?.upstream_status===404)throw new AppError(404,'Berkas tidak tersedia.');throw error;}
   },
   async rollback(){
    for(const entry of moves.slice().reverse()){
