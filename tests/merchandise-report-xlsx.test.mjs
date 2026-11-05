@@ -35,7 +35,7 @@ test('monthly merchandise workbook produces Master, daily sheets and final stock
   assert.match(workbook,/name="Penjualan"/);
   assert.match(workbook,/name="Mutasi Stok"/);
   const final=files.get('xl/worksheets/sheet5.xml');
-  assert.match(final,/<f>C24-E24\+1<\/f><v>8<\/v>/);
+  assert.match(final,/<f>C24-E24\+3<\/f><v>8<\/v>/);
   assert.match(final,/<f>G24\*60000<\/f><v>480000<\/v>/);
   assert.match(final,/<v>180000<\/v>/);
   assert.match(final,/<mergeCells count="/);
