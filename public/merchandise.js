@@ -55,7 +55,8 @@ function stock(){
 }
 function reports(){
   const r=M.report,summary=r.summary,canCost=allowed('merchandise.catalog.costs');
-  return `${pageHead('Laporan Merchandise','Ringkasan penjualan berdasarkan tanggal dan ekspor Excel.',allowed('merchandise.reports.export')?button('Ekspor Excel','mm-export','download','primary'): '')}${filterPeriod()}
+  return `${pageHead('Laporan Merchandise','Rekap stok harian dan penjualan berdasarkan periode.',allowed('merchandise.reports.export')?button('Ekspor Laporan Lengkap','mm-export-monthly','download','primary')+button('Ekspor Detail Transaksi','mm-export','download','outlined'): '')}${filterPeriod()}
+    <div class="notice"><p><strong>Format lengkap:</strong> MASTER, lembar per tanggal, MASTER AKHIR, penjualan, dan mutasi stok. Riwayat harian yang belum tercatat sebelum 1 November 2026 tidak dapat direkonstruksi hanya dari saldo akhir Oktober.</p></div>
     <div class="stats-grid">${stat('Omzet',money(summary.revenue),'Transaksi selesai')}${stat('Transaksi',summary.transaction_count,'Di periode terpilih')}${stat('Barang terjual',summary.units_sold,'Satuan merchandise')}${canCost?stat('Laba kotor',money(summary.revenue-summary.cost),'Dari harga beli snapshot'):''}</div>
     <section class="card">${table(['Transaksi','Barang','Qty','Harga satuan','Subtotal'],r.sales.filter(s=>s.status==='COMPLETED').flatMap(s=>s.items.map(i=>`<tr><td>${esc(s.sale_no)}</td><td>${esc(i.product_name)}</td><td>${number(i.quantity)}</td><td>${money(i.unit_price)}</td><td>${money(i.subtotal)}</td></tr>`)),'Belum ada penjualan pada periode ini.')}</section>`;
 }
@@ -134,6 +135,20 @@ async function exportReport(){
   saveBlob(workbook,`laporan-merchandise-${M.from}-${M.to}.xlsx`);
   toast('Laporan Excel siap diunduh.');
 }
+
+async function exportMonthlyReport(){
+  if(!allowed('merchandise.reports.export'))return;
+  const {merchandiseMonthlyWorkbook}=await import('./merchandise-report-xlsx.js');
+  const ledger=(await api('merchandise/stock')).items;
+  const result=merchandiseMonthlyWorkbook({
+    from:M.from,to:M.to,stock:M.report.stock,sales:M.report.sales,
+    movements:ledger,canCost:allowed('merchandise.catalog.costs'),today:localToday()
+  });
+  await post('merchandise/reports/export',{period:M.from+'/'+M.to,format:'DAILY_STOCK'});
+  saveBlob(result.blob,result.filename);
+  toast('Laporan stok lengkap '+result.days+' hari / '+result.products+' barang siap diunduh.');
+}
+
 export function bindMerchandisePage(){
   const root=document.querySelector('#main');if(!root||root.dataset.mmBound)return;root.dataset.mmBound='1';
   root.addEventListener('click',async e=>{
@@ -148,6 +163,7 @@ export function bindMerchandisePage(){
       if(action==='mm-new'||action==='mm-edit')await productForm(id);
       if(action==='mm-void')voidSale(id);
       if(action==='mm-export')await exportReport();
+      if(action==='mm-export-monthly')await exportMonthlyReport();
       if(action==='mm-filter'){
         const from=root.querySelector('[data-mm-date=from]')?.value,to=root.querySelector('[data-mm-date=to]')?.value;
         if(from>to)throw new Error('Tanggal awal harus sebelum tanggal akhir.');
