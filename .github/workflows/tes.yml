@@ -1,0 +1,71 @@
+# Pemeriksaan otomatis untuk setiap branch/PR sebelum diuji lokal dan di-merge ke master.
+# Workflow ini hanya membaca repo: tidak ada secret, deployment, atau akses ke Supabase/Cloudflare/Drive produksi.
+name: Tes
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Tes Node
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: node --test tests/*.test.mjs
+
+  frontend:
+    name: Build frontend sesuai source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Pasang alat build (versi persis dari package.json)
+        working-directory: scripts/cloud-tools
+        run: npm install --no-package-lock --no-audit --no-fund
+      - name: Bangun ulang aset Pages
+        run: node scripts/build-cloud-deploy.mjs --frontend-only
+      - name: Pastikan site-info/dist yang di-commit sama dengan hasil build
+        run: |
+          changes="$(git status --porcelain -- site-info/dist supabase/deploy/leave-form)"
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::error::Aset di site-info/dist belum dibangun ulang dari public/. Jalankan 'node scripts/build-cloud-deploy.mjs --frontend-only' lalu commit hasilnya."
+            exit 1
+          fi
+
+  postgres:
+    name: Verifikasi PostgreSQL (PGlite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Pasang PGlite di luar repo
+        run: npm install --prefix "$RUNNER_TEMP/pglite" --no-package-lock --no-audit --no-fund @electric-sql/pglite@0.5.11
+      - name: Jalankan verifier
+        run: |
+          PGLITE="$RUNNER_TEMP/pglite/node_modules/@electric-sql/pglite/dist/index.js"
+          for script in verify-cloud-operations verify-quick-reports-postgres verify-native-coaching-postgres verify-briefings-postgres; do
+            echo "::group::$script"
+            node "scripts/$script.mjs" "$PGLITE"
+            echo "::endgroup::"
+          done

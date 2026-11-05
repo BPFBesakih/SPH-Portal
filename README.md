@@ -15,6 +15,8 @@ Aplikasi internal BP Besakih untuk SDM, Keamanan, Pengadaan, informasi internal,
 | Keamanan domain | HSTS 30 hari, SPF/DMARC, DNSSEC, penghapusan origin legacy dan penonaktifan RUM diterapkan 24 Oktober. Lihat [catatan keamanan](docs/SECURITY-HARDENING-2026-10-24.md). |
 | Website publik lengkap | Pengembangan/editor konten masih lokal, terpisah dari halaman informasi yang sudah aktif. |
 
+**Alur kerja perubahan (sejak 3 November 2026):** setiap perubahan dibuat di branch dan PR, diperiksa CI **Tes**, diuji lokal oleh pemilik repo, lalu di-merge ke `master` (= produksi). Lihat [alur kerja](docs/ALUR-KERJA.md); aturan untuk agen AI ada di [AGENTS.md](AGENTS.md).
+
 Baseline kode rilis sebelum pembaruan dokumentasi ini adalah [`e30ef6e`](https://github.com/BPFBesakih/SPH-Portal/commit/e30ef6ee03f115a87d24db03f3f1eae7e221810f). Sejumlah patch backend/configuration diterapkan terarah; source aktif harus diperiksa sebelum membangun ulang backend. Folder kerja utama mempunyai perubahan yang belum seluruhnya dipush.
 
 ## Coba di komputer lokal

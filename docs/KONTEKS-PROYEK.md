@@ -217,6 +217,8 @@ Demo memakai data fiktif; akun demonstrasi dan panduan inisialisasi organisasi a
 
 ### Alur perubahan
 
+Sejak 3 November 2026 setiap perubahan, termasuk dari agen AI, dikerjakan di branch dan PR, diperiksa workflow CI **Tes**, diuji lokal oleh pemilik repo, baru kemudian di-merge ke `master`. Rincian langkah, batas uji lokal, dan urutan rilis ada di [ALUR-KERJA.md](ALUR-KERJA.md). Langkah di bawah tetap berlaku di dalam alur tersebut.
+
 1. Periksa status Git, HEAD remote, perubahan lokal, konfigurasi produksi dan source Edge aktif. Jangan menjalankan reset/clean atau menimpa pekerjaan yang belum dipush.
 2. Siapkan perubahan terarah berbasis rilis aktif. Backend yang pernah ditambal langsung harus direkonsiliasi sebelum build penuh; generator dari checkout lama dapat menghilangkan perilaku yang sudah aktif.
 3. Bila ada perubahan schema, siapkan migrasi aditif dan verifikasi pada database terisolasi. Urutan rilis fitur umumnya migrasi → Edge Function → aset Pages → pemeriksaan produksi.
