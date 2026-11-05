@@ -1,6 +1,8 @@
 import {state,api,post,refresh} from './api.js';
 import {esc,icon,button,dialog,formDialog,field,options,formatDate,formatTime,localToday,toast,empty} from './ui.js';
 import {createXlsx} from './xlsx-export.js';
+import {LEAVE_TYPES,getLeaveType,leaveDayLabel} from './leave-policy.js';
+import {leaveTypeOptions,bindLeaveDatePicker} from './leave-date-picker.js';
 let data=null,owner=null,tab='dashboard',filters={search:'',unit:'',eligible:true},year=Number(localToday().slice(0,4)),month=Number(localToday().slice(5,7));
 const statusNames={PENDING:'Menunggu atasan',APPROVED:'Disetujui',REJECTED:'Ditolak',CANCELLED:'Dibatalkan',CANCELLATION_PENDING:'Menunggu pembatalan'};
 const eventNames={OPENING:'Saldo awal',ANNUAL_GRANT:'Hak Januari',EXPIRY:'Kedaluwarsa',CONSUMPTION:'Pemakaian disetujui',REVERSAL:'Pengembalian pembatalan'};
@@ -32,7 +34,7 @@ function renderLeavesPage(){
  return `<div class="page-heading"><div><h1>Cuti</h1><p>Persetujuan berjenjang: atasan langsung, lalu atasan satu tingkat di atasnya. Kepala bidang langsung ke Pimpinan.</p></div><div class="actions">${data.capabilities.can_manage_form_links?button('Formulir pegawai','leave-form-links','document','outlined'):''}${data.capabilities.can_export?button('Ekspor laporan','leave-export','download','outlined'):''}${data.capabilities.can_request?button('Ajukan cuti','leave-new','plus'):''}</div></div>
  ${notice}<div class="leave-tabs" role="tablist" aria-label="Bagian modul cuti">${visibleTabs.map(([key,label])=>`<button role="tab" aria-selected="${tab===key}" class="chip ${tab===key?'active':''}" data-action="leave-tab" data-tab="${key}">${esc(label)}</button>`).join('')}</div>
  <div id="leave-content">${tab==='dashboard'?dashboard(mine,manager):tab==='balances'?balances():tab==='calendar'?calendar():requests(tab)}</div>
- <footer class="page-footer"><span>SPH Portal · Cuti tahunan</span><span>Waktu operasional WITA</span></footer>`;
+ <footer class="page-footer"><span>SPH Portal · Cuti tahunan dan khusus</span><span>Waktu operasional WITA</span></footer>`;
 }
 function dashboard(mine,manager){
  const rows=manager?data.balances.filter(r=>r.eligible):mine?[mine]:[];
@@ -44,7 +46,8 @@ function dashboard(mine,manager){
  <div class="leave-dashboard-grid">${card('Ketentuan saldo',`<div class="leave-rule"><b>12 hari</b><p>Tambahan setiap Januari. Tambahan berikutnya pada 1 Januari ${data.rules.next_credit_year}.</p></div><div class="leave-rule"><b>31 Maret</b><p>Batas penggunaan sisa tahun sebelumnya. Saldo dipisahkan menurut tahun asal.</p></div><div class="leave-rule"><b>Dua jenjang</b><p>Atasan langsung, lalu atasan di atasnya. Kepala bidang langsung ke Pimpinan. ${data.approver?'Atasan Anda: '+esc(data.approvers.map(a=>a.name).join(' → '))+'.':''}</p></div>`)}
  ${card('Pemakaian cuti disetujui · '+year,`<label class="field"><span>Tahun laporan</span><input id="leave-year" type="number" min="2026" max="2100" value="${year}"></label><div class="leave-chart" aria-label="Hari cuti disetujui per bulan">${monthly.map((n,i)=>`<div class="leave-chart-row"><span>${months[i]}</span><div><i style="width:${Math.round(n/max*100)}%"></i></div><b>${n}</b></div>`).join('')}</div>`)}</div>
  ${manager?card('Rekap unit · saldo tersedia hari ini',table(['Unit','Pegawai','Tersedia','Ditahan'],unitRows)):mine?card('Saldo Anda per tahun',bucketTable(mine)):''}
- <div class="notice">${icon('calendar')}<p>Pegawai memilih tanggal yang merupakan hari kerjanya. Atasan memverifikasi tanggal tersebut. Cuti bersamaan di satu unit diberi peringatan dan tetap dapat diajukan.</p></div>`;
+ ${card('Cuti khusus — tanpa mengurangi saldo tahunan',table(['Keperluan','Durasi','Ketentuan'],LEAVE_TYPES.filter(t=>!t.deducts_balance).map(t=>`<tr><td>${esc(t.name)}</td><td>${esc(t.entitlement)}</td><td>${esc(t.note)}</td></tr>`)))}
+ <div class="notice">${icon('calendar')}<p>Pegawai memilih hari kerja untuk cuti tahunan dan cuti khusus singkat. Cuti melahirkan dan keguguran memakai hari kalender berurutan. Atasan memverifikasi tanggal dan ketentuan jenis cuti. Cuti bersamaan di satu unit diberi peringatan dan tetap dapat diajukan.</p></div>`;
 }
 const bucketTable=r=>table(['Tahun asal','Diberikan','Terpakai','Kedaluwarsa','Sisa buku','Ditahan','Berlaku sampai'],r.buckets.map(b=>`<tr><td>${b.balance_year}</td><td>${b.granted_days}</td><td>${b.consumed_days}</td><td>${b.expired_days}</td><td>${b.remaining_days}</td><td>${b.reserved_days}</td><td>${formatDate(new Date(Date.parse(b.expires_on)-86400000).toISOString())}</td></tr>`))+
  `<div class="actions">${button('Riwayat saldo','leave-history','audit','text',`data-employee="${esc(r.employee_id)}"`)}</div>`;
@@ -54,7 +57,7 @@ function balances(){
 function balanceList(){const list=filteredBalances();return table(['Pegawai','Unit','Status','Tersedia','Ditahan','Terpakai '+year,''],list.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small class="muted leave-block">${esc(r.employee_no)}</small></td><td>${esc(r.unit_name||'Belum ditempatkan')}</td><td>${esc(r.is_active?r.employment_status:'Nonaktif')}</td><td><strong>${r.eligible?r.available_days:'Tidak berhak'}</strong></td><td>${r.reserved_days}</td><td>${r.used_days}</td><td>${button('Detail saldo','leave-balance','chevron','text',`data-employee="${esc(r.employee_id)}"`)}</td></tr>`),'Tidak ada pegawai dalam filter ini.')+`<div class="table-footer">${list.length} pegawai · ${number(list.reduce((n,r)=>n+r.available_days,0))} hari tersedia</div>`;}
 function requests(kind){
  const list=data.requests.filter(r=>kind==='mine'?r.employee_id===data.me?.id:kind==='approvals'?r.can_decide&&['PENDING','CANCELLATION_PENDING'].includes(r.status):r.employee_id!==data.me?.id);
- return card(kind==='mine'?'Pengajuan Anda':kind==='approvals'?'Menunggu keputusan pada tahap Anda':'Pengajuan dalam cakupan Anda',table(['Pegawai','Tanggal hari kerja','Hari','Status','Atasan',''],list.map(r=>`<tr><td><strong>${esc(r.employee_name)}</strong><small class="muted leave-block">${esc(r.unit_name||'')}</small></td><td>${formatDate(r.first_date)} – ${formatDate(r.last_date)}</td><td>${r.day_count}</td><td>${status(r)}${r.supervisor_changed?'<small class="muted leave-block">Atasan berubah; hubungi SDM</small>':''}</td><td>${esc(r.approver_name)}</td><td>${button('Lihat','leave-detail','chevron','text',`data-id="${esc(r.id)}"`)}</td></tr>`),'Belum ada pengajuan pada bagian ini.'));
+ return card(kind==='mine'?'Pengajuan Anda':kind==='approvals'?'Menunggu keputusan pada tahap Anda':'Pengajuan dalam cakupan Anda',table(['Pegawai','Jenis cuti','Tanggal cuti','Durasi','Status','Atasan',''],list.map(r=>`<tr><td><strong>${esc(r.employee_name)}</strong><small class="muted leave-block">${esc(r.unit_name||'')}</small></td><td>${esc(getLeaveType(r.leave_type)?.name||r.leave_type)}</td><td>${formatDate(r.first_date)} – ${formatDate(r.last_date)}</td><td>${r.day_count} ${leaveDayLabel(r.leave_type)}</td><td>${status(r)}${r.supervisor_changed?'<small class="muted leave-block">Atasan berubah; hubungi SDM</small>':''}</td><td>${esc(r.approver_name)}</td><td>${button('Lihat','leave-detail','chevron','text',`data-id="${esc(r.id)}"`)}</td></tr>`),'Belum ada pengajuan pada bagian ini.'));
 }
 function calendar(){
  const prefix=`${year}-${String(month).padStart(2,'0')}`,events=data.calendar.filter(r=>r.date.startsWith(prefix));
@@ -73,44 +76,35 @@ export function bindLeavesPage(){
 async function reload(){const result=await api(`leaves?year=${year}`);if(owner!==state.me)return;data=result;repaint();}
 function newRequest(){
  if(!data.capabilities.can_request)return;
- const modal=dialog('Ajukan cuti tahunan',`<form id="leave-request-form"><div class="notice"><p>Pilih hanya tanggal yang merupakan hari kerja Anda. Persetujuan: <strong>${esc(data.approvers.map(a=>a.name).join(' → '))}</strong>.</p></div>
+ const modal=dialog('Ajukan cuti',`<form id="leave-request-form"><div class="notice"><p>Persetujuan: <strong>${esc(data.approvers.map(a=>a.name).join(' → '))}</strong>.</p></div>
+ ${field('Jenis cuti','leave_type','select',leaveTypeOptions())}<p id="leave-policy-note" class="muted"></p>
  <div class="form-grid">${field('Dari tanggal','from','date',data.today,`min="${data.today}"`)}${field('Sampai tanggal','to','date',data.today,`min="${data.today}"`)}</div>
  <button class="button outlined" type="button" id="leave-show-dates">Tampilkan tanggal</button><div id="leave-date-options" class="leave-date-options"></div>
  ${field('Alasan / keperluan','reason','textarea','','maxlength="2000"')}
  <p class="form-error" role="alert"></p><div id="leave-preview"></div><div class="form-actions"><button type="button" class="button outlined" data-close>Tutup</button><button class="button primary" id="leave-review" type="submit">Periksa pengajuan</button><button class="button primary" id="leave-send" type="button" hidden>Kirim ke atasan</button></div></form>`,{wide:true});
  const form=modal.querySelector('form'),preview=modal.querySelector('#leave-preview'),error=modal.querySelector('.form-error'),send=modal.querySelector('#leave-send'),review=modal.querySelector('#leave-review');
- const key=crypto.randomUUID();let planned=null;
+ let key=crypto.randomUUID(),planned=null,attempt=null;
  const reset=()=>{planned=null;preview.innerHTML='';send.hidden=true;review.hidden=false;};
- const showDates=()=>{
-  reset();error.textContent='';
-  const from=form.elements.from.value,to=form.elements.to.value;
-  if(!from||!to||from>to||from<data.today){error.textContent='Pilih rentang tanggal yang valid mulai hari ini.';return;}
-  const days=Math.floor((Date.parse(to)-Date.parse(from))/86400000)+1;
-  if(days>366){error.textContent='Rentang maksimal 366 hari.';return;}
-  const dates=Array.from({length:days},(_,i)=>new Date(Date.parse(from)+i*86400000).toISOString().slice(0,10));
-  modal.querySelector('#leave-date-options').innerHTML=`<p class="muted">Centang hari kerja yang akan dipotong dari saldo. Sabtu/Minggu tidak diasumsikan libur.</p><div class="leave-day-grid">${dates.map(d=>`<label class="check-field"><input type="checkbox" name="work_date" value="${d}">${formatDate(d,{weekday:'short',day:'numeric',month:'short'})}</label>`).join('')}</div>`;
- };
- modal.querySelector('#leave-show-dates').addEventListener('click',showDates);
+ const picker=bindLeaveDatePicker(form,{today:data.today,container:modal.querySelector('#leave-date-options'),note:modal.querySelector('#leave-policy-note'),showButton:modal.querySelector('#leave-show-dates'),formatDate,esc,reset,onError:message=>{error.textContent=message;}});
  form.addEventListener('input',reset);
- form.elements.from.addEventListener('change',()=>{modal.querySelector('#leave-date-options').innerHTML='';});
- form.elements.to.addEventListener('change',()=>{modal.querySelector('#leave-date-options').innerHTML='';});
  form.addEventListener('submit',async event=>{
   event.preventDefault();error.textContent='';review.disabled=true;
   try{
-   const dates=[...form.querySelectorAll('[name=work_date]:checked')].map(e=>e.value);
-   const result=await post('leaves/preview',{dates});
-   planned={dates,reason:form.elements.reason.value.trim()};
-   preview.innerHTML=`<section class="leave-review"><h3>${result.dates.length} hari kerja · ${esc(result.approvers.map(a=>a.name).join(' → '))}</h3><p>${result.dates.map(d=>esc(formatDate(d))).join(', ')}</p>${result.conflicts.length?`<div class="notice warning"><p><strong>Ada cuti bersamaan di unit Anda.</strong> ${result.conflicts.map(c=>esc(c.name)+' ('+esc(formatDate(c.date))+')').join(', ')}. Pengajuan tetap diperbolehkan.</p></div>`:''}<p class="muted">Saldo ditahan sampai seluruh tahap selesai. Pemotongan dilakukan satu kali setelah persetujuan terakhir.</p></section>`;
+   const dates=picker.dates(),type=picker.type();
+   const result=await post('leaves/preview',{dates,leave_type:type.code});
+   planned={dates,leave_type:type.code,reason:form.elements.reason.value.trim()};
+   preview.innerHTML=`<section class="leave-review"><h3>${esc(type.name)} — ${result.dates.length} ${picker.label()}</h3><p>${esc(result.approvers.map(a=>a.name).join(' → '))}</p><p>${result.dates.map(d=>esc(formatDate(d))).join(', ')}</p>${result.conflicts.length?`<div class="notice warning"><p><strong>Ada cuti bersamaan di unit Anda.</strong> ${result.conflicts.map(c=>esc(c.name)+' ('+esc(formatDate(c.date))+')').join(', ')}. Pengajuan tetap diperbolehkan.</p></div>`:''}<p class="muted">${type.deducts_balance?'Saldo ditahan sampai seluruh tahap selesai. Pemotongan dilakukan satu kali setelah persetujuan terakhir.':'Cuti khusus tidak menahan atau mengurangi saldo cuti tahunan.'}</p></section>`;
    review.hidden=true;send.hidden=false;
   }catch(e){error.textContent=e.message;}finally{review.disabled=false;}
  });
- send.addEventListener('click',async()=>{if(!planned)return;send.disabled=true;error.textContent='';try{await post('leaves',{...planned,client_key:key});modal.close();toast('Pengajuan dikirim ke atasan langsung.');await reload();}catch(e){error.textContent=e.message;send.disabled=false;}});
- showDates();
+ send.addEventListener('click',async()=>{if(!planned||!form.reportValidity())return;const payload=JSON.stringify(planned);if(attempt!==payload){key=crypto.randomUUID();attempt=payload;}send.disabled=true;error.textContent='';try{await post('leaves',{...planned,client_key:key});modal.close();toast('Pengajuan dikirim ke atasan langsung.');await reload();}catch(e){error.textContent=e.message;send.disabled=false;}});
 }
 function showRequest(r){
- const modal=dialog('Detail pengajuan cuti',`<div class="leave-detail-head">${status(r)}<strong>${esc(r.employee_name)}</strong><span>${r.day_count} hari kerja · ${esc(r.approver_name)}</span></div>
+ const type=getLeaveType(r.leave_type);
+ const modal=dialog('Detail pengajuan cuti',`<div class="leave-detail-head">${status(r)}<strong>${esc(r.employee_name)}</strong><span>${esc(type?.name||r.leave_type)} — ${r.day_count} ${leaveDayLabel(r.leave_type)} · ${esc(r.approver_name)}</span></div>
+ ${type&&!type.deducts_balance?`<div class="notice"><p>${esc(type.note)} Cuti khusus tidak mengurangi saldo tahunan.</p></div>`:''}
  ${r.approval_steps?.length?`<h3>Jenjang dan riwayat persetujuan</h3>${table(['Proses','Tahap','Pejabat','Status','Catatan'],r.approval_steps.map(s=>`<tr><td>${s.purpose==='CANCELLATION'?'Pembatalan':'Pengajuan'} · ${s.cycle_no}</td><td>${s.step_no}</td><td>${esc(s.approver_name)}</td><td>${esc(({WAITING:'Menunggu tahap sebelumnya',PENDING:'Menunggu keputusan',APPROVED:'Disetujui',REJECTED:'Ditolak',CANCELLED:'Dihentikan'})[s.state])}</td><td>${esc(s.note||'—')}</td></tr>`))}`:''}
- <h3>Tanggal hari kerja</h3><p>${r.dates.map(d=>esc(formatDate(d))).join(', ')}</p>
+ <h3>Tanggal cuti</h3><p>${r.dates.map(d=>esc(formatDate(d))).join(', ')}</p>
  ${r.conflicts?.length?`<div class="notice warning"><p><strong>Cuti bersamaan dalam satu unit.</strong> ${r.conflicts.map(c=>esc(c.name)+' ('+esc(formatDate(c.date))+')').join(', ')}. Peringatan ini tidak melarang persetujuan.</p></div>`:''}
  ${r.submission_source==='FORM'?'<div class="notice"><p>Dikirim melalui formulir tanpa login. Atasan wajib memastikan pengajuan benar berasal dari pegawai ini sebelum menyetujui.</p></div>':''}
  <h3>Alasan</h3><p class="detail-prose">${esc(r.reason)}</p>
@@ -123,10 +117,11 @@ function showRequest(r){
  modal.dataset.leaveDetail='true';
 }
 function decide(r,decision){
- const approve=decision.startsWith('approve'),cancel=decision.includes('cancel');
- formDialog(approve?(cancel?'Setujui pembatalan':'Setujui cuti'):'Tolak permintaan',`<p class="form-note full">${esc(r.employee_name)} · ${r.day_count} hari kerja: ${r.dates.map(d=>esc(formatDate(d))).join(', ')}</p>
- <p class="form-note full">Tahap ${r.current_step} dari ${r.total_steps}. ${r.current_step<r.total_steps?'Setelah disetujui, permintaan diteruskan ke jenjang berikutnya. Saldo belum berubah.':cancel?'Ini persetujuan terakhir untuk pengembalian saldo.':'Ini persetujuan terakhir untuk pemotongan saldo.'}</p>
- ${approve?field(r.submission_source==='FORM'?'Saya telah memastikan identitas pemohon dan memverifikasi '+(cancel?'pembatalan sebelum cuti berlangsung.':'tanggal pilihan sebagai hari kerja pegawai.'):cancel?'Saya memverifikasi pembatalan sebelum cuti berlangsung.':'Saya telah memverifikasi tanggal pilihan sebagai hari kerja pegawai.','verified','checkbox',false,'required'):''}
+ const approve=decision.startsWith('approve'),cancel=decision.includes('cancel'),type=getLeaveType(r.leave_type),special=type&&!type.deducts_balance;
+ formDialog(approve?(cancel?'Setujui pembatalan':'Setujui cuti'):'Tolak permintaan',`<p class="form-note full">${esc(r.employee_name)} — ${esc(type?.name||r.leave_type)} · ${r.day_count} ${leaveDayLabel(r.leave_type)}: ${r.dates.map(d=>esc(formatDate(d))).join(', ')}</p>
+ ${special?`<p class="form-note full">${esc(type.note)} Saldo tahunan tidak berubah.</p>`:''}
+ <p class="form-note full">Tahap ${r.current_step} dari ${r.total_steps}. ${r.current_step<r.total_steps?'Setelah disetujui, permintaan diteruskan ke jenjang berikutnya.':special?'Ini persetujuan terakhir; saldo tahunan tidak berubah.':cancel?'Ini persetujuan terakhir untuk pengembalian saldo.':'Ini persetujuan terakhir untuk pemotongan saldo.'}</p>
+ ${approve?field((r.submission_source==='FORM'?'Saya telah memastikan identitas pemohon dan memverifikasi ':'Saya telah memverifikasi ')+(cancel?'pembatalan sebelum cuti berlangsung.':special?'tanggal dan ketentuan jenis cuti, termasuk surat dokter bila dipersyaratkan.':'tanggal pilihan sebagai hari kerja pegawai.'),'verified','checkbox',false,'required'):''}
  ${field(approve?'Catatan (opsional)':'Alasan penolakan','note','textarea','',approve?'optional maxlength="2000"':'maxlength="2000"')}`,async b=>{
   await post(`leaves/${r.id}/decision`,{decision,row_version:r.row_version,note:b.note,verified_work_dates:b.verified===true,verified_identity:b.verified===true});
   document.querySelectorAll('[data-leave-detail]').forEach(d=>d.close());toast('Keputusan tersimpan.');await reload();
@@ -179,7 +174,7 @@ async function managePersonalLinks(){
 }
 const columns={
  balances:[['name','Nama pegawai'],['employee_no','Nomor pegawai'],['unit_name','Unit'],['balance_year','Tahun asal'],['granted_days','Diberikan'],['consumed_days','Terpakai'],['expired_days','Kedaluwarsa'],['reserved_days','Ditahan'],['remaining_days','Sisa buku'],['available_days','Tersedia']],
- requests:[['name','Nama pegawai'],['employee_no','Nomor pegawai'],['unit_name','Unit'],['from','Tanggal awal'],['to','Tanggal akhir'],['day_count','Hari dalam periode'],['status','Status'],['approver','Atasan'],['reason','Alasan'],['decision_note','Catatan keputusan']]
+ requests:[['name','Nama pegawai'],['employee_no','Nomor pegawai'],['unit_name','Unit'],['leave_type_name','Jenis cuti'],['day_unit','Satuan hari'],['from','Tanggal awal'],['to','Tanggal akhir'],['day_count','Hari dalam periode'],['status','Status'],['approver','Atasan'],['reason','Alasan'],['decision_note','Catatan keputusan']]
 };
 const reportColumns=kind=>columns[kind].map(([key,label],i)=>`<label class="check-field"><input type="checkbox" name="columns[]" value="${key}" ${i<8?'checked':''}>${esc(label)}</label>`).join('');
 function exportReport(){
@@ -197,7 +192,7 @@ function exportReport(){
   try{
    const report=await api('leaves?year='+Number(values.year));
   const rows=values.kind==='balances'?report.balances.filter(r=>!values.unit||r.unit_id===values.unit).flatMap(r=>r.buckets.filter(b=>b.balance_year===Number(values.year)).map(b=>({...b,employee_id:r.employee_id,name:r.name,employee_no:r.employee_no,unit_name:r.unit_name,reserved_days:b.reserved_days,available_days:Math.max(0,b.available_days-b.reserved_days)}))):
-   report.requests.filter(r=>(!values.unit||r.unit_id===values.unit)&&(!values.status||r.status===values.status)).flatMap(r=>{const dates=r.dates.filter(d=>d.startsWith(values.year)&&(!values.from||d>=values.from)&&(!values.to||d<=values.to));return dates.length?[{...r,name:r.employee_name,status:statusNames[r.status],from:dates[0],to:dates.at(-1),day_count:dates.length,approver:r.approver_name}]:[];});
+   report.requests.filter(r=>(!values.unit||r.unit_id===values.unit)&&(!values.status||r.status===values.status)).flatMap(r=>{const dates=r.dates.filter(d=>d.startsWith(values.year)&&(!values.from||d>=values.from)&&(!values.to||d<=values.to));return dates.length?[{...r,name:r.employee_name,leave_type_name:getLeaveType(r.leave_type)?.name||r.leave_type,day_unit:leaveDayLabel(r.leave_type),status:statusNames[r.status],from:dates[0],to:dates.at(-1),day_count:dates.length,approver:r.approver_name}]:[];});
    if(!rows.length)throw new Error('Tidak ada data pada periode dan filter tersebut.');
    await post('leaves/export-audit',{employee_ids:[...new Set(rows.map(r=>r.employee_id))],kind:values.kind});
    if(popup){

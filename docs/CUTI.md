@@ -1,4 +1,4 @@
-# Cuti tahunan di SPH Portal
+# Cuti tahunan dan khusus di SPH Portal
 
 Menu **Cuti** tersedia di semua ruang kerja setelah login, melalui https://bpbesakih.com/app/#leaves. Saldo awal 2026 mengikuti impor yang sudah disahkan: 152 pegawai aktif non-THL, 781 hari. Dokumen dan snapshot individu tetap privat; aplikasi memakai ID pegawai.
 
@@ -63,4 +63,27 @@ Ringkasan memuat statistik saldo tersedia/ditahan, pemakaian bulanan, rekap unit
 - 234 tes regresi portal, 12 pemeriksaan workflow PostgreSQL, dan 9 pemeriksaan browser desktop/ponsel lulus. Pemeriksaan mencakup atasan tunggal, larangan bypass SDM, reservasi bersamaan, rollback, idempotensi, perubahan atasan, pembatalan/refund, tahun asal, peringatan benturan, privasi kalender, ekspor, dan THL.
 - Pengujian transaksi serta data contoh dijalankan pada database loopback terpisah. Tidak ada pengajuan cuti contoh yang dikirim ke produksi.
 
-Ketentuan Cuti Khusus tidak diisi dari asumsi; rilis ini menyediakan alur cuti tahunan yang terhubung ke saldo terverifikasi.
+## Cuti khusus (ketentuan pada gambar pengguna, 5 November 2026)
+
+Pilihan tersedia di **Ajukan cuti**, formulir pribadi, dan formulir bersama. Jenis dan satuan hari tampil di pengajuan, verifikasi atasan, serta pilihan kolom laporan Excel/PDF. Kalender rekan tetap hanya memuat nama, tanggal, dan unit.
+
+| Keperluan | Hak maksimal | Perhitungan |
+| --- | --- | --- |
+| Pegawai menikah | 3 hari | Hari kerja yang dipilih |
+| Menikahkan anak | 2 hari | Hari kerja yang dipilih |
+| Suami/istri, orang tua/mertua, anak/menantu meninggal | 2 hari | Hari kerja yang dipilih |
+| Keluarga serumah meninggal | 1 hari | Hari kerja yang dipilih |
+| Istri melahirkan | 2 hari | Hari kerja yang dipilih |
+| Melahirkan | 3 bulan / 12 minggu | Acuan 12 minggu = 84 hari kalender berurutan |
+| Keguguran | 1,5 bulan, sesuai surat dokter kandungan | Acuan 30 hari/bulan = maksimal 45 hari kalender berurutan |
+
+Durasi pendek mengikuti pemilihan hari kerja pada alur yang sudah ada. Untuk melahirkan, atasan memverifikasi ketentuan 6 minggu sebelum dan 6 minggu setelah melahirkan. Untuk keguguran, pegawai menyesuaikan tanggal dan alasan dengan surat dokter; atasan memverifikasi surat tersebut. Rilis ini tidak menambahkan unggahan surat dokter, pemeriksaan jenis kelamin, atau tanggal perkiraan persalinan. Acuan 84/45 hari merupakan konversi satuan pada implementasi ini.
+
+Cuti khusus tidak memerlukan saldo tahunan, tidak mereservasi saldo, dan tidak menulis konsumsi/pengembalian pada ledger saldo. Detail tanggal tetap disimpan untuk kalender, benturan, pembatalan, dan audit. Jenjang persetujuan serta pembatasan pegawai non-THL aktif tetap mengikuti modul yang sudah ada. Tanggal tidak boleh bertumpuk dengan pengajuan aktif lain, termasuk pengajuan tahunan.
+
+Migrasi: 20261105020040_special_leave_types.sql. Terapkan sebelum fungsi server baru. Nilai balance_year hanya terisi untuk tahunan; cuti khusus menggunakan NULL. Foreign key dan check constraints menjaga konsistensi jenis antara pengajuan dan rincian tanggal. Kode server lama tetap dapat menulis cuti tahunan menggunakan default yang sama. Saldo dan pengajuan lama tidak dikonversi.
+
+Verifikasi: node --test tests/leave-special.test.mjs tests/leave-form-transport.test.mjs. Pengujian memakai PostgreSQL tertanam dengan seluruh migrasi kecuali penjadwalan pg_cron; tidak mengirim pengajuan contoh ke produksi.
+
+
+Build penggabungan ke master memakai scripts/build-special-leave-deploy.mjs dengan snapshot gateway master dan SHA-256 terverifikasi. Builder mengganti hanya handler leaveRoutes dalam satu lingkup terisolasi; seluruh kode di luar handler, termasuk verifikasi sesi, hak administrator, Drive, dan modul kunjungan, dipertahankan persis.
