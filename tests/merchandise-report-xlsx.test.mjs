@@ -35,12 +35,29 @@ test('monthly merchandise workbook produces Master, daily sheets and final stock
   assert.match(workbook,/name="Penjualan"/);
   assert.match(workbook,/name="Mutasi Stok"/);
   const final=files.get('xl/worksheets/sheet5.xml');
-  assert.match(final,/<f>C10-E10\+J10\+K10\+L10<\/f><v>8<\/v>/);
-  assert.match(final,/<f>G10\*60000<\/f><v>480000<\/v>/);
+  assert.match(final,/<f>C24-E24\+1<\/f><v>8<\/v>/);
+  assert.match(final,/<f>G24\*60000<\/f><v>480000<\/v>/);
   assert.match(final,/<v>180000<\/v>/);
   assert.match(final,/<mergeCells count="/);
-  assert.match(final,/<autoFilter ref="A9:L11"/);
+  assert.match(final,/LAPORAN STOK DAN BARANG MASUK 1 - 3 NOVEMBER 2026/);
+  assert.match(final,/I\. REKAPITULASI STOK DISPLAY DAN STOK AKHIR/);
+  assert.match(final,/II\. PENJUALAN/);
+  assert.match(final,/BADAN PENGELOLA/);
+  assert.match(final,/FASILITAS KAWASAN SUCI PURA AGUNG BESAKIH/);
+  assert.match(final,/<autoFilter ref="A22:I24"/);
   assert.equal(files.size,12);
+});
+test('official layout embeds the BPFKSPA logo in every stock worksheet',async()=>{
+  const logoBytes=Uint8Array.from([137,80,78,71,13,10,26,10,0,0,0]);
+  const r=merchandiseMonthlyWorkbook({...options,logoBytes});
+  const files=await unpack(r.blob);
+  assert(files.has('xl/media/bpf-logo.png'));
+  for(let i=1;i<=5;i++){
+    assert(files.has('xl/drawings/drawing'+i+'.xml'));
+    assert(files.has('xl/worksheets/_rels/sheet'+i+'.xml.rels'));
+    assert.match(files.get('xl/worksheets/sheet'+i+'.xml'),/<drawing r:id="rId1"\/>/);
+  }
+  assert.equal(files.size,28);
 });
 test('historical incomplete October period is rejected',()=>{
   assert.throws(()=>merchandiseMonthlyWorkbook({...options,from:'2026-10-01',to:'2026-10-31'}),/belum diimpor/);
