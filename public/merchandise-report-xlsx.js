@@ -35,9 +35,9 @@ const columns=[
   {key:'adjustment',header:'KOREKSI (+/-)',width:18,kind:'number'}
 ];
 const summary=rows=>[
-  {label:'STOK DISPLAY / AWAL',value:sum(rows,'openingValue'),kind:'money'},
+  {label:'STOK DISPLAY / AWAL',value:rows[0]?.unitCost===null?null:sum(rows,'openingValue'),kind:'money'},
   {label:'TOTAL PENJUALAN',value:sum(rows,'revenue'),kind:'money'},
-  {label:'NILAI STOK AKHIR',value:sum(rows,'closingValue'),kind:'money'}
+  {label:'NILAI STOK AKHIR',value:rows[0]?.unitCost===null?null:sum(rows,'closingValue'),kind:'money'}
 ];
 const stockTotals=rows=>Object.fromEntries(
   ['opening','openingValue','sold','revenue','closing','closingValue','received','returned','adjustment'].map(key=>[key,sum(rows,key)])
