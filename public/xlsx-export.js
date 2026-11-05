@@ -76,7 +76,7 @@ function richSheetXml(sheet){
     const cols=section.columns||[];
     head(cursor++,cols);
     const data=section.rows||[];
-    if(!data.length)push(cursor++,stringCell('A'+cursor,'Tidak ada mutasi tercatat.',11),20);
+    if(!data.length){const rowNo=cursor++;push(rowNo,stringCell('A'+rowNo,'Tidak ada mutasi tercatat.',11),20);}
     else for(const item of data){
       const rowNo=cursor++;
       push(rowNo,cols.map((c,i)=>cell(item[c.key],c.kind,col(i)+rowNo)).join(''),20);
