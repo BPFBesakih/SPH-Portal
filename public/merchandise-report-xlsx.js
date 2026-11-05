@@ -148,7 +148,7 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
     dailySheets.push(reportSheet(String(Number(day.slice(8))),day,rows,detailed.filter(m=>m.witaDay===day)));
   }
   const summaryRows=makeRows(opening,running,totalsBySku,revenues);
-  const expected=products.reduce((acc,p)=>acc+n(p.stock_qty)-[...movements].filter(m=>m.sku===p.sku&&witaDay(m.created_at)>to).reduce((s,m)=>s+n(m.quantity_delta),0);
+  const expected=products.reduce((acc,p)=>acc+n(p.stock_qty)-[...movements].filter(m=>m.sku===p.sku&&witaDay(m.created_at)>to).reduce((s,m)=>s+n(m.quantity_delta),0),0);
   if(sum(summaryRows,'closing')!==expected)
     throw new Error('Total stok periode tidak sesuai mutasi; ekspor dibatalkan.');
   const salesRows=paid.flatMap(s=>(s.items||[]).map(i=>({
