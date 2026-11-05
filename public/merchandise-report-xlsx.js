@@ -6,7 +6,7 @@ import {createXlsx} from './xlsx-export.js';
 const BASELINE='2026-10-31';
 const DAY_MS=86400000;
 const dateOK=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&
-  new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
+  Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
 const witaDay=value=>{
   const n=Date.parse(value||'');
   if(!Number.isFinite(n))throw new Error('Tanggal mutasi stok tidak valid.');
@@ -68,6 +68,7 @@ const reportSheet=(title,period,rows,movements)=>{
 export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=[],canCost=false,today}={}){
   const current=today||new Date(Date.now()+8*3600000).toISOString().slice(0,10);
   if(!dateOK(from)||!dateOK(to)||!dateOK(current)||from>to)throw new Error('Rentang tanggal laporan tidak valid.');
+  if(dayList(from,to).length>31)throw new Error('Periode ekspor maksimal 31 hari.');
   if(from.slice(0,7)!==to.slice(0,7))throw new Error('Laporan format harian harus berada dalam satu bulan yang sama.');
   if(from<=BASELINE)throw new Error('Transaksi harian sebelum 1 November 2026 belum diimpor; laporan lengkap tidak dapat dibuat dari saldo akhir Oktober saja.');
   if(to>current)throw new Error('Tanggal akhir tidak boleh melebihi hari ini.');
