@@ -12,10 +12,12 @@ const output=new URL('supabase/deploy/portal-api/',root);mkdirSync(output,{recur
 await build({entryPoints:[fileURLToPath(new URL('supabase/functions/portal-api/index.ts',root))],outfile:fileURLToPath(new URL('index.ts',output)),bundle:true,format:'esm',platform:'neutral',target:'es2022',packages:'external',legalComments:'none'});
 }
 const app=new URL('site-info/dist/app/',root);mkdirSync(app,{recursive:true});
-// Formulir penilaian guide punya lingkup service worker sendiri di /penilaian-guide/, bukan di /app/.
-const guideFormSource=fileURLToPath(new URL('public/penilaian-guide',root));
-cpSync(new URL('public/',root),app,{recursive:true,filter:source=>source!==guideFormSource&&!source.startsWith(guideFormSource+(process.platform==='win32'?'\\':'/'))});
-const guideFormPage=new URL('site-info/dist/penilaian-guide/',root);rmSync(guideFormPage,{recursive:true,force:true});cpSync(new URL('public/penilaian-guide/',root),guideFormPage,{recursive:true});
+// Formulir penilaian guide (/penilaian-guide/) dan halaman absen (/absen/) punya lingkup
+// service worker sendiri, bukan di /app/.
+const ownScopes=['penilaian-guide','absen'].map(name=>fileURLToPath(new URL(`public/${name}`,root)));
+const separator=process.platform==='win32'?'\\':'/';
+cpSync(new URL('public/',root),app,{recursive:true,filter:source=>!ownScopes.some(dir=>source===dir||source.startsWith(dir+separator))});
+for(const name of ['penilaian-guide','absen']){const page=new URL(`site-info/dist/${name}/`,root);rmSync(page,{recursive:true,force:true});cpSync(new URL(`public/${name}/`,root),page,{recursive:true});}
 function visit(dir){for(const name of readdirSync(dir)){const path=new URL(name,dir);if(statSync(path).isDirectory()){visit(new URL(`${name}/`,dir));continue;}if(!/\.(html|js|css)$/.test(name))continue;let text=readFileSync(path,'utf8').replaceAll('/assets/','/app/assets/');if(name==='index.html')text=text.replaceAll('href="/styles.css"','href="/app/styles.css"').replaceAll('href="/mvp.css"','href="/app/mvp.css"').replaceAll('href="/appearance.css"','href="/app/appearance.css"').replaceAll('href="/photo-slideshow.css"','href="/app/photo-slideshow.css"').replaceAll('src="/app.js"','src="/app/app.js"');
  if(name==='index.html')text=text.replaceAll('href="/training-calendar.css"','href="/app/training-calendar.css"');
  if(name==='api.js')text=text.replace('const headers={...options.headers};',"if(path==='auth/me')path='portal/me';const headers={...options.headers};")

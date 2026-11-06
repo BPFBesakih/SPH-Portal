@@ -6,6 +6,9 @@ import {briefingRoutes,publicBriefingLink,takeBriefingLinkSlot} from './lib/brie
 import {visitRoutes,isVisitSheetAction,authorizeVisitSheetAction} from './lib/visits.mjs';
 import {takeGuideFormIpSlot,admitGuideForm,guideFormContext,submitGuideForm,guideFormReceipt,recordGuideFormResult,ipFingerprint} from './lib/guide-form.mjs';
 import {runVisitSheetSync,checkVisitSheetConnection,syncVisitSheetAfterSubmit,visitSheetConfig} from './lib/visit-sheets.mjs';
+import {attendanceRoutes} from './lib/attendance.mjs';
+import {attendanceFormRequest,attendanceSubmitted,runAttendanceRetention} from './lib/attendance-form.mjs';
+import {localAttendancePhotos} from './lib/attendance-photos.mjs';
 import {createServer} from 'node:http';
 import {readFileSync,existsSync,statSync} from 'node:fs';
 import {resolve,extname} from 'node:path';
@@ -40,21 +43,24 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
   // Penyalinan spreadsheet: transaksi pendek per langkah, panggilan Google di antaranya.
   const runTx=work=>tx(db,()=>work(db)),sheetTasks=new Set();
   const track=task=>{sheetTasks.add(task);task.catch(error=>console.warn('[salinan-spreadsheet]',error.message)).finally(()=>sheetTasks.delete(task));};
+  // Absensi: selfie lokal di <dataDir>/attendance; retensi berjalan sesudah balasan dikirim.
+  const attendancePhotos=localAttendancePhotos(dataDir);
+  const attendanceDeps={has,can,audit,readPhoto:key=>attendancePhotos.get(key)};
   function rateLimit(req,key){const ip=req.socket.remoteAddress||'unknown',k=ip+key,entry=attempts.get(k)||{count:0,until:Date.now()+15*60000};if(entry.until<Date.now()){entry.count=0;entry.until=Date.now()+15*60000;}entry.count++;attempts.set(k,entry);if(attempts.size>5000)for(const [key,v]of attempts)if(v.until<Date.now())attempts.delete(key);assert(entry.count<=30,'Terlalu banyak percobaan. Coba lagi 15 menit kemudian.',429);}
   const server=createServer(async(req,res)=> {
     const requestId=uid();res.setHeader('X-Request-Id',requestId);
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Permissions-Policy','camera=(self), microphone=(), geolocation=(self)');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org; media-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     if(process.env.COOKIE_SECURE==='true')res.setHeader('Strict-Transport-Security','max-age=31536000');
     const send=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
     try {
       const url=new URL(req.url,'http://internal'),p=url.pathname.split('/').filter(Boolean).map(decodeURIComponent);const method=req.method;
       if(p[0]!=='api'){
         assert(['GET','HEAD'].includes(method),'Metode tidak diizinkan.',405);
-        const pathname=url.pathname==='/'?'/index.html':['/laporan-cepat','/laporan-cepat/'].includes(url.pathname)?'/quick-report.html':['/coaching','/coaching/'].includes(url.pathname)?'/coaching-link.html':['/briefing-pagi','/briefing-pagi/'].includes(url.pathname)?'/briefing-link.html':['/penilaian-guide','/penilaian-guide/'].includes(url.pathname)?'/penilaian-guide/index.html':url.pathname;
+        const pathname=url.pathname==='/'?'/index.html':['/laporan-cepat','/laporan-cepat/'].includes(url.pathname)?'/quick-report.html':['/coaching','/coaching/'].includes(url.pathname)?'/coaching-link.html':['/briefing-pagi','/briefing-pagi/'].includes(url.pathname)?'/briefing-link.html':['/penilaian-guide','/penilaian-guide/'].includes(url.pathname)?'/penilaian-guide/index.html':['/absen','/absen/'].includes(url.pathname)?'/absen/index.html':url.pathname;
         assert(/^\/[a-zA-Z0-9/_-]+\.(html|js|css|svg|png|webp|ico|woff2|webmanifest)$/.test(pathname),'Halaman tidak ditemukan.',404);
-        if(pathname==='/briefing-link.html'||pathname.startsWith('/penilaian-guide/')){res.setHeader('X-Robots-Tag','noindex, nofollow');res.setHeader('Referrer-Policy','no-referrer');}
+        if(pathname==='/briefing-link.html'||pathname.startsWith('/penilaian-guide/')||pathname.startsWith('/absen/')){res.setHeader('X-Robots-Tag','noindex, nofollow');res.setHeader('Referrer-Policy','no-referrer');}
         const path=resolve(root,'public',`.${pathname}`);assert(path.startsWith(resolve(root,'public')+String.fromCharCode(process.platform==='win32'?92:47))&&existsSync(path)&&statSync(path).isFile(),'Halaman tidak ditemukan.',404);
         const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.woff2':'font/woff2','.webmanifest':'application/manifest+json'};res.writeHead(200,{'Content-Type':types[extname(path)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(method==='HEAD'?undefined:readFileSync(path));return;
       }
@@ -63,7 +69,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       const mutating=!['GET','HEAD'].includes(method);
       if(mutating&&req.headers.origin)assert(req.headers.origin===origin,'Asal permintaan tidak diizinkan.',403);
       if(mutating&&req.headers['sec-fetch-site'])assert(req.headers['sec-fetch-site']!=='cross-site','Permintaan lintas situs ditolak.',403);
-      const body=mutating?await jsonBody(req,p[0]==='guide-form'?24576:undefined):{};
+      const body=mutating?await jsonBody(req,p[0]==='guide-form'?24576:p[0]==='attendance-form'?460000:undefined):{};
       if(p[0]==='quick-report'){
         assert(method==='POST'&&p.length===2,'Metode tidak diizinkan.',405);
         assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Asal permintaan tidak diizinkan.',403);
@@ -100,6 +106,15 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
         if(outcome.fresh&&sheetAuto)track(syncVisitSheetAfterSubmit({runTx,env:sheetEnv,fetchImpl:sheetFetch}));
         return;
       }
+      if(p[0]==='attendance-form'){
+        // Halaman absen /absen/ tanpa login: HP terdaftar menandatangani setiap permintaan.
+        assert(method==='POST'&&p.length===2&&!url.search,'Alamat tidak ditemukan.',404);
+        assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Buka halaman absen dari HP yang terdaftar.',403);
+        const result=await attendanceFormRequest({action:p[1],body,clientIp:req.socket.remoteAddress||'',runTx,photos:attendancePhotos,requestId});
+        send(result);
+        if(attendanceSubmitted(p[1],result))track(runAttendanceRetention({runTx,photos:attendancePhotos}));
+        return;
+      }
       if(p[0]==='auth'&&p[1]==='login'&&method==='POST') {
         rateLimit(req,'login');const result=await login(db,body,req);res.setHeader('Set-Cookie',[cookie('besakih_session',result.token,true,result.hours*3600),cookie('besakih_csrf',result.csrfToken,false,result.hours*3600)]);send({user:result.user,csrfToken:result.csrfToken});return;
       }
@@ -133,7 +148,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(p[0]==='attachments'&&method==='POST'){send(attach(db,user,body.type,body.owner_id,body),201);return;}
       if(p[0]==='files'&&p[1]&&method==='GET') {const {file,data}=download(db,user,p[1],dataDir);res.writeHead(200,{'Content-Type':file.mime_type,'Content-Disposition':`${url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.original_name)}`,'Content-Length':data.length,'Cache-Control':'private, no-store'});res.end(data);return;}
       const ctx={db,user,p,method,body,url};
-      for(const handler of [briefingRoutes,quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes,visitRoutes]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
+      for(const handler of [briefingRoutes,quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes,visitRoutes,c=>attendanceRoutes(c,attendanceDeps)]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
       throw new AppError(404,'Alamat API tidak ditemukan.');
     } catch(error) {
       const conflict=/UNIQUE constraint/.test(error.message),invalid=/FOREIGN KEY constraint|CHECK constraint|NOT NULL constraint/.test(error.message);
