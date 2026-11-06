@@ -55,6 +55,20 @@ try{
  const dialog=()=>portal.locator('dialog[open]').last();
  const tab=async name=>{await portal.locator('[data-att=tab]',{hasText:name}).click();await portal.locator('[data-att=tab].active',{hasText:name}).waitFor();};
 
+ await check('release gate: without the attendance routes on the server the Absensi menu stays hidden',async()=>{
+  const context=await browser.newContext({viewport:{width:1366,height:900}});await watch(context);
+  // Seperti produksi sebelum migrasi dan tambalan portal-api: rute absensi menjawab 404.
+  await context.route(`${base}/api/attendance/**`,r=>r.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Halaman tidak ditemukan.'})}));
+  const page=await context.newPage(),problems=[];page.on('pageerror',e=>problems.push(e.message));
+  await page.goto(base+'/');await page.fill('#login-form [name=username]','absensi.uji');await page.fill('#login-form [name=password]','UjiAbsensi!2026');await page.click('#login-form [type=submit]');
+  await page.locator('.nav-link',{hasText:'Cuti'}).waitFor();
+  await page.waitForResponse(r=>r.url().includes('/api/attendance/overview'));await page.waitForTimeout(300);
+  assert.equal(await page.locator('.nav-link',{hasText:'Absensi'}).count(),0,'menu Absensi tersembunyi');
+  await page.goto(base+'/#attendance?tab=today');await page.locator('.nav-link',{hasText:'Cuti'}).waitFor();await page.waitForTimeout(300);
+  assert.notEqual(await page.evaluate(()=>location.hash.split('?')[0]),'#attendance','rute Absensi tidak dibuka');
+  assert.equal(await page.getByRole('heading',{name:'Absensi',exact:true}).count(),0);
+  assert.deepEqual(problems,[]);await context.close();
+ });
  await check('portal: Absensi menu and tabs follow the account capabilities',async()=>{
   await portal.goto(base+'/');await portal.fill('#login-form [name=username]','absensi.uji');await portal.fill('#login-form [name=password]','UjiAbsensi!2026');await portal.click('#login-form [type=submit]');
   await portal.locator('.nav-link',{hasText:'Absensi'}).click();

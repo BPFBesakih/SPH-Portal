@@ -428,4 +428,18 @@ export function bindAttendancePage(){
   finally{el.disabled=false;}
  });
 }
-export function resetAttendance(){stopPolling();dispose(A.map);A.map=null;A.owner=null;A.sessionTokens=new Map();}
+export function resetAttendance(){stopPolling();dispose(A.map);A.map=null;A.owner=null;A.sessionTokens=new Map();probe=null;state.attendanceReady=undefined;}
+
+// Pengaman rilis: menu Absensi hanya tampil bila server sudah memiliki rute absensi
+// (migrasi + tambalan portal-api). Sebelum itu rute menjawab 404 dan menu disembunyikan.
+// Hasilnya disimpan per sesi; memuat ulang halaman memeriksa lagi.
+export const attendanceEligible=()=>Boolean(state.me?.user.employee_id||state.permissions.some(p=>p.startsWith('hr.attendance.')));
+let probe=null;
+export function probeAttendance(){
+ if(state.attendanceReady!==undefined)return Promise.resolve(state.attendanceReady);
+ if(!probe){
+  const session=state.me;
+  probe=api('attendance/overview',{background:true}).then(()=>true,()=>false).then(ready=>{if(state.me===session)state.attendanceReady=ready;probe=null;return ready;});
+ }
+ return probe;
+}
