@@ -329,7 +329,7 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
         requireValue(result.data?.ok === true && result.data.result && typeof result.data.result === 'object');
         const data = result.data.result;
         if (path === 'portal/me') data.csrfToken = values[CSRF_COOKIE];
-        if (path.startsWith('files/') && data.binary === true) {
+        if ((path.startsWith('files/') || /^attendance\/evidence\/[^/]+$/.test(path)) && data.binary === true) {
           requireValue(typeof data.data === 'string' && data.data.length <= 14 * 1024 * 1024 && /^[A-Za-z0-9+/]*={0,2}$/.test(data.data)
             && typeof data.name === 'string' && data.name.length <= 180
             && ['application/pdf','image/png','image/jpeg','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(data.mime_type));
@@ -396,7 +396,7 @@ export function createAuthHandler({ fetchImpl = globalThis.fetch.bind(globalThis
           try{body=await readBinaryUpload(request);}catch(error){if(error instanceof UploadBodyError)return response({error:error.message},error.status);throw error;}
         }else{
           requireValue(request.headers.get('content-type')?.toLowerCase().startsWith('application/json'), 'INVALID_REQUEST', 415);
-          body = await readJson(request.body, operation ? url.pathname === '/api/uploads' ? 14 * 1024 * 1024 + 65536 : 131072 : 4096);
+          body = await readJson(request.body, operation ? url.pathname === '/api/uploads' ? 14 * 1024 * 1024 + 65536 : method === 'POST' && ['/api/attendance/events','/api/attendance/requests'].includes(url.pathname) ? 3 * 1024 * 1024 : 131072 : 4096);
         }
         requireValue(body && typeof body === 'object' && !Array.isArray(body), 'INVALID_REQUEST', 400);
       }

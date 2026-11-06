@@ -169,6 +169,23 @@ test('private file proxy sends bytes and cannot forward an arbitrary content typ
  f.options.operationData.result.mime_type='text/html';assert.equal((await f.handler(operationRequest('files/fixture',{cookie:session.cookie}),f.env)).status,503);
  f.options.redirectPath='/functions/v1/portal-api';assert.equal((await f.handler(operationRequest('files/fixture',{cookie:session.cookie}),f.env)).status,503);
 });
+test('attendance evidence uses the authenticated private byte proxy',async()=>{
+ const f=fixture({operations:true,operationData:{ok:true,result:{binary:true,data:Buffer.from('private-proof').toString('base64'),mime_type:'image/jpeg',name:'bukti.jpg',inline:true}}});
+ const session=await login(f);const account=profile();account.user.must_change_password=false;f.setProfile(account);
+ assert.equal((await f.handler(operationRequest('attendance/evidence/fixture'),f.env)).status,401);
+ const response=await f.handler(operationRequest('attendance/evidence/fixture',{cookie:session.cookie}),f.env);
+ assert.equal(response.headers.get('cache-control'),'private, no-store');assert.equal(response.headers.get('content-type'),'image/jpeg');assert.equal(await response.text(),'private-proof');
+});
+test('attendance JSON upload allowance is narrow, bounded, and still requires CSRF',async()=>{
+ const f=fixture({operations:true}),session=await login(f),account=profile();account.user.must_change_password=false;f.setProfile(account);
+ const body={photo:{mime_type:'image/jpeg',data:'A'.repeat(200000)}};
+ for(const path of ['attendance/events','attendance/requests']){
+  assert.equal((await f.handler(operationRequest(path,{method:'POST',cookie:session.cookie,body}),f.env)).status,403);
+  assert.equal((await f.handler(operationRequest(path,{method:'POST',...session,body}),f.env)).status,200);
+ }
+ assert.equal((await f.handler(operationRequest('attendance/settings',{method:'PATCH',...session,body}),f.env)).status,413);
+ assert.equal((await f.handler(operationRequest('attendance/events',{method:'POST',...session,body:{data:'A'.repeat(3*1024*1024)}}),f.env)).status,413);
+});
 test('single-use recovery forwards only through the authenticated server bridge with ingress IP and bounded input',async()=>{
  const f=fixture({operations:true});
  let r=await f.handler(request('reset',{body:{token:'a'.repeat(48),new_password:'fixture-new-password'}}),f.env);assert.equal(r.status,200);

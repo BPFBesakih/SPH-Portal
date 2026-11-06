@@ -2,6 +2,7 @@
 // did not exist when this UI was first published. Hidden grants must never be
 // lost simply because the role editor does not recognize a resource.
 const resourceNames={
+  'hr.attendance':'Absensi pegawai',
   'hr.briefings':'Briefing Pagi (Wewarah Semeng)','hr.employees':'Data pegawai',
   'hr.organization':'Organisasi','hr.employee_files':'Berkas pegawai',
   'hr.documents':'Regulasi & SOP','hr.training':'Kegiatan & Pelatihan',
@@ -27,6 +28,7 @@ const resourceNames={
   'visits.settings':'Kunjungan: pengaturan modul'
 };
 const actionNames={
+  correct:'Koreksi dengan audit',approve:'Periksa pengajuan',evidence:'Lihat bukti privat',schedule:'Kelola jadwal',settings:'Atur absensi',
   read:'Lihat',create:'Tambah',update:'Ubah',manage:'Kelola',
   publish:'Terbitkan',download:'Unduh',export:'Ekspor',
   participants:'Kelola peserta',generate:'Susun otomatis',edit:'Ubah draf',

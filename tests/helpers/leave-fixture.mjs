@@ -9,7 +9,7 @@ export async function createLeaveFixture(leaveHandler=leaveRoutes){
  await pg.exec(`CREATE ROLE anon NOLOGIN;CREATE ROLE authenticated NOLOGIN;CREATE ROLE service_role NOLOGIN BYPASSRLS;CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,email_confirmed_at timestamptz,encrypted_password text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid REFERENCES auth.users(id));CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;GRANT USAGE ON SCHEMA auth TO authenticated;`);
  const directory=new URL('../../supabase/migrations/',import.meta.url);
  for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&!n.includes('enable_leave_year_maintenance_cron')).sort()){
-  if(name==='20261102000100_visit_management.sql')await pg.exec("INSERT INTO public.app_roles(code,name) VALUES('IT_ADMIN','IT Admin')");
+  if(name.endsWith('_visit_management.sql'))await pg.exec("INSERT INTO public.app_roles(code,name) VALUES('IT_ADMIN','IT Admin') ON CONFLICT(code) DO NOTHING");
   await pg.exec(readFileSync(new URL(name,directory),'utf8'));
  }
  await pg.exec('SET search_path=portal,pg_catalog');
