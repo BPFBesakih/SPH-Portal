@@ -158,7 +158,7 @@ async function exportMonthlyReport(){
   if(!allowed('merchandise.reports.export'))return;
   const {merchandiseMonthlyWorkbook}=await import('./merchandise-report-xlsx.js');
   const ledger=(await api('merchandise/stock')).items;
-  const logoUrl=exportModuleURL('assets/bp-besakih.png');
+  const logoUrl=new URL('./assets/bp-besakih.png',import.meta.url);
   const logoResponse=await fetch(logoUrl);
   if(!logoResponse.ok)throw new Error('Logo resmi BPFKSPA gagal dimuat. Silakan coba kembali.');
   const logoBytes=new Uint8Array(await logoResponse.arrayBuffer());

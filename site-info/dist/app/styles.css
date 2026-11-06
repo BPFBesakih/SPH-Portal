@@ -120,24 +120,3 @@
 .visit-check li p{margin:2px 0 0;color:var(--md-sys-color-on-surface-variant)}
 .visit-check li.ok>.icon{color:var(--md-sys-color-primary)}
 .visit-check li.fail>.icon{color:var(--md-sys-color-error)}
-#attendance-content>.card,#attendance-content>.notice{margin-bottom:16px}
-#attendance-content>.stats-grid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:8px}
-.link-button{background:none;border:0;padding:0;margin:0;text-align:left;color:inherit;font:inherit;cursor:pointer}
-.link-button:hover strong,.link-button:focus-visible strong{text-decoration:underline;color:var(--md-sys-color-primary)}
-.dialog [data-detail] h3{font-size:var(--md-sys-typescale-body-large-size);margin:22px 0 10px}
-.dialog [data-detail] .table-wrap{border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-medium)}
-.dialog [data-detail] td,.dialog [data-detail] th{padding:10px 12px}
-tr.muted td{color:var(--md-sys-color-on-surface-variant)}
-.attendance-photos{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}
-.attendance-photos figure{margin:0;display:flex;flex-direction:column;gap:8px}
-.attendance-photos figcaption{font-size:var(--md-sys-typescale-body-small-size);font-weight:600;color:var(--md-sys-color-on-surface-variant)}
-.attendance-photo{aspect-ratio:3/4;background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-medium);display:grid;place-items:center;overflow:hidden;text-align:center;padding:8px}
-.attendance-photo:has(img){padding:0}
-.attendance-photo img{width:100%;height:100%;object-fit:cover;display:block}
-.attendance-map{height:420px;margin:16px 24px 24px;border-radius:var(--md-sys-shape-corner-medium);overflow:hidden;border:1px solid var(--md-sys-color-outline-variant);background:var(--md-sys-color-surface-container-low)}
-.attendance-map.small{height:300px;margin:0}
-.attendance-map>p{padding:16px}
-.attendance-qr{display:flex;justify-content:center;margin:12px 0}
-.attendance-qr svg{width:min(240px,70vw);height:auto;display:block;background:#fff;padding:8px;border-radius:8px}
-.dialog details summary{cursor:pointer;font-size:var(--md-sys-typescale-body-medium-size);margin:16px 0 4px;color:var(--md-sys-color-primary)}
-@media(max-width:700px){.attendance-photos{grid-template-columns:1fr 1fr;gap:8px}.attendance-map{height:320px;margin:12px}}

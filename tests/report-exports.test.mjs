@@ -32,7 +32,7 @@ test('XLSX reserves both default fills and applies the maroon fill to visible he
   for(const type of ['patroli','coaching','briefings']){
     const {blob}=reportWorkbook(type,[]);
     const files=await zipEntries(blob),styles=files.get('xl/styles.xml'),sheet=files.get('xl/worksheets/sheet1.xml');
-    assert.match(styles,/<fills count="\d+"><fill><patternFill patternType="none"\/><\/fill><fill><patternFill patternType="gray125"\/><\/fill><fill><patternFill patternType="solid"><fgColor rgb="FF7B1E34"\/>/);
+    assert.match(styles,/<fills count="3"><fill><patternFill patternType="none"\/><\/fill><fill><patternFill patternType="gray125"\/><\/fill><fill><patternFill patternType="solid"><fgColor rgb="FF7B1E34"\/>/);
     assert.match(styles,/<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"\/>/);
     assert.match(sheet,/<c r="A1" s="1" t="inlineStr">/);
   }
