@@ -17,9 +17,10 @@ export const merchandiseNav=[
   ['merchandise-stock','Stok Barang','log','merchandise.stock.read'],
   ['merchandise-reports','Laporan','filter','merchandise.reports.read']
 ];
-const M={products:[],sales:[],movements:[],overview:null,report:null,query:'',from:localToday().slice(0,7)+'-01',to:localToday()};
+const M={products:[],sales:[],movements:[],overview:null,report:null,query:'',from:localToday().slice(0,7)+'-01',to:localToday(),salesArtwork:null,salesTemplateName:''};
 const allowed=code=>state.permissions.includes(code);
 const money=n=>'Rp'+number(n);
+const exportModuleURL=name=>new URL((new URL(import.meta.url).pathname.startsWith('/portal-static/')?'../app/':'./')+name,import.meta.url).href;
 const pageHead=(title,subtitle,actions='')=>`<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="actions">${actions}</div></div>`;
 const table=(heads,rows,empty='Belum ada data')=>rows.length?`<div class="table-wrap"><table><thead><tr>${heads.map(h=>`<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`:`<section class="card"><div class="card-body"><p class="muted">${esc(empty)}</p></div></section>`;
 const actions=(name,action,ico='plus')=>button(name,action,ico,'primary');
@@ -55,7 +56,9 @@ function stock(){
 }
 function reports(){
   const r=M.report,summary=r.summary,canCost=allowed('merchandise.catalog.costs');
-  return `${pageHead('Laporan Merchandise','Rekap stok harian dan penjualan berdasarkan periode.',allowed('merchandise.reports.export')?button('Ekspor Laporan Lengkap','mm-export-monthly','download','primary')+button('Ekspor Detail Transaksi','mm-export','download','outlined'): '')}${filterPeriod()}
+  return `${pageHead('Laporan Merchandise','Rekap stok harian dan penjualan berdasarkan periode.',allowed('merchandise.reports.export')?button('Ekspor Penjualan Bulanan','mm-export-sales-monthly','download','primary')+button('Ekspor Stok Bulanan','mm-export-monthly','download','outlined')+button('Ekspor Detail Transaksi','mm-export','download','outlined'): '')}${filterPeriod()}
+    <div class="notice"><p><strong>Format penjualan bulanan:</strong> mengikuti Excel resmi dengan kop dan logo, rekap pendapatan/modal/laba, penjualan per barang, metode pembayaran, lembar harian dan MASTER AKHIR. Pilih periode dalam satu bulan. QRIS dan transfer masuk ke non tunai; pembayaran lainnya ditampilkan tersendiri. Modal dan laba mengikuti izin akses.</p></div>
+    ${allowed('merchandise.reports.export')?`<div class="toolbar"><label class="field"><span>Excel acuan penjualan</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-mm-sales-template><small data-mm-template-status>${esc(M.salesTemplateName?'Template siap: '+M.salesTemplateName:'Pilih file laporan penjualan resmi. Kop dan tanda tangan dibaca di perangkat ini.')}</small></label></div>`:''}
     <div class="notice"><p><strong>Format lengkap:</strong> MASTER, lembar per tanggal, MASTER AKHIR, penjualan, dan mutasi stok. Riwayat harian yang belum tercatat sebelum 1 November 2026 tidak dapat direkonstruksi hanya dari saldo akhir Oktober.</p></div>
     <div class="stats-grid">${stat('Omzet',money(summary.revenue),'Transaksi selesai')}${stat('Transaksi',summary.transaction_count,'Di periode terpilih')}${stat('Barang terjual',summary.units_sold,'Satuan merchandise')}${canCost?stat('Laba kotor',money(summary.revenue-summary.cost),'Dari harga beli snapshot'):''}</div>
     <section class="card">${table(['Transaksi','Barang','Qty','Harga satuan','Subtotal'],r.sales.filter(s=>s.status==='COMPLETED').flatMap(s=>s.items.map(i=>`<tr><td>${esc(s.sale_no)}</td><td>${esc(i.product_name)}</td><td>${number(i.quantity)}</td><td>${money(i.unit_price)}</td><td>${money(i.subtotal)}</td></tr>`)),'Belum ada penjualan pada periode ini.')}</section>`;
@@ -136,6 +139,21 @@ async function exportReport(){
   toast('Laporan Excel siap diunduh.');
 }
 
+async function exportSalesMonthlyReport(){
+  if(!allowed('merchandise.reports.export'))return;
+  if(!M.salesArtwork)throw new Error('Pilih file Excel acuan penjualan terlebih dahulu.');
+  const from=M.from,to=M.to,artwork=M.salesArtwork;
+  const {merchandiseSalesWorkbook}=await import(exportModuleURL('merchandise-sales-xlsx.js'));
+  const report=await api(`merchandise/reports?from=${from}&to=${to}`);
+  const result=merchandiseSalesWorkbook({
+    from,to,stock:report.stock,sales:report.sales,summary:report.summary,
+    canCost:allowed('merchandise.catalog.costs'),today:localToday(),artwork
+  });
+  await post('merchandise/reports/export',{period:from+'/'+to,format:'DAILY_SALES'});
+  saveBlob(result.blob,result.filename);
+  toast('Laporan penjualan '+result.days+' hari / '+result.products+' barang siap diunduh.');
+}
+
 async function exportMonthlyReport(){
   if(!allowed('merchandise.reports.export'))return;
   const {merchandiseMonthlyWorkbook}=await import('./merchandise-report-xlsx.js');
@@ -168,6 +186,7 @@ export function bindMerchandisePage(){
       if(action==='mm-void')voidSale(id);
       if(action==='mm-export')await exportReport();
       if(action==='mm-export-monthly')await exportMonthlyReport();
+      if(action==='mm-export-sales-monthly')await exportSalesMonthlyReport();
       if(action==='mm-filter'){
         const from=root.querySelector('[data-mm-date=from]')?.value,to=root.querySelector('[data-mm-date=to]')?.value;
         if(from>to)throw new Error('Tanggal awal harus sebelum tanggal akhir.');
@@ -179,5 +198,20 @@ export function bindMerchandisePage(){
     if(!merchandiseRoutes.includes(state.route)||!e.target.matches('[data-mm-search]'))return;
     M.query=e.target.value;const cursor=e.target.selectionStart;
     root.innerHTML=products();const input=root.querySelector('[data-mm-search]');input?.focus();input?.setSelectionRange(cursor,cursor);
+  });
+  root.addEventListener('change',async e=>{
+    if(!allowed('merchandise.reports.export')||!e.target.matches('[data-mm-sales-template]'))return;
+    M.salesArtwork=null;M.salesTemplateName='';
+    const file=e.target.files?.[0],status=root.querySelector('[data-mm-template-status]');
+    if(!file){if(status)status.textContent='Pilih file Excel acuan penjualan.';return;}
+    if(status)status.textContent='Membaca format Excel…';
+    try{
+      const {loadMerchandiseSalesArtwork}=await import(exportModuleURL('merchandise-sales-artwork.js'));
+      const artwork=await loadMerchandiseSalesArtwork(file);
+      if(e.target.files?.[0]!==file)return;
+      M.salesArtwork=artwork;M.salesTemplateName=file.name;
+      if(status)status.textContent='Template siap: '+file.name;
+      toast('Format kop dan tanda tangan siap digunakan.');
+    }catch(error){if(e.target.files?.[0]!==file)return;if(status)status.textContent=error.message;toast(error.message,true);}
   });
 }
