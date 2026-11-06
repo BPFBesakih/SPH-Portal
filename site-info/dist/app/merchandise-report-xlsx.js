@@ -1,9 +1,12 @@
-import {createXlsx} from './xlsx-export.js';
+import {createOfficialMerchandiseXlsx} from './merchandise-official-xlsx.js';
 
 // Mengikuti struktur rekap stok: MASTER, lembar harian, dan MASTER AKHIR.
 // Saldo 31 Oktober 2026 adalah titik awal yang telah direkonsiliasi di database;
 // transaksi historis sebelum tanggal tersebut tidak tersedia secara terstruktur.
 const BASELINE='2026-10-31';
+const bulan=['JANUARI','FEBRUARI','MARET','APRIL','MEI','JUNI','JULI','AGUSTUS','SEPTEMBER','OKTOBER','NOVEMBER','DESEMBER'];
+const dateLabel=value=>{const [y,m,d]=value.split('-');return Number(d)+' '+bulan[Number(m)-1]+' '+y;};
+const periodLabel=(from,to)=>{const [a,b,c]=from.split('-'),[d,e,f]=to.split('-');return Number(c)+' - '+Number(f)+' '+bulan[Number(b)-1]+' '+a;};
 const DAY_MS=86400000;
 const dateOK=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&
   Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
@@ -35,9 +38,9 @@ const columns=[
   {key:'adjustment',header:'KOREKSI (+/-)',width:18,kind:'number'}
 ];
 const summary=rows=>[
-  {label:'STOK DISPLAY / AWAL',value:rows[0]?.unitCost===null?null:sum(rows,'openingValue'),kind:'money'},
-  {label:'TOTAL PENJUALAN',value:sum(rows,'revenue'),kind:'money'},
-  {label:'NILAI STOK AKHIR',value:rows[0]?.unitCost===null?null:sum(rows,'closingValue'),kind:'money'}
+  {label:'STOK DISPLAY',value:rows[0]?.unitCost===null?null:sum(rows,'openingValue'),kind:'money'},
+  {label:'TERJUAL',value:sum(rows,'revenue'),kind:'money'},
+  {label:'STOK AKHIR',value:rows[0]?.unitCost===null?null:sum(rows,'closingValue'),kind:'money'}
 ];
 const stockTotals=rows=>Object.fromEntries(
   ['opening','openingValue','sold','revenue','closing','closingValue','received','returned','adjustment'].map(key=>[key,sum(rows,key)])
@@ -58,14 +61,14 @@ const reportSheet=(title,period,rows,movements)=>{
   const exits=movements.filter(m=>m.kind==='SALE'||(m.kind==='ADJUST'&&n(m.quantity_delta)<0));
   const returns=movements.filter(m=>m.kind==='VOID'||(m.kind==='ADJUST'&&n(m.quantity_delta)>0));
   return {
-    name:title,title:'LAPORAN STOK MERCHANDISE — '+period,
+    name:title,official:true,title:'LAPORAN STOK DAN BARANG MASUK '+period,
     subtitle:'BPFKSPA BESAKIH | Perhitungan berdasarkan transaksi yang tercatat di SPH-Portal.',
-    note:'Saldo awal berasal dari posisi 31 Oktober 2026. Perubahan setelahnya mengikuti mutasi sistem; bukan rekonstruksi penjualan Oktober.',
+    note:'Saldo awal berasal dari posisi 31 Oktober 2026. Perubahan setelahnya mengikuti mutasi sistem.',
     summary:summary(rows),columns,rows,total:stockTotals(rows),
     sections:[section('III. BARANG MASUK',arrivals),section('IV. BARANG KELUAR',exits),section('V. PEMBATALAN / KOREKSI POSITIF',returns)]
   };
 };
-export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=[],canCost=false,today}={}){
+export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=[],canCost=false,today,logoBytes=null}={}){
   const current=today||new Date(Date.now()+8*3600000).toISOString().slice(0,10);
   if(!dateOK(from)||!dateOK(to)||!dateOK(current)||from>to)throw new Error('Rentang tanggal laporan tidak valid.');
   if(dayList(from,to).length>31)throw new Error('Periode ekspor maksimal 31 hari.');
@@ -145,7 +148,7 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
       revenues.set(p.sku,n(revenues.get(p.sku))+n(revenue.get(p.sku)));
     }
     const rows=makeRows(begin,running,changes,revenue);
-    dailySheets.push(reportSheet(String(Number(day.slice(8))),day,rows,detailed.filter(m=>m.witaDay===day)));
+    dailySheets.push(reportSheet(String(Number(day.slice(8))),dateLabel(day),rows,detailed.filter(m=>m.witaDay===day)));
   }
   const summaryRows=makeRows(opening,running,totalsBySku,revenues);
   const expected=products.reduce((acc,p)=>acc+n(p.stock_qty)-[...movements].filter(m=>m.sku===p.sku&&witaDay(m.created_at)>to).reduce((s,m)=>s+n(m.quantity_delta),0),0);
@@ -174,13 +177,13 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
     ],rows:detailed
   };
   const sheets=[
-    reportSheet('MASTER','SALDO AWAL '+from,baseline,[]),
+    reportSheet('MASTER','SALDO AWAL '+dateLabel(from),baseline,[]),
     ...dailySheets,
-    reportSheet('MASTER AKHIR',from+' s.d. '+to,summaryRows,detailed),
+    reportSheet('MASTER AKHIR',periodLabel(from,to),summaryRows,detailed),
     {name:'Penjualan',columns:saleColumns,rows:salesRows},
     movementSheet
   ];
-  const blob=createXlsx(sheets);
+  const blob=createOfficialMerchandiseXlsx(sheets,{logoBytes});
   return {blob,filename:'laporan-stok-merchandise-'+from+'-sd-'+to+'.xlsx',count:salesRows.length,
     days:dates.length,products:products.length,totalOpening:sum(summaryRows,'opening'),
     totalClosing:sum(summaryRows,'closing'),salesRevenue:sum(summaryRows,'revenue'),sheetCount:sheets.length};
