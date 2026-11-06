@@ -21,15 +21,15 @@ const M={products:[],sales:[],movements:[],overview:null,report:null,query:'',fr
 const allowed=code=>state.permissions.includes(code);
 const money=n=>'Rp'+number(n);
 const exportModuleURL=name=>new URL((new URL(import.meta.url).pathname.startsWith('/portal-static/')?'../app/':'./')+name,import.meta.url).href;
-const pageHead=(title,subtitle,actions='')=>`<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="actions">${actions}</div></div>`;
-const table=(heads,rows,empty='Belum ada data')=>rows.length?`<div class="table-wrap"><table><thead><tr>${heads.map(h=>`<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`:`<section class="card"><div class="card-body"><p class="muted">${esc(empty)}</p></div></section>`;
+const pageHead=(title,subtitle,actions='')=>`<div class="page-heading mm-heading"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="actions">${actions}</div></div>`;
+const table=(heads,rows,empty='Belum ada data')=>rows.length?`<div class="table-wrap mm-table" tabindex="0" role="region" aria-label="Tabel merchandise, geser ke samping untuk melihat semua kolom"><table><thead><tr>${heads.map(h=>`<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`:`<section class="card"><div class="card-body"><p class="muted">${esc(empty)}</p></div></section>`;
 const actions=(name,action,ico='plus')=>button(name,action,ico,'primary');
-function stat(title,value,detail){return `<section class="stat-card"><div class="stat-top"><span>${esc(title)}</span></div><div class="stat-value">${esc(String(value))}</div><div class="stat-bottom"><span>${esc(detail)}</span></div></section>`;}
-function filterPeriod(){return `<div class="toolbar"><label class="field"><span>Dari</span><input type="date" data-mm-date="from" value="${M.from}"></label><label class="field"><span>Sampai</span><input type="date" data-mm-date="to" value="${M.to}"></label>${button('Terapkan periode','mm-filter','filter','outlined')}</div>`;}
+function stat(title,value,detail){return `<section class="stat-card mm-stat${String(value).startsWith('Rp')?' mm-stat-money':''}"><div class="stat-top"><span>${esc(title)}</span></div><div class="stat-value">${esc(String(value))}</div><div class="stat-bottom"><span>${esc(detail)}</span></div></section>`;}
+function filterPeriod(){return `<div class="toolbar mm-toolbar"><label class="field"><span>Dari</span><input type="date" data-mm-date="from" value="${M.from}"></label><label class="field"><span>Sampai</span><input type="date" data-mm-date="to" value="${M.to}"></label>${button('Terapkan periode','mm-filter','filter','outlined')}</div>`;}
 function home(){
   const r=M.overview;
   return `${pageHead('Merchandise','Ringkasan penjualan dan ketersediaan barang Bidang Bisnis.',r.capabilities.sales_create?actions('Catat Penjualan','mm-sale'): '')}
-    <div class="stats-grid">${stat('Jenis barang',r.products_total,'Terdaftar dalam katalog')}${stat('Belum input stok',r.products_uninitialized,'Perlu opname awal')}${stat('Stok 5 atau kurang',r.products_low,'Termasuk stok kosong')}${r.capabilities.reports?stat('Omzet bulan ini',money(r.revenue),'Transaksi selesai'):''}</div>
+    <div class="stats-grid mm-stats">${stat('Jenis barang',r.products_total,'Terdaftar dalam katalog')}${stat('Belum input stok',r.products_uninitialized,'Perlu opname awal')}${stat('Stok 5 atau kurang',r.products_low,'Termasuk stok kosong')}${r.capabilities.reports?stat('Omzet bulan ini',money(r.revenue),'Transaksi selesai'):''}</div>
     ${r.products_uninitialized?`<div class="notice warning">${icon('incident')}<div><strong>Stok awal belum lengkap</strong><p>Barang yang belum dihitung tidak dapat dijual sampai petugas mengisi stok awalnya.</p></div></div>`:''}
     <section class="card"><div class="card-body"><p>Gunakan <strong>Daftar Barang</strong> untuk mengatur harga dan mencatat stok awal. Transaksi penjualan langsung mengurangi stok; pembatalan memerlukan kewenangan manager.</p></div></section>`;
 }
@@ -42,7 +42,7 @@ function products(){
     <td>${p.is_active?'<span class="badge positive">Aktif</span>':'<span class="badge neutral">Nonaktif</span>'}</td>
     <td class="nowrap"><div class="actions">${c.stock_record?button('Stok','mm-stock','plus','outlined',`data-id="${esc(p.id)}"`):''}${c.catalog_manage?button('Ubah','mm-edit','edit','outlined',`data-id="${esc(p.id)}"`):''}</div></td></tr>`);
   return `${pageHead('Daftar Merchandise','Katalog dan harga barang dari daftar Bidang Bisnis.',c.catalog_manage?actions('Tambah Barang','mm-new'): '')}
-    <div class="toolbar"><label class="field"><span>Cari barang</span><input data-mm-search placeholder="Nama barang atau SKU" value="${esc(M.query)}"></label></div>
+    <div class="toolbar mm-toolbar"><label class="field"><span>Cari barang</span><input data-mm-search placeholder="Nama barang atau SKU" value="${esc(M.query)}"></label></div>
     <section class="card">${table(['Barang','Harga jual',...(c.costs?['Harga beli']:[]),'Stok','Status','Tindakan'],rows,'Barang tidak ditemukan.')}</section>`;
 }
 function sales(){
@@ -58,9 +58,9 @@ function reports(){
   const r=M.report,summary=r.summary,canCost=allowed('merchandise.catalog.costs');
   return `${pageHead('Laporan Merchandise','Rekap stok harian dan penjualan berdasarkan periode.',allowed('merchandise.reports.export')?button('Ekspor Penjualan Bulanan','mm-export-sales-monthly','download','primary')+button('Ekspor Stok Bulanan','mm-export-monthly','download','outlined')+button('Ekspor Detail Transaksi','mm-export','download','outlined'): '')}${filterPeriod()}
     <div class="notice"><p><strong>Format penjualan bulanan:</strong> mengikuti Excel resmi dengan kop dan logo, rekap pendapatan/modal/laba, penjualan per barang, metode pembayaran, lembar harian dan MASTER AKHIR. Pilih periode dalam satu bulan. QRIS dan transfer masuk ke non tunai; pembayaran lainnya ditampilkan tersendiri. Modal dan laba mengikuti izin akses.</p></div>
-    ${allowed('merchandise.reports.export')?`<div class="toolbar"><label class="field"><span>Excel acuan penjualan</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-mm-sales-template><small data-mm-template-status>${esc(M.salesTemplateName?'Template siap: '+M.salesTemplateName:'Pilih file laporan penjualan resmi. Kop dan tanda tangan dibaca di perangkat ini.')}</small></label></div>`:''}
+    ${allowed('merchandise.reports.export')?`<div class="toolbar mm-toolbar"><label class="field"><span>Excel acuan penjualan</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" data-mm-sales-template><small data-mm-template-status>${esc(M.salesTemplateName?'Template siap: '+M.salesTemplateName:'Pilih file laporan penjualan resmi. Kop dan tanda tangan dibaca di perangkat ini.')}</small></label></div>`:''}
     <div class="notice"><p><strong>Format lengkap:</strong> MASTER, lembar per tanggal, MASTER AKHIR, penjualan, dan mutasi stok. Riwayat harian yang belum tercatat sebelum 1 November 2026 tidak dapat direkonstruksi hanya dari saldo akhir Oktober.</p></div>
-    <div class="stats-grid">${stat('Omzet',money(summary.revenue),'Transaksi selesai')}${stat('Transaksi',summary.transaction_count,'Di periode terpilih')}${stat('Barang terjual',summary.units_sold,'Satuan merchandise')}${canCost?stat('Laba kotor',money(summary.revenue-summary.cost),'Dari harga beli snapshot'):''}</div>
+    <div class="stats-grid mm-stats">${stat('Omzet',money(summary.revenue),'Transaksi selesai')}${stat('Transaksi',summary.transaction_count,'Di periode terpilih')}${stat('Barang terjual',summary.units_sold,'Satuan merchandise')}${canCost?stat('Laba kotor',money(summary.revenue-summary.cost),'Dari harga beli snapshot'):''}</div>
     <section class="card">${table(['Transaksi','Barang','Qty','Harga satuan','Subtotal'],r.sales.filter(s=>s.status==='COMPLETED').flatMap(s=>s.items.map(i=>`<tr><td>${esc(s.sale_no)}</td><td>${esc(i.product_name)}</td><td>${number(i.quantity)}</td><td>${money(i.unit_price)}</td><td>${money(i.subtotal)}</td></tr>`)),'Belum ada penjualan pada periode ini.')}</section>`;
 }
 export async function loadMerchandisePage(route){
