@@ -130,13 +130,19 @@ function salesSheet(data,name,kind,day,artwork){
     }
     body.push('<row'+attrs(a)+'>'+cells.join('')+'</row>');
   }
-  const shiftRef=ref=>ref.replace(/(\d+)/g,x=>Number(x)>=94?String(Number(x)+offset+(Number(x)===100?other:0)):x);
+  const shiftRow=r=>r>=100?r+offset+other:r>=94?r+offset:r;
+  const shiftRef=ref=>ref.replace(/(\d+)/g,x=>String(shiftRow(Number(x))));
   const merges=template.merges.map(shiftRef);
   if(other)merges.push('C'+(100+offset)+':G'+(100+offset));
   const sheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="'+NS+'" xmlns:r="'+REL+'">'+
     '<dimension ref="A1:G'+(113+offset+other)+'"/><sheetViews><sheetView showGridLines="0" workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="14.4"/><cols>'+template.columns.map(c=>'<col'+attrs(c)+'/>').join('')+'</cols><sheetData>'+body.join('')+'</sheetData><mergeCells count="'+merges.length+'">'+merges.map(ref=>'<mergeCell ref="'+ref+'"/>').join('')+'</mergeCells><pageMargins'+attrs(template.margins)+'/><pageSetup'+attrs(template.pageSetup)+'/><drawing r:id="rId1"/></worksheet>';
   const date=label(kind==='daily'?day.date:data.to).toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase());
-  const drawing=artwork.drawing.replace('{{REPORT_DATE}}',xml(date)).replace(/<xdr:row>(\d+)<\/xdr:row>/g,(match,n)=>Number(n)>=102?'<xdr:row>'+(Number(n)+offset+other)+'</xdr:row>':match);
+  // Baris drawing dihitung dari 0. Kop, tanda tangan, dan gambar lain digeser
+  // persis seperti sel di bawahnya: setelah JUMLAH barang (baris 94) ikut
+  // tambahan barang, setelah JUMLAH pembayaran (baris 100) ikut baris LAINNYA.
+  // Blok tanda tangan di file acuan dimulai tepat di bawah tabel pembayaran,
+  // jadi ambang tetap (baris 103) membuat blok kanan menimpa tabel.
+  const drawing=artwork.drawing.replace('{{REPORT_DATE}}',xml(date)).replace(/<xdr:row>(\d+)<\/xdr:row>/g,(match,n)=>'<xdr:row>'+(shiftRow(Number(n)+1)-1)+'</xdr:row>');
   return {name,xml:sheet,drawing,last:113+offset+other};
 }
 

@@ -82,3 +82,25 @@ test('empty periods remain valid zero-valued reports',async()=>{
   const out=merchandiseSalesWorkbook({...sample,sales:[],summary:{revenue:0,cost:0,units_sold:0,transaction_count:0}});
   assert.equal(out.revenue,0);assert.equal(out.units,0);assert.equal(out.days,3);
 });
+// Tiruan tata letak file acuan: kop di atas, blok "Yang Menyerahkan" tepat di
+// bawah tabel pembayaran (baris 102), blok "Penerima" sedikit lebih bawah.
+const anchor=(name,from,to)=>'<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>'+from+'</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>'+to+'</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="1" name="'+name+'"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>';
+const layoutArtwork={...sample.artwork,drawing:'<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">'+anchor('Kop',0,5)+anchor('Yang Menyerahkan',101,108)+anchor('Penerima',103,110)+'</xdr:wsDr>'};
+const anchors=drawing=>Object.fromEntries([...drawing.matchAll(/<xdr:from>.*?<xdr:row>(\d+)<\/xdr:row>.*?<xdr:to>.*?<xdr:row>(\d+)<\/xdr:row>.*?name="([^"]+)"/g)].map(m=>[m[3],[Number(m[1]),Number(m[2])]]));
+test('blok tanda tangan ikut turun bersama tabel pembayaran dan tetap sejajar',async()=>{
+  const stock=Array.from({length:71},(_,i)=>({sku:'MER-'+String(i+1).padStart(3,'0'),name:'Produk '+(i+1)}));
+  const sales=[...sample.sales,{id:'e',sale_no:'M-5',sold_on:'2026-11-02',status:'COMPLETED',total:560000,payment_method:'LAINNYA',items:[{sku:'MER-001',quantity:1,unit_cost:1000,subtotal:560000}]}];
+  const summary={revenue:840000,cost:186000,units_sold:4,transaction_count:3};
+  const f=await unpack(merchandiseSalesWorkbook({...sample,stock,sales,summary,artwork:layoutArtwork}).blob);
+  for(let i=1;i<=5;i++){
+    const sheet=f.get('xl/worksheets/sheet'+i+'.xml'),a=anchors(f.get('xl/drawings/drawing'+i+'.xml'));
+    // 71 barang dan baris LAINNYA: JUMLAH pembayaran pindah dari baris 100 ke 102.
+    assert.match(sheet,/<row r="102"[^>]*><c r="A102" s="\d+" t="inlineStr"><is><t xml:space="preserve">JUMLAH</);
+    assert.deepEqual(a['Kop'],[0,5]);
+    assert.deepEqual(a['Yang Menyerahkan'],[103,110]);
+    assert.deepEqual(a['Penerima'],[105,112]);
+    assert(a['Yang Menyerahkan'][0]+1>102,'blok tanda tangan tidak boleh menimpa JUMLAH pembayaran');
+  }
+  const plain=await unpack(merchandiseSalesWorkbook({...sample,artwork:layoutArtwork}).blob);
+  assert.deepEqual(anchors(plain.get('xl/drawings/drawing5.xml')),{'Kop':[0,5],'Yang Menyerahkan':[101,108],'Penerima':[103,110]});
+});
