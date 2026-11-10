@@ -1,5 +1,5 @@
 import {state,api,post,patch,refresh} from './api.js';
-import {esc,icon,button,formDialog,toast,number,localToday,formatDate} from './ui.js';
+import {esc,icon,button,dialog,formDialog,toast,number,localToday,formatDate} from './ui.js';
 import {createXlsx} from './xlsx-export.js';
 
 export const merchandiseTitles={
@@ -25,11 +25,44 @@ const pageHead=(title,subtitle,actions='')=>`<div class="page-heading mm-heading
 const table=(heads,rows,empty='Belum ada data')=>rows.length?`<div class="table-wrap mm-table" tabindex="0" role="region" aria-label="Tabel merchandise, geser ke samping untuk melihat semua kolom"><table><thead><tr>${heads.map(h=>`<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`:`<section class="card"><div class="card-body"><p class="muted">${esc(empty)}</p></div></section>`;
 const actions=(name,action,ico='plus')=>button(name,action,ico,'primary');
 function stat(title,value,detail){return `<section class="stat-card mm-stat${String(value).startsWith('Rp')?' mm-stat-money':''}"><div class="stat-top"><span>${esc(title)}</span></div><div class="stat-value">${esc(String(value))}</div><div class="stat-bottom"><span>${esc(detail)}</span></div></section>`;}
+function statLink(title,value,detail,action,label){return `<button type="button" class="stat-card mm-stat mm-stat-link" data-action="${action}" aria-haspopup="dialog" aria-label="${esc(label)}"><span class="stat-top"><span>${esc(title)}</span></span><span class="stat-value">${esc(String(value))}</span><span class="stat-bottom"><span>${esc(detail)}</span><span class="mm-stat-more">Lihat daftar${icon('arrow')}</span></span></button>`;}
+export const LOW_STOCK_LIMIT=5,RESTOCK_SALES_DAYS=30;
+// Sama dengan hitungan kartu di server: stok sudah dicatat dan 5 atau kurang.
+// Barang aktif lebih dulu, lalu stok paling sedikit, lalu yang paling laku.
+export function restockCandidates(products,sales=null){
+  const sold=new Map();
+  for(const s of sales||[])if(s.status==='COMPLETED')for(const i of s.items||[]){const key=i.product_id||i.sku;sold.set(key,(sold.get(key)||0)+Number(i.quantity||0));}
+  return products.filter(p=>p.stock_qty!==null&&p.stock_qty!==undefined&&Number(p.stock_qty)<=LOW_STOCK_LIMIT)
+    .map(p=>({...p,sold:sales?(sold.get(p.id)??sold.get(p.sku)??0):null}))
+    .sort((a,b)=>Number(b.is_active!==false&&b.is_active!==0)-Number(a.is_active!==false&&a.is_active!==0)||Number(a.stock_qty)-Number(b.stock_qty)||(b.sold??0)-(a.sold??0)||String(a.name).localeCompare(String(b.name),'id'));
+}
+const daysBefore=(day,n)=>new Date(Date.parse(day+'T00:00:00Z')-n*86400000).toISOString().slice(0,10);
+async function showLowStock(){
+  const to=localToday(),from=daysBefore(to,RESTOCK_SALES_DAYS-1),withSales=allowed('merchandise.sales.read');
+  const [products,sales]=await Promise.all([api('merchandise/products').then(r=>r.items),withSales?api(`merchandise/sales?from=${from}&to=${to}`).then(r=>r.items):null]);
+  M.products=products;
+  const list=restockCandidates(products,sales),canRecord=Boolean(M.overview?.capabilities?.stock_record);
+  const out=list.filter(p=>Number(p.stock_qty)===0).length,inactive=list.filter(p=>p.is_active===false||p.is_active===0).length;
+  const summary=list.length?`<p class="mm-restock-summary"><strong>${number(list.length)} barang</strong>: ${number(out)} habis, ${number(list.length-out)} tersisa 1–${LOW_STOCK_LIMIT}${inactive?`; ${number(inactive)} di antaranya nonaktif (di bagian bawah)`:''}.${withSales?` Kolom terjual menghitung transaksi selesai ${RESTOCK_SALES_DAYS} hari terakhir (${formatDate(from)} – ${formatDate(to)}).`:''}</p>`:'';
+  const rows=list.map(p=>{
+    const off=p.is_active===false||p.is_active===0,qty=Number(p.stock_qty);
+    return `<li class="mm-restock-item${off?' is-inactive':''}"><div class="mm-restock-name"><strong>${esc(p.name)}</strong><small class="muted">${esc(p.sku)}${off?' · Nonaktif':''}</small></div>
+      <div class="mm-restock-qty">${qty===0?'<span class="badge negative">Habis</span>':`<span class="badge warm">Sisa ${number(qty)}</span>`}</div>
+      ${withSales?`<div class="mm-restock-sold"><strong>${number(p.sold)}</strong> terjual</div>`:''}
+      ${canRecord?`<div class="mm-restock-action">${button('Catat stok','mm-restock-record','plus','outlined',`data-id="${esc(p.id)}"`)}</div>`:''}</li>`;
+  });
+  const el=dialog('Barang perlu restock',list.length?`${summary}<ul class="mm-restock-list">${rows.join('')}</ul>`:`<p class="muted">Tidak ada barang dengan stok ${LOW_STOCK_LIMIT} atau kurang.</p>`,{wide:true,subtitle:`Stok ${LOW_STOCK_LIMIT} atau kurang, termasuk stok kosong. Urut dari stok paling sedikit.`});
+  el.addEventListener('click',async e=>{
+    const b=e.target.closest('[data-action=mm-restock-record]');if(!b)return;
+    el.close();
+    try{await changeStock(b.dataset.id);}catch(error){toast(error.message,true);}
+  });
+}
 function filterPeriod(){return `<div class="toolbar mm-toolbar"><label class="field"><span>Dari</span><input type="date" data-mm-date="from" value="${M.from}"></label><label class="field"><span>Sampai</span><input type="date" data-mm-date="to" value="${M.to}"></label>${button('Terapkan periode','mm-filter','filter','outlined')}</div>`;}
 function home(){
   const r=M.overview;
   return `${pageHead('Merchandise','Ringkasan penjualan dan ketersediaan barang Bidang Bisnis.',r.capabilities.sales_create?actions('Catat Penjualan','mm-sale'): '')}
-    <div class="stats-grid mm-stats">${stat('Jenis barang',r.products_total,'Terdaftar dalam katalog')}${stat('Belum input stok',r.products_uninitialized,'Perlu opname awal')}${stat('Stok 5 atau kurang',r.products_low,'Termasuk stok kosong')}${r.capabilities.reports?stat('Omzet bulan ini',money(r.revenue),'Transaksi selesai'):''}</div>
+    <div class="stats-grid mm-stats">${stat('Jenis barang',r.products_total,'Terdaftar dalam katalog')}${stat('Belum input stok',r.products_uninitialized,'Perlu opname awal')}${statLink('Stok 5 atau kurang',r.products_low,'Termasuk stok kosong','mm-low-stock','Stok 5 atau kurang: '+r.products_low+' barang. Lihat daftar barang yang perlu restock')}${r.capabilities.reports?stat('Omzet bulan ini',money(r.revenue),'Transaksi selesai'):''}</div>
     ${r.products_uninitialized?`<div class="notice warning">${icon('incident')}<div><strong>Stok awal belum lengkap</strong><p>Barang yang belum dihitung tidak dapat dijual sampai petugas mengisi stok awalnya.</p></div></div>`:''}
     <section class="card"><div class="card-body"><p>Gunakan <strong>Daftar Barang</strong> untuk mengatur harga dan mencatat stok awal. Transaksi penjualan langsung mengurangi stok; pembatalan memerlukan kewenangan manager.</p></div></section>`;
 }
@@ -184,6 +217,7 @@ export function bindMerchandisePage(){
       if(action==='mm-stock')await changeStock(id);
       if(action==='mm-new'||action==='mm-edit')await productForm(id);
       if(action==='mm-void')voidSale(id);
+      if(action==='mm-low-stock')await showLowStock();
       if(action==='mm-export')await exportReport();
       if(action==='mm-export-monthly')await exportMonthlyReport();
       if(action==='mm-export-sales-monthly')await exportSalesMonthlyReport();

@@ -188,3 +188,30 @@ h1, h2, h3, .page-heading h1, .hero h1 { font-weight: 700; }
   .mm-toolbar .field input { width: 100%; }
   .mm-toolbar > .button { width: 100%; }
 }
+
+/* Merchandise: kartu stok rendah sebagai tombol, dan daftar barang perlu restock. */
+button.mm-stat-link { display: block; width: 100%; font: inherit; color: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
+button.mm-stat-link .stat-top, button.mm-stat-link .stat-bottom { display: flex; }
+button.mm-stat-link .stat-value { display: block; }
+button.mm-stat-link:hover { border-color: var(--md-sys-color-primary); box-shadow: 0 2px 10px #7b1e3414; }
+button.mm-stat-link:focus-visible { outline: 3px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.mm-stat-link .stat-bottom { flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; }
+.mm-stat-more { display: inline-flex; align-items: center; gap: 4px; color: var(--md-sys-color-primary); font-weight: 600; }
+.mm-restock-summary { margin: 0 0 14px; color: var(--md-sys-color-on-surface-variant); }
+.mm-restock-summary strong { color: var(--md-sys-color-on-surface); }
+.mm-restock-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-large); overflow: hidden; }
+.mm-restock-item { display: grid; grid-template-columns: minmax(0, 1fr) 86px 96px auto; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--md-sys-color-outline-variant); }
+.mm-restock-item:first-child { border-top: 0; }
+.mm-restock-item.is-inactive { background: var(--md-sys-color-surface-container-low); }
+.mm-restock-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mm-restock-name strong { overflow-wrap: anywhere; }
+.mm-restock-sold { color: var(--md-sys-color-on-surface-variant); font-size: var(--md-sys-typescale-body-small-size); white-space: nowrap; }
+.mm-restock-sold strong { color: var(--md-sys-color-on-surface); font-variant-numeric: tabular-nums; }
+.mm-restock-action .button { white-space: nowrap; }
+@media (max-width: 599px) {
+  .mm-restock-item { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 12px; }
+  .mm-restock-qty { justify-self: end; }
+  .mm-restock-sold { grid-column: 1; }
+  .mm-restock-action { grid-column: 2; justify-self: end; }
+  .mm-restock-action .button { padding-inline: 12px; }
+}
