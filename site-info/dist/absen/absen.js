@@ -1,4 +1,4 @@
-import {loadDevice,saveDevice,forgetDevice,newKeys,publicKeyOf,request,signedRequest,replacementProof,serverNow,uuid,FormError} from './absen-core.js';
+import {loadDevice,saveDevice,forgetDevice,loadPending,savePending,clearPending,persistStorage,newKeys,publicKeyOf,request,signedRequest,replacementProof,serverNow,syncClock,uuid,FormError} from './absen-core.js';
 
 // Halaman absen BP Besakih. Alur harian dibuat sesingkat mungkin untuk pegawai yang
 // belum terbiasa memakai HP: buka ikon → (pilih nama) → MASUK/PULANG → selfie.
@@ -103,13 +103,43 @@ function sessionConfirm(person){
 }
 async function register(action,body){
  show('<section class="screen center"><div class="spinner"></div><p class="lead">Mendaftarkan HP…</p></section>');
- const keys=await newKeys();
- const payload={...body,public_key:await publicKeyOf(keys),client_info:navigator.userAgent.slice(0,200)};
+ // Kunci baru disimpan di HP SEBELUM dikirim. Bila balasan hilang (sinyal putus sesudah server
+ // menyimpan), kiriman ulang memakai kunci yang sama dan server mengenali HP ini lagi.
+ const employee=body.employee_id||null;
+ let pending=await loadPending().catch(()=>null);
+ if(!pending?.keys||pending.action!==action||pending.token!==body.token||pending.employee_id!==employee){
+  pending={action,token:body.token,employee_id:employee,keys:await newKeys(),created_at:new Date().toISOString()};
+  await savePending(pending);
+ }
+ const payload={...body,public_key:await publicKeyOf(pending.keys),client_info:navigator.userAgent.slice(0,200)};
  if(S.device?.keys&&S.device?.device_id)payload.replaces=await replacementProof(S.device,body.token);
  const result=await request(action,payload);
- S.device={device_id:result.device_id,keys,registered_at:new Date().toISOString()};
+ S.device={device_id:result.device_id,keys:pending.keys,registered_at:new Date().toISOString()};
  await saveDevice(S.device);
+ await clearPending().catch(()=>{});
+ persistStorage();
  return result;
+}
+// Mendaftar lalu lanjut ke layar yang sesuai. Gangguan jaringan atau server menampilkan
+// "Coba lagi" dengan kunci yang sama; tautan yang ditolak membuang kunci yang belum terpakai.
+async function registerAndContinue(action,body,clockRetry=true){
+ let result;
+ try{result=await register(action,body);}
+ catch(error){
+  if(clockRetry&&error?.status===401&&error.details?.code==='CLOCK'&&error.details.server_time){syncClock(error.details.server_time);return registerAndContinue(action,body,false);}
+  const retryable=!(error instanceof FormError)||error.status===0||error.status===429||error.status>=500;
+  if(!retryable)await clearPending().catch(()=>{});
+  failure(error,retryable?()=>registerAndContinue(action,body):null);
+  return;
+ }
+ if(result.status==='ACTIVE'){installScreen();return;}
+ if(result.status==='PENDING'){await waitApproval();return;}
+ inactive(result.status);
+}
+// Pendaftaran sebelumnya terputus sebelum balasan diterima: lanjutkan dengan kunci yang sama.
+async function resumeRegistration(pending){
+ setLabel('Pendaftaran HP');
+ await registerAndContinue(pending.action,{token:pending.token,...(pending.employee_id?{employee_id:pending.employee_id}:{})});
 }
 function installScreen(){
  const ready=standalone();
@@ -149,8 +179,14 @@ function inactive(status){
 /* ---------- Beranda absen ---------- */
 async function start(){
  S.device=await loadDevice().catch(()=>null);
+ if(S.device?.device_id)persistStorage();
  const link=readFragment();
  if(link){await registration(link);return;}
+ const pending=await loadPending().catch(()=>null);
+ if(pending?.keys&&pending.token){
+  if(Date.now()-Date.parse(pending.created_at)<8*86400000){await resumeRegistration(pending);return;}
+  await clearPending().catch(()=>{});
+ }
  await home();
 }
 async function home(){
@@ -171,14 +207,19 @@ async function personHome(){
  const d=S.context.device;
  try{S.status=await signedRequest(S.device,'person',{employee_id:S.person.id});}
  catch(error){if(error.status===404){S.person=null;picker();return;}failure(error,personHome);return;}
- const p=S.status.employee,suggested=S.status.suggested,open=S.status.open_since;
- const statusText=open?`Sudah absen masuk pukul ${witaTime(Date.parse(open))}. Sekarang absen pulang.`:S.status.last_today?.kind==='OUT'?`Sudah absen pulang pukul ${witaTime(Date.parse(S.status.last_today.recorded_at))}.`:'Belum absen masuk hari ini.';
+ const p=S.status.employee,suggested=S.status.suggested,open=S.status.open_since,today=S.status.state;
+ // Jam hanya dikirim server untuk pemilik HP pribadi di HP-nya sendiri; penumpang melihat keadaannya saja.
+ const done=S.status.last_today?.kind==='OUT'?S.status.last_today:null;
+ const statusText=open?`Sudah absen masuk pukul ${witaTime(Date.parse(open))}. Sekarang absen pulang.`
+  :today==='OPEN'?'Sudah absen masuk. Sekarang absen pulang.'
+  :done?`Sudah absen pulang pukul ${witaTime(Date.parse(done.recorded_at))}.`
+  :today==='DONE'?'Sudah absen pulang hari ini.':'Belum absen masuk hari ini.';
  const ownerHere=d.kind==='PERSONAL'&&d.owner?.id===p.id;
  show(`<section class="screen">
   <p class="muted">${esc(witaDay(serverNow()))}</p>
   <div class="card person"><span class="muted small">Absen sebagai</span><span class="name">${esc(p.name)}</span><span class="role">${esc([p.position,p.unit].filter(Boolean).join(' · '))}</span>
    <button class="ghost" data-action="pick">${ownerHere?'Absen untuk orang lain':'Ganti nama'}</button></div>
-  <div class="status ${open?'ok':''}">${esc(statusText)}</div>
+  <div class="status ${open||today==='OPEN'?'ok':''}">${esc(statusText)}</div>
   ${S.context.points_ready?'':'<div class="status warn">Titik absen belum diatur pengelola. Absen tetap tercatat.</div>'}
   <div class="big-actions">
    <button class="${suggested==='IN'?'suggested':'other'}" data-action="kind" data-kind="IN">MASUK<small>${suggested==='IN'?'Disarankan':''}</small></button>
@@ -242,7 +283,7 @@ function stopCapture(){
 function chooseKind(kind){
  const open=S.status?.open_since,suggested=S.status?.suggested;
  if(kind!==suggested){
-  const text=kind==='OUT'?'Anda belum absen masuk. Tetap absen PULANG?':`Anda sudah absen masuk pukul ${witaTime(Date.parse(open))}. Tetap absen MASUK lagi?`;
+  const text=kind==='OUT'?'Anda belum absen masuk. Tetap absen PULANG?':open?`Anda sudah absen masuk pukul ${witaTime(Date.parse(open))}. Tetap absen MASUK lagi?`:'Anda sudah absen masuk. Tetap absen MASUK lagi?';
   show(`<section class="screen"><h1>Yakin?</h1><div class="status warn">${esc(text)}</div>
    <button class="primary wide" data-action="kind-confirmed" data-kind="${kind}">Ya, absen ${kindLabel[kind]}</button>
    <button class="secondary wide" data-action="home">Kembali</button></section>`);
@@ -373,10 +414,10 @@ app.addEventListener('click',async event=>{
   if(action==='home'){S.retry=null;await home();return;}
   if(action==='retry'){const retry=S.retry;S.retry=null;if(retry)await retry();else await home();return;}
   if(action==='install'){if(S.install){S.install.prompt();await S.install.userChoice.catch(()=>{});S.install=null;el.hidden=true;}return;}
-  if(action==='register'){el.disabled=true;await register('register',{token:el.dataset.token});installScreen();return;}
+  if(action==='register'){el.disabled=true;await registerAndContinue('register',{token:el.dataset.token});return;}
   if(action==='session-person'){sessionConfirm(S.session.preview.people.find(p=>p.id===el.dataset.id));return;}
   if(action==='session-back'){sessionPicker();return;}
-  if(action==='session-register'){el.disabled=true;await register('session-register',{token:S.session.token,employee_id:el.dataset.id});await waitApproval();return;}
+  if(action==='session-register'){el.disabled=true;await registerAndContinue('session-register',{token:S.session.token,employee_id:el.dataset.id});return;}
   if(action==='forget'){await forgetDevice();S.device=null;S.context=null;S.person=null;unregistered();return;}
   if(action==='pick'){picker();return;}
   if(action==='choose'){

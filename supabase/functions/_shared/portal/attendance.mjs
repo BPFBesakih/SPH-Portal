@@ -344,6 +344,8 @@ export async function attendanceRoutes({db, user, p, method, body: b = {}, url},
     const scope = await scopeOf(db, user, deps);
     const canDevices = await has(db, user, 'hr.attendance.devices'), canSettings = await can(db, user, 'hr.attendance.settings', {});
     const state = await one(db, 'SELECT last_retention_at,last_error,deleted_photos FROM attendance_state WHERE id=1');
+    const due = canSettings ? Number((await one(db, `SELECT count(*) n FROM attendance_events e WHERE e.photo_storage_key IS NOT NULL AND e.recorded_at<?
+   AND NOT EXISTS(SELECT 1 FROM attendance_reference_photos r WHERE r.event_id=e.id)`, new Date(nowMs - attendanceRules.photoRetentionDays * DAY).toISOString()))?.n || 0) : 0;
     return {
       today: today(),
       self: Boolean(user.employee_id && scope.byId.has(user.employee_id)),
@@ -359,7 +361,8 @@ export async function attendanceRoutes({db, user, p, method, body: b = {}, url},
       retention: canSettings ? {
         last_run_at: state?.last_retention_at || null,
         last_error: state?.last_error || null,
-        deleted_photos: Number(state?.deleted_photos || 0)
+        deleted_photos: Number(state?.deleted_photos || 0),
+        due_photos: due
       } : null
     };
   }

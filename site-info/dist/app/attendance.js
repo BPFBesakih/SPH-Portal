@@ -301,7 +301,19 @@ function pointsTab(){
  const rows=p.points.map(x=>`<tr><td><strong>${esc(x.name)}</strong></td><td>${x.latitude.toFixed(6)}, ${x.longitude.toFixed(6)}</td><td>${number(x.radius_m)} m</td><td>${pill(x.is_active?'Aktif':'Nonaktif',x.is_active?'positive':'negative')}</td><td><a class="button text" href="https://www.google.com/maps?q=${x.latitude},${x.longitude}" target="_blank" rel="noopener">Lihat di Google Maps</a>${p.can_manage?`<button type="button" class="button text" data-att="point-edit" data-id="${esc(x.id)}">Ubah</button>`:''}</td></tr>`);
  return `${p.points.some(x=>x.is_active)?'':`<div class="notice warning">${icon('location')}<div><strong>Belum ada titik absen aktif</strong><p>Absen tetap tercatat dan ditandai "Titik belum diatur" sampai titik ditambahkan.</p></div></div>`}
  ${card('Peta titik absen','Lingkaran menunjukkan radius toleransi tiap titik.',`<div id="attendance-map" class="attendance-map" aria-label="Peta titik absen"></div>`)}
- ${card('Daftar titik','Absen di luar semua radius tetap tercatat, wajib diberi alasan, dan masuk Perlu dicek.',table(['Nama','Koordinat','Radius','Status',''],rows,'Belum ada titik absen.'))}`;
+ ${card('Daftar titik','Absen di luar semua radius tetap tercatat, wajib diberi alasan, dan masuk Perlu dicek.',table(['Nama','Koordinat','Radius','Status',''],rows,'Belum ada titik absen.'))}
+ ${retentionCard()}`;
+}
+// Status penghapusan selfie lama (hanya untuk pemegang pengaturan absensi).
+function retentionCard(){
+ const r=A.overview?.retention;if(!r)return '';
+ const last=r.last_run_at?`${formatDate(r.last_run_at)} ${formatTime(r.last_run_at)} WITA`:'belum pernah';
+ const stale=!r.last_run_at||Date.now()-Date.parse(r.last_run_at)>2*86400000;
+ const warn=r.last_error||(r.due_photos>0&&stale);
+ return `<div class="notice ${warn?'warning':''}" data-retention>${icon('clock')}<div><strong>Penghapusan selfie lama (90 hari)</strong>
+  <p>Terakhir berjalan: ${esc(last)} · ${number(r.deleted_photos)} selfie terhapus · ${number(r.due_photos)} menunggu dihapus.</p>
+  ${r.last_error?`<p>Galat terakhir: ${esc(r.last_error)}</p>`:''}
+  ${warn?'<p>Penghapusan berjalan otomatis saat halaman absen dibuka di HP terdaftar. Bila absen sedang tidak dipakai, pasang jadwal harian sesuai panduan di docs/ABSENSI.md.</p>':''}</div></div>`;
 }
 let leafletPromise;
 function leaflet(){
@@ -439,7 +451,10 @@ export function probeAttendance(){
  if(state.attendanceReady!==undefined)return Promise.resolve(state.attendanceReady);
  if(!probe){
   const session=state.me;
-  probe=api('attendance/overview',{background:true}).then(()=>true,()=>false).then(ready=>{if(state.me===session)state.attendanceReady=ready;probe=null;return ready;});
+  // Hanya 404 yang berarti server belum memasang Absensi. Galat sementara (jaringan, 5xx,
+  // sesi sibuk) tidak disimpan, jadi pemeriksaan diulang saat pengguna berpindah halaman.
+  probe=api('attendance/overview',{background:true}).then(()=>true,error=>error?.status===404?false:undefined)
+   .then(ready=>{if(state.me===session)state.attendanceReady=ready;probe=null;return ready===true;});
  }
  return probe;
 }

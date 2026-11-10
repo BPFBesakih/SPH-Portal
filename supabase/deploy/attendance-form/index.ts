@@ -630,7 +630,8 @@ async function registrationPreview(db, b) {
     label: view.label,
     owner: view.owner,
     unit: view.unit,
-    expires_at: d.registration_expires_at
+    expires_at: d.registration_expires_at,
+    server_time: now()
   };
 }
 async function checkRegistrationKey(b) {
@@ -651,7 +652,15 @@ async function revokeReplaced(db, replacedId, newId) {
   await run(db, "UPDATE attendance_devices SET status='REVOKED',revoked_at=?,revoke_reason=?,registration_token_hash=NULL,updated_at=?,row_version=row_version+1 WHERE id=?", now(), "Diganti pendaftaran baru di HP yang sama", now(), old.id);
 }
 async function activateDevice(db, b, key, replacedId, requestId) {
-  const d = await pendingByToken(db, b?.token);
+  assert(typeof b?.token === "string" && tokenPattern.test(b.token), invalidRegistration, 404);
+  const again = await one(db, "SELECT * FROM attendance_devices WHERE registration_token_hash=? AND key_thumbprint=? AND status='ACTIVE'", digest(b.token), key.thumbprint);
+  if (again) return {
+    device_id: again.id,
+    status: again.status,
+    server_time: now(),
+    recovered: true
+  };
+  const d = await pendingByToken(db, b.token);
   assert(!d.public_key, invalidRegistration, 404);
   assert(!await one(db, "SELECT id FROM attendance_devices WHERE key_thumbprint=?", key.thumbprint), "HP ini sudah terdaftar. Muat ulang halaman absen.", 409);
   if (d.kind === "PERSONAL") assert((await attendancePeople(db, "e.id=?", d.owner_employee_id)).length, "Pemilik HP ini tidak aktif. Minta tautan baru kepada SDM.", 409);
@@ -661,7 +670,6 @@ async function activateDevice(db, b, key, replacedId, requestId) {
     public_key: key.text,
     key_thumbprint: key.thumbprint,
     activated_at: stamp,
-    registration_token_hash: null,
     registration_expires_at: null,
     client_info: key.info
   });
@@ -693,12 +701,20 @@ async function sessionPreview(db, b) {
       name: await unitName(db, s.org_unit_id)
     },
     expires_at: s.expires_at,
-    people: (await unitPeople(db, s.org_unit_id)).map(personView)
+    people: (await unitPeople(db, s.org_unit_id)).map(personView),
+    server_time: now()
   };
 }
 async function sessionRegister(db, b, key, replacedId, requestId) {
   const s = await openSession(db, b?.token);
   assert(typeof b.employee_id === "string" && b.employee_id.length <= 100, "Pilih nama Anda terlebih dahulu.", 422);
+  const again = await one(db, "SELECT * FROM attendance_devices WHERE session_id=? AND key_thumbprint=? AND owner_employee_id=?", s.id, key.thumbprint, b.employee_id);
+  if (again) return {
+    device_id: again.id,
+    status: again.status,
+    server_time: now(),
+    recovered: true
+  };
   const person = (await unitPeople(db, s.org_unit_id)).find((p) => p.id === b.employee_id);
   assert(person, "Nama tidak ada di unit sesi ini. Tanyakan kepada SDM.", 422);
   assert(!await one(db, "SELECT id FROM attendance_devices WHERE key_thumbprint=?", key.thumbprint), "HP ini sudah terdaftar. Muat ulang halaman absen.", 409);
@@ -834,17 +850,20 @@ async function searchPeople(db, deviceId, query) {
   };
 }
 async function personStatus(db, deviceId, employeeId, nowMs = Date.now()) {
-  await activeDevice(db, deviceId);
+  const d = await activeDevice(db, deviceId);
   assert(typeof employeeId === "string" && employeeId.length <= 100, "Pilih nama terlebih dahulu.", 422);
   const person = (await attendancePeople(db, "e.id=?", employeeId))[0];
   assert(person, "Nama tidak ditemukan atau pegawai tidak aktif.", 404);
   const open = await openIn(db, employeeId, nowMs);
   const last = await one(db, "SELECT kind,recorded_at FROM attendance_events WHERE employee_id=? AND work_date=? ORDER BY recorded_at DESC LIMIT 1", employeeId, witaDate(nowMs));
+  const own = d.kind === "PERSONAL" && d.owner_employee_id === person.id;
+  const state = open ? "OPEN" : last?.kind === "OUT" ? "DONE" : "NONE";
   return {
     employee: personView(person),
     suggested: open ? "OUT" : "IN",
-    open_since: open?.recorded_at || null,
-    last_today: last || null,
+    state,
+    open_since: own ? open?.recorded_at || null : null,
+    last_today: own ? last || null : null,
     server_time: new Date(nowMs).toISOString()
   };
 }
@@ -1004,8 +1023,10 @@ async function attendanceFormRequest({ action, body, clientIp, runTx, photos, no
       assert(auth2.raw === JSON.stringify({
         token
       }), "Pendaftaran lama tidak dapat diganti. Muat ulang halaman.", 400);
-      await verifySignedRequest("replace", auth2, old, nowMs);
-      replaced = auth2.deviceId;
+      if (old) {
+        await verifySignedRequest("replace", auth2, old, nowMs);
+        replaced = auth2.deviceId;
+      }
     }
     return await runTx(async (db) => action === "register" ? await activateDevice(db, body, key, replaced, requestId) : await sessionRegister(db, body, key, replaced, requestId));
   }
@@ -1034,6 +1055,7 @@ async function attendanceFormRequest({ action, body, clientIp, runTx, photos, no
   return receipt;
 }
 var attendanceSubmitted = (action, result) => action === "submit" && result && result.duplicate === false;
+var attendanceRetentionDue = (action, result) => attendanceSubmitted(action, result) || action === "context" && result?.device?.status === "ACTIVE";
 async function takeRetentionLease(db, owner, nowMs, throttleHours, force) {
   const until = new Date(nowMs + 5 * 6e4).toISOString(), stamp = new Date(nowMs).toISOString(), due = new Date(nowMs - throttleHours * HOUR).toISOString();
   const changed = await run(db, `UPDATE attendance_state SET lease_owner=?,lease_until=?,updated_at=? WHERE id=1 AND (lease_until IS NULL OR lease_until<?)
@@ -1104,6 +1126,23 @@ function safeDetails(details) {
   return Object.keys(out).length ? out : void 0;
 }
 var busyCodes = ["23505", "40001", "40P01", "55P03"];
+function retention(runTx, env, requestId, force = false) {
+  return runAttendanceRetention({ runTx, photos: drivePhotos(env), force }).then((result) => {
+    if (!result.skipped) console.log(JSON.stringify({ event: "attendance_retention", request_id: requestId, deleted: result.deleted, error: result.error || null }));
+    return result;
+  }, () => {
+    console.warn(JSON.stringify({ event: "attendance_retention_failed", request_id: requestId }));
+    return { skipped: false, deleted: 0, error: "Penghapusan selfie lama belum berhasil." };
+  });
+}
+var background = (task) => {
+  const runtime = Reflect.get(globalThis, "EdgeRuntime");
+  if (runtime && typeof runtime.waitUntil === "function") {
+    runtime.waitUntil(task);
+    return true;
+  }
+  return false;
+};
 var index_default = { fetch: withSupabase({ auth: "secret" }, async (req) => {
   const requestId = randomUUID4();
   try {
@@ -1142,14 +1181,13 @@ var index_default = { fetch: withSupabase({ auth: "secret" }, async (req) => {
     if (!pool) pool = postgres(env.SUPABASE_DB_URL, { prepare: false, max: 1, idle_timeout: 20, connect_timeout: 10, onnotice: () => {
     } });
     const runTx = (work, options) => transaction(pool, work, options);
-    const result = await attendanceFormRequest({ action: b.operation, body: b.body, clientIp: b.client_ip, runTx, photos: drivePhotos(env), requestId });
-    if (attendanceSubmitted(b.operation, result)) {
-      const task = runAttendanceRetention({ runTx, photos: drivePhotos(env) }).catch(() => {
-        console.warn(JSON.stringify({ event: "attendance_retention_failed", request_id: requestId }));
-      });
-      const runtime = Reflect.get(globalThis, "EdgeRuntime");
-      if (runtime && typeof runtime.waitUntil === "function") runtime.waitUntil(task);
+    if (b.operation === "retention") {
+      const task = retention(runTx, env, requestId, b.body.force === true);
+      if (background(task)) return Response.json({ ok: true, result: { started: true } }, { headers: { "Cache-Control": "no-store" } });
+      return Response.json({ ok: true, result: await task }, { headers: { "Cache-Control": "no-store" } });
     }
+    const result = await attendanceFormRequest({ action: b.operation, body: b.body, clientIp: b.client_ip, runTx, photos: drivePhotos(env), requestId });
+    if (attendanceRetentionDue(b.operation, result)) background(retention(runTx, env, requestId));
     return Response.json({ ok: true, result }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const status = error instanceof AppError ? error.status : busyCodes.includes(error?.code) ? 503 : ["23502", "23503", "23514", "22P02"].includes(error?.code) ? 422 : 503;

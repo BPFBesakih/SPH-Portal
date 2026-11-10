@@ -2,7 +2,7 @@
    Hanya menyimpan tampilan halaman (app shell) supaya cepat dibuka. Balasan /api/
    TIDAK PERNAH disimpan. Jaringan didahulukan supaya versi baru langsung terpakai.
    Naikkan CACHE setiap ada perubahan berkas. */
-const CACHE='sph-absen-v1.0.0';
+const CACHE='sph-absen-v1.1.0';
 const SHELL=['./','./index.html','./absen.css','./absen.js','./absen-core.js','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png','./icons/icon-maskable-512.png'];
 self.addEventListener('install',event=>{
  event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL.map(url=>new Request(url,{cache:'reload'})))).then(()=>self.skipWaiting()));
