@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {restockCandidates,LOW_STOCK_LIMIT} from '../public/merchandise.js';
+import {restockCandidates,todaySalesSummary,LOW_STOCK_LIMIT} from '../public/merchandise.js';
 
 const products=[
   {id:'p1',sku:'MER-001',name:'Kaos',stock_qty:12,is_active:true},
@@ -42,4 +42,21 @@ test('kartu stok rendah adalah tombol yang membuka daftar restock',async()=>{
   assert.match(source,/statLink\('Stok 5 atau kurang',r\.products_low,'Termasuk stok kosong','mm-low-stock'/);
   assert.match(source,/if\(action==='mm-low-stock'\)await showLowStock\(\);/);
   assert.match(source,/<button type="button" class="stat-card mm-stat mm-stat-link"/);
+});
+
+test('kartu "Penjualan hari ini" menghitung transaksi selesai saja',()=>{
+  assert.deepEqual(todaySalesSummary([
+    {status:'COMPLETED',total:150000,items:[{quantity:2},{quantity:1}]},
+    {status:'COMPLETED',total:30000,items:[{quantity:1}]},
+    {status:'VOID',total:999000,items:[{quantity:9}]}
+  ]),{revenue:180000,count:2,units:4});
+  assert.deepEqual(todaySalesSummary([]),{revenue:0,count:0,units:0});
+});
+
+test('"Belum input stok" diganti "Penjualan hari ini"; peringatan stok awal tetap muncul bila perlu',async()=>{
+  const source=await readFile(new URL('../public/merchandise.js',import.meta.url),'utf8');
+  assert.doesNotMatch(source,/stat\('Belum input stok'/);
+  assert.match(source,/stat\('Penjualan hari ini'/);
+  assert.match(source,/merchandise\/sales\?from=\$\{today\}&to=\$\{today\}/);
+  assert.match(source,/\$\{r\.products_uninitialized\?`<div class="notice warning">/);
 });

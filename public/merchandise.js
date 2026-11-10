@@ -17,7 +17,7 @@ export const merchandiseNav=[
   ['merchandise-stock','Stok Barang','log','merchandise.stock.read'],
   ['merchandise-reports','Laporan','filter','merchandise.reports.read']
 ];
-const M={products:[],sales:[],movements:[],overview:null,report:null,query:'',from:localToday().slice(0,7)+'-01',to:localToday(),salesArtwork:null,salesTemplateName:''};
+const M={products:[],sales:[],movements:[],overview:null,today:null,report:null,query:'',from:localToday().slice(0,7)+'-01',to:localToday(),salesArtwork:null,salesTemplateName:''};
 const allowed=code=>state.permissions.includes(code);
 const money=n=>'Rp'+number(n);
 const exportModuleURL=name=>new URL((new URL(import.meta.url).pathname.startsWith('/portal-static/')?'../app/':'./')+name,import.meta.url).href;
@@ -35,6 +35,11 @@ export function restockCandidates(products,sales=null){
   return products.filter(p=>p.stock_qty!==null&&p.stock_qty!==undefined&&Number(p.stock_qty)<=LOW_STOCK_LIMIT)
     .map(p=>({...p,sold:sales?(sold.get(p.id)??sold.get(p.sku)??0):null}))
     .sort((a,b)=>Number(b.is_active!==false&&b.is_active!==0)-Number(a.is_active!==false&&a.is_active!==0)||Number(a.stock_qty)-Number(b.stock_qty)||(b.sold??0)-(a.sold??0)||String(a.name).localeCompare(String(b.name),'id'));
+}
+// Ringkasan Beranda: hanya transaksi selesai pada tanggal WITA hari ini.
+export function todaySalesSummary(sales){
+  const done=(sales||[]).filter(s=>s.status==='COMPLETED');
+  return {revenue:done.reduce((n,s)=>n+Number(s.total||0),0),count:done.length,units:done.reduce((n,s)=>n+(s.items||[]).reduce((m,i)=>m+Number(i.quantity||0),0),0)};
 }
 const daysBefore=(day,n)=>new Date(Date.parse(day+'T00:00:00Z')-n*86400000).toISOString().slice(0,10);
 async function showLowStock(){
@@ -62,8 +67,8 @@ function filterPeriod(){return `<div class="toolbar mm-toolbar"><label class="fi
 function home(){
   const r=M.overview;
   return `${pageHead('Merchandise','Ringkasan penjualan dan ketersediaan barang Bidang Bisnis.',r.capabilities.sales_create?actions('Catat Penjualan','mm-sale'): '')}
-    <div class="stats-grid mm-stats">${stat('Jenis barang',r.products_total,'Terdaftar dalam katalog')}${stat('Belum input stok',r.products_uninitialized,'Perlu opname awal')}${statLink('Stok 5 atau kurang',r.products_low,'Termasuk stok kosong','mm-low-stock','Stok 5 atau kurang: '+r.products_low+' barang. Lihat daftar barang yang perlu restock')}${r.capabilities.reports?stat('Omzet bulan ini',money(r.revenue),'Transaksi selesai'):''}</div>
-    ${r.products_uninitialized?`<div class="notice warning">${icon('incident')}<div><strong>Stok awal belum lengkap</strong><p>Barang yang belum dihitung tidak dapat dijual sampai petugas mengisi stok awalnya.</p></div></div>`:''}
+    <div class="stats-grid mm-stats">${stat('Jenis barang',r.products_total,'Terdaftar dalam katalog')}${M.today?stat('Penjualan hari ini',M.today.error?'—':money(M.today.revenue),M.today.error?'Belum dapat dimuat':`${number(M.today.count)} transaksi · ${number(M.today.units)} barang`):''}${statLink('Stok 5 atau kurang',r.products_low,'Termasuk stok kosong','mm-low-stock','Stok 5 atau kurang: '+r.products_low+' barang. Lihat daftar barang yang perlu restock')}${r.capabilities.reports?stat('Omzet bulan ini',money(r.revenue),'Transaksi selesai'):''}</div>
+    ${r.products_uninitialized?`<div class="notice warning">${icon('incident')}<div><strong>Stok awal belum lengkap</strong><p>${number(r.products_uninitialized)} barang belum dicatat stok awalnya. Barang itu tidak dapat dijual sampai petugas mengisi stok awalnya lewat Daftar Barang.</p></div></div>`:''}
     <section class="card"><div class="card-body"><p>Gunakan <strong>Daftar Barang</strong> untuk mengatur harga dan mencatat stok awal. Transaksi penjualan langsung mengurangi stok; pembatalan memerlukan kewenangan manager.</p></div></section>`;
 }
 function products(){
@@ -97,8 +102,13 @@ function reports(){
     <section class="card">${table(['Transaksi','Barang','Qty','Harga satuan','Subtotal'],r.sales.filter(s=>s.status==='COMPLETED').flatMap(s=>s.items.map(i=>`<tr><td>${esc(s.sale_no)}</td><td>${esc(i.product_name)}</td><td>${number(i.quantity)}</td><td>${money(i.unit_price)}</td><td>${money(i.subtotal)}</td></tr>`)),'Belum ada penjualan pada periode ini.')}</section>`;
 }
 export async function loadMerchandisePage(route){
+  if(route==='merchandise'){
+    const today=localToday(),withSales=allowed('merchandise.sales.read');
+    const [overview,sales]=await Promise.all([api('merchandise/overview'),withSales?api(`merchandise/sales?from=${today}&to=${today}`).then(r=>r.items,()=>undefined):null]);
+    M.overview=overview;M.today=sales===null?null:sales===undefined?{error:true}:todaySalesSummary(sales);
+    return home();
+  }
   M.overview=await api('merchandise/overview');
-  if(route==='merchandise')return home();
   if(route==='merchandise-products'){M.products=(await api('merchandise/products')).items;return products();}
   if(route==='merchandise-sales'){M.sales=(await api(`merchandise/sales?from=${M.from}&to=${M.to}`)).items;return sales();}
   if(route==='merchandise-stock'){M.movements=(await api('merchandise/stock')).items;return stock();}
