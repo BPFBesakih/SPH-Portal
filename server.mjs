@@ -7,7 +7,7 @@ import {visitRoutes,isVisitSheetAction,authorizeVisitSheetAction} from './lib/vi
 import {takeGuideFormIpSlot,admitGuideForm,guideFormContext,submitGuideForm,guideFormReceipt,recordGuideFormResult,ipFingerprint} from './lib/guide-form.mjs';
 import {runVisitSheetSync,checkVisitSheetConnection,syncVisitSheetAfterSubmit,visitSheetConfig} from './lib/visit-sheets.mjs';
 import {attendanceRoutes} from './lib/attendance.mjs';
-import {attendanceFormRequest,attendanceSubmitted,runAttendanceRetention} from './lib/attendance-form.mjs';
+import {attendanceFormRequest,attendanceRetentionDue,runAttendanceRetention} from './lib/attendance-form.mjs';
 import {localAttendancePhotos} from './lib/attendance-photos.mjs';
 import {createServer} from 'node:http';
 import {readFileSync,existsSync,statSync} from 'node:fs';
@@ -112,7 +112,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
         assert(req.headers.origin===origin&&req.headers['sec-fetch-site']!=='cross-site','Buka halaman absen dari HP yang terdaftar.',403);
         const result=await attendanceFormRequest({action:p[1],body,clientIp:req.socket.remoteAddress||'',runTx,photos:attendancePhotos,requestId});
         send(result);
-        if(attendanceSubmitted(p[1],result))track(runAttendanceRetention({runTx,photos:attendancePhotos}));
+        if(attendanceRetentionDue(p[1],result))track(runAttendanceRetention({runTx,photos:attendancePhotos}));
         return;
       }
       if(p[0]==='auth'&&p[1]==='login'&&method==='POST') {

@@ -3,13 +3,15 @@
 // diserialkan per pegawai (pg_advisory_xact_lock(hashtextextended('portal.attendance:<id>',0))),
 // sehingga lonjakan absen pagi tidak menahan transaksi portal lain. Selfie diunggah ke
 // Google Drive (folder SPH-Portal-Absensi) DI LUAR transaksi; bila penyimpanan absen
-// gagal, berkasnya dihapus lagi. Retensi selfie 90 hari berjalan sesudah balasan dikirim.
+// gagal, berkasnya dihapus lagi. Retensi selfie 90 hari berjalan sesudah balasan dikirim
+// (sesudah absen baru atau saat halaman absen dibuka di HP aktif, paling sering 6 jam sekali),
+// dan bisa dijadwalkan lewat operasi `retention` (lihat docs/ABSENSI.md).
 import {withSupabase} from 'npm:@supabase/server@1';
 import postgres from 'npm:postgres@3.4.7';
 import {randomUUID} from 'node:crypto';
 import {AppError,assert} from '../_shared/portal/db.mjs';
 import {createDriveStorage} from '../_shared/portal/drive.mjs';
-import {attendanceFormRequest,attendanceSubmitted,runAttendanceRetention} from '../_shared/portal/attendance-form.mjs';
+import {attendanceFormRequest,attendanceRetentionDue,runAttendanceRetention} from '../_shared/portal/attendance-form.mjs';
 let pool;
 async function transaction(client,work,options={}){return client.begin(async sql=>{
  await sql.unsafe("SET LOCAL search_path=portal,pg_catalog; SET LOCAL statement_timeout='10s'; SET LOCAL lock_timeout='5s'; SET LOCAL idle_in_transaction_session_timeout='15s';");
@@ -31,6 +33,14 @@ function safeDetails(details){
  return Object.keys(out).length?out:undefined;
 }
 const busyCodes=['23505','40001','40P01','55P03'];
+// Retensi di latar belakang. Kegagalannya tidak memengaruhi absen; dicoba lagi pada pemicu berikutnya.
+function retention(runTx,env,requestId,force=false){
+ return runAttendanceRetention({runTx,photos:drivePhotos(env),force}).then(result=>{
+  if(!result.skipped)console.log(JSON.stringify({event:'attendance_retention',request_id:requestId,deleted:result.deleted,error:result.error||null}));
+  return result;
+ },()=>{console.warn(JSON.stringify({event:'attendance_retention_failed',request_id:requestId}));return {skipped:false,deleted:0,error:'Penghapusan selfie lama belum berhasil.'};});
+}
+const background=task=>{const runtime=Reflect.get(globalThis,'EdgeRuntime');if(runtime&&typeof runtime.waitUntil==='function'){runtime.waitUntil(task);return true;}return false;};
 export default {fetch:withSupabase({auth:'secret'},async req=>{
  const requestId=randomUUID();
  try{
@@ -44,13 +54,16 @@ export default {fetch:withSupabase({auth:'secret'},async req=>{
   const env=Deno.env.toObject();
   if(!pool)pool=postgres(env.SUPABASE_DB_URL,{prepare:false,max:1,idle_timeout:20,connect_timeout:10,onnotice:()=>{}});
   const runTx=(work,options)=>transaction(pool,work,options);
-  const result=await attendanceFormRequest({action:b.operation,body:b.body,clientIp:b.client_ip,runTx,photos:drivePhotos(env),requestId});
-  if(attendanceSubmitted(b.operation,result)){
-   // Kegagalan retensi tidak memengaruhi absen; dicoba lagi pada absen berikutnya.
-   const task=runAttendanceRetention({runTx,photos:drivePhotos(env)}).catch(()=>{console.warn(JSON.stringify({event:'attendance_retention_failed',request_id:requestId}));});
-   const runtime=Reflect.get(globalThis,'EdgeRuntime');
-   if(runtime&&typeof runtime.waitUntil==='function')runtime.waitUntil(task);
+  // Operasi terjadwal (pg_cron + pg_net). Hanya pemegang secret key yang dapat memanggil fungsi
+  // ini, dan gateway Pages tidak pernah meneruskan `retention` dari HP. Jeda 6 jam tetap berlaku
+  // kecuali force=true; lease mencegah dua proses bersamaan.
+  if(b.operation==='retention'){
+   const task=retention(runTx,env,requestId,b.body.force===true);
+   if(background(task))return Response.json({ok:true,result:{started:true}},{headers:{'Cache-Control':'no-store'}});
+   return Response.json({ok:true,result:await task},{headers:{'Cache-Control':'no-store'}});
   }
+  const result=await attendanceFormRequest({action:b.operation,body:b.body,clientIp:b.client_ip,runTx,photos:drivePhotos(env),requestId});
+  if(attendanceRetentionDue(b.operation,result))background(retention(runTx,env,requestId));
   return Response.json({ok:true,result},{headers:{'Cache-Control':'no-store'}});
  }catch(error){
   // Kunci per pegawai sibuk/benturan bersamaan: 503 supaya HP mencoba lagi.

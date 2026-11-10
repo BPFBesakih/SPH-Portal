@@ -60,14 +60,33 @@ try{
   // Seperti produksi sebelum migrasi dan tambalan portal-api: rute absensi menjawab 404.
   await context.route(`${base}/api/attendance/**`,r=>r.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Halaman tidak ditemukan.'})}));
   const page=await context.newPage(),problems=[];page.on('pageerror',e=>problems.push(e.message));
-  await page.goto(base+'/');await page.fill('#login-form [name=username]','absensi.uji');await page.fill('#login-form [name=password]','UjiAbsensi!2026');await page.click('#login-form [type=submit]');
+  await page.goto(base+'/');await page.fill('#login-form [name=username]','absensi.uji');await page.fill('#login-form [name=password]','UjiAbsensi!2026');
+  // Ditunggu sebelum login dikirim: pemeriksaan menu bisa selesai sebelum navigasi tampil.
+  const probed=page.waitForResponse(r=>r.url().includes('/api/attendance/overview'));
+  await page.click('#login-form [type=submit]');
   await page.locator('.nav-link',{hasText:'Cuti'}).waitFor();
-  await page.waitForResponse(r=>r.url().includes('/api/attendance/overview'));await page.waitForTimeout(300);
+  await probed;await page.waitForTimeout(300);
   assert.equal(await page.locator('.nav-link',{hasText:'Absensi'}).count(),0,'menu Absensi tersembunyi');
   await page.goto(base+'/#attendance?tab=today');await page.locator('.nav-link',{hasText:'Cuti'}).waitFor();await page.waitForTimeout(300);
   assert.notEqual(await page.evaluate(()=>location.hash.split('?')[0]),'#attendance','rute Absensi tidak dibuka');
   assert.equal(await page.getByRole('heading',{name:'Absensi',exact:true}).count(),0);
   assert.deepEqual(problems,[]);await context.close();
+ });
+ await check('release gate: a temporary error does not hide the Absensi menu for the rest of the session',async()=>{
+  const context=await browser.newContext({viewport:{width:1366,height:900}});await watch(context);
+  let calls=0;
+  await context.route(`${base}/api/attendance/overview`,r=>++calls===1?r.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Layanan sedang sibuk.'})}):r.continue());
+  const page=await context.newPage(),problems=[];page.on('pageerror',e=>problems.push(e.message));
+  await page.goto(base+'/');await page.fill('#login-form [name=username]','absensi.uji');await page.fill('#login-form [name=password]','UjiAbsensi!2026');
+  const failed=page.waitForResponse(r=>r.url().includes('/api/attendance/overview')&&r.status()===503);
+  await page.click('#login-form [type=submit]');
+  await page.locator('.nav-link',{hasText:'Cuti'}).waitFor();
+  await failed;await page.waitForTimeout(300);
+  assert.equal(await page.locator('.nav-link',{hasText:'Absensi'}).count(),0);
+  // Berpindah halaman memeriksa ulang; menu muncul tanpa memuat ulang atau masuk lagi.
+  await page.locator('.nav-link',{hasText:'Informasi Internal'}).click();
+  await page.locator('.nav-link',{hasText:'Absensi'}).waitFor({timeout:10000});
+  assert(calls>=2);assert.deepEqual(problems,[]);await context.close();
  });
  await check('portal: Absensi menu and tabs follow the account capabilities',async()=>{
   await portal.goto(base+'/');await portal.fill('#login-form [name=username]','absensi.uji');await portal.fill('#login-form [name=password]','UjiAbsensi!2026');await portal.click('#login-form [type=submit]');
@@ -176,6 +195,40 @@ try{
   await page.locator('#app h1',{hasText:'HP berhasil didaftarkan'}).waitFor({timeout:20000});
   await page.getByRole('button',{name:'Mulai absen'}).click();await page.locator('.person .name',{hasText:'Pekerja Harian Uji'}).waitFor();
   await other.close();
+ });
+ await check('lost reply: registration that reached the server is recovered with the same key, by "Coba lagi" or on reopening',async()=>{
+  const sharedPhoneLink=async label=>{
+   await tab('HP Absen');await portal.locator('[data-att=device-shared]').click();
+   const d=dialog();await d.locator('[name=org_unit_id]').selectOption({label:'Pos Uji'});await d.locator('[name=label]').fill(label);await d.getByRole('button',{name:'Simpan'}).click();
+   const share=await shareLink();await share.d.locator('[data-close]').first().click();return share.link;
+  };
+  // Balasan pertama dibuang SESUDAH server menyimpan, seperti sinyal putus di lapangan.
+  const lossyPhone=async()=>{
+   const context=await phoneContext();let dropped=0;
+   await context.addInitScript(()=>{window.__persist=0;const s=navigator.storage;if(s){s.persisted=()=>Promise.resolve(false);s.persist=()=>{window.__persist++;return Promise.resolve(true);};}});
+   await context.route(`${base}/api/attendance-form/register`,async r=>{if(dropped++===0){await r.fetch();await r.abort('connectionreset');return;}await r.continue();});
+   return context;
+  };
+  const registered=label=>{const rows=all(db,'SELECT * FROM attendance_devices WHERE label=?',label);assert.equal(rows.length,1);return rows[0];};
+  // 1. Tombol "Coba lagi".
+  let link=await sharedPhoneLink('HP Pos Cadangan'),context=await lossyPhone(),page=await context.newPage();
+  await page.goto(link);await page.locator('#app h1',{hasText:'Daftarkan HP ini untuk absen'}).waitFor();
+  await page.getByRole('button',{name:'Ya, daftarkan'}).click();await page.locator('#app h1',{hasText:'Belum berhasil'}).waitFor({timeout:15000});
+  let row=registered('HP Pos Cadangan');assert.equal(row.status,'ACTIVE','server sudah menyimpan walau balasan hilang');
+  await page.getByRole('button',{name:'Coba lagi'}).click();await page.locator('#app h1',{hasText:'HP berhasil didaftarkan'}).waitFor({timeout:15000});
+  assert.equal(registered('HP Pos Cadangan').id,row.id);assert.equal(one(db,"SELECT count(*) n FROM audit_events WHERE action='ACTIVATE' AND object_key=?",row.id).n,1);
+  await page.getByRole('button',{name:'Mulai absen'}).click();await page.locator('#app h1',{hasText:'Siapa yang absen?'}).waitFor();
+  assert(await page.evaluate(()=>window.__persist)>=1,'penyimpanan permanen diminta sesudah pendaftaran');
+  await context.close();
+  // 2. HP ditutup sebelum mencoba lagi: saat dibuka kembali, pendaftaran dilanjutkan sendiri.
+  link=await sharedPhoneLink('HP Pos Malam');context=await lossyPhone();page=await context.newPage();
+  await page.goto(link);await page.getByRole('button',{name:'Ya, daftarkan'}).click();await page.locator('#app h1',{hasText:'Belum berhasil'}).waitFor({timeout:15000});
+  row=registered('HP Pos Malam');assert.equal(row.status,'ACTIVE');
+  await page.goto(base+'/absen/');await page.locator('#app h1',{hasText:'HP berhasil didaftarkan'}).waitFor({timeout:15000});
+  assert.equal(registered('HP Pos Malam').id,row.id);
+  await page.getByRole('button',{name:'Mulai absen'}).click();await page.locator('#app h1',{hasText:'Siapa yang absen?'}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.__csp),[]);
+  await context.close();
  });
  await check('portal: Hari ini shows who checked in where; Perlu dicek compares the selfie and sets the reference photo',async()=>{
   await tab('Hari ini');

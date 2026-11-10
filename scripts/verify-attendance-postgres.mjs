@@ -102,9 +102,16 @@ try{
     let r=await invoke('registration',{token:created.token});assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.result.label,'HP Pos Fiktif');
     r=await invoke('register',{token:created.token,public_key:device.public_key,client_info:'Android fiktif'});assert.equal(r.status,200,JSON.stringify(r.data));
     device.id=r.data.result.device_id;assert.equal(r.data.result.status,'ACTIVE');
+    // Balasan hilang: kiriman ulang dengan tautan dan kunci yang sama mendapat HP yang sama.
+    const again=await invoke('register',{token:created.token,public_key:device.public_key,client_info:'Android fiktif'});
+    assert.deepEqual([again.status,again.data.result.device_id,again.data.result.recovered],[200,device.id,true]);
     assert.equal((await invoke('register',{token:created.token,public_key:(await keysFor()).public_key})).status,404);
     const ctx=await invoke('context',await sign(device,'context',{}));assert.equal(ctx.status,200);
     assert.deepEqual(ctx.data.result.people.map(p=>p.name).sort(),['Pekerja Harian Fiktif','Petugas Fiktif']);
+    assert.equal(background.length,1,'membuka halaman absen di HP aktif juga menjadwalkan retensi');await Promise.all(background.splice(0));
+    const person=await invoke('person',await sign(device,'person',{employee_id:people.guard.id}));
+    assert.deepEqual([person.data.result.state,person.data.result.open_since,person.data.result.last_today],['NONE',null,null],'HP bersama tanpa jam orang lain');
+    assert.equal(background.length,0);
     const skew=await invoke('context',await sign(device,'context',{},Date.now()-11*60000));
     assert.equal(skew.status,401);assert.equal(skew.data.details.code,'CLOCK');assert(Number.isFinite(Date.parse(skew.data.details.server_time)));
     assert(!statements.some(s=>s.includes(globalLock)));
@@ -169,6 +176,8 @@ try{
     const personal=await portal(coordinator,'attendance/devices','POST',{kind:'PERSONAL',owner_employee_id:people.guard.id});
     assert.equal(personal.phone,'6281234567890');assert.match(personal.token,/^[a-f0-9]{64}$/);
     const overview=await portal(boss,'attendance/overview');assert.deepEqual([overview.self,overview.subordinates,overview.manage],[true,2,true]);
+    assert.equal(overview.retention,null);const settings=await portal(manager,'attendance/overview');
+    assert.deepEqual([settings.retention.due_photos,typeof settings.retention.deleted_photos],[0,'number'],'jumlah selfie lewat masa simpan dihitung di PostgreSQL');
     const today=await portal(boss,'attendance/today');assert.deepEqual(today.rows.map(r=>[r.employee.name,r.status]),[['Atasan Fiktif','TIDAK_ADA_CATATAN'],['Pekerja Harian Fiktif','BELUM_PULANG'],['Petugas Fiktif','BELUM_PULANG']]);
     const mine=await portal(guardUser,'attendance/recap');assert.deepEqual(mine.employees.map(r=>r.employee.name),['Petugas Fiktif']);
     await assert.rejects(portal(guardUser,`attendance/recap/${people.thl.id}`),e=>e instanceof api.AppError&&e.status===403);
@@ -208,6 +217,16 @@ try{
     assert.equal(result.error,null);assert.equal(result.deleted,1,'selfie atasan; selfie petugas menjadi foto acuan');assert(!drive.files.has(freshKey));
     const left=await all(db,'SELECT id FROM attendance_events WHERE photo_storage_key IS NOT NULL');assert.deepEqual(left.map(r=>r.id),[firstEvent]);
     assert(driveCalls.some(c=>c.startsWith('DELETE ')),'selfie dihapus dari Drive di luar transaksi');
+  });
+  await check('scheduled retention operation answers at once and runs in the background (pg_cron + pg_net)',async()=>{
+    background.splice(0);
+    const r=await invoke('retention',{force:true},'127.0.0.1');
+    assert.equal(r.status,200,JSON.stringify(r.data));assert.deepEqual(r.data.result,{started:true});
+    assert.equal(background.length,1);const result=await background.splice(0)[0];
+    assert.deepEqual([result.skipped,result.error],[false,null]);
+    const after=(await one(db,'SELECT last_retention_at,lease_owner FROM attendance_state WHERE id=1'));
+    assert(Math.abs(Date.parse(after.last_retention_at)-Date.now())<60000&&after.lease_owner===null,JSON.stringify(after));
+    assert(!statements.some(s=>s.includes(globalLock)));
   });
   console.log(`${checks} attendance PostgreSQL checks passed.`);
 }finally{globalThis.fetch=realFetch;globalThis.Deno=priorDeno;globalThis.EdgeRuntime=priorRuntime;delete globalThis.__attendanceFixture;await pg.close();}

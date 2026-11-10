@@ -29,6 +29,8 @@ test('cross-origin, cross-site, wrong method, path, query and content type never
  assert.equal((await handleAttendanceForm(request('context',undefined,{'Content-Type':'text/plain'}),env,fail)).status,415);
  assert.equal((await handleAttendanceForm(new Request('https://portal.test/api/attendance-form/context'),env,fail)).status,405);
  assert.equal((await handleAttendanceForm(request('photos'),env,fail)).status,404);
+ // Operasi terjadwal `retention` hanya untuk pemegang secret key (pg_cron), tidak lewat gateway HP.
+ assert.equal((await handleAttendanceForm(request('retention'),env,fail)).status,404);
  assert.equal((await handleAttendanceForm(new Request('https://portal.test/api/attendance-form/context?x=1',{method:'POST'}),env,fail)).status,404);
  assert.equal((await handleAttendanceForm(new Request('https://other.test/api/attendance-form/context',{method:'POST',headers:{Origin:'https://other.test','Content-Type':'application/json','CF-Connecting-IP':'203.0.113.7'},body:'{}'}),env,fail)).status,403);
 });

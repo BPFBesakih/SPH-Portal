@@ -8,7 +8,7 @@ import {openDb,insert,one,all,run,tx,now,today} from '../lib/db.mjs';
 import {seedPermissions,hashPasswordSync,grants,has,can} from '../lib/auth.mjs';
 import {audit} from '../lib/db.mjs';
 import {attendanceRoutes} from '../lib/attendance.mjs';
-import {attendanceFormRequest,attendanceFormLimits,runAttendanceRetention,attendanceSubmitted} from '../lib/attendance-form.mjs';
+import {attendanceFormRequest,attendanceFormLimits,runAttendanceRetention,attendanceSubmitted,attendanceRetentionDue} from '../lib/attendance-form.mjs';
 import {localAttendancePhotos} from '../lib/attendance-photos.mjs';
 import {attendanceRules,witaDate,shiftDay,distanceMeters,matchPoint,jumped,dayStatus,buildRecap,signatureMessage,cleanPublicKey,keyThumbprint,verifySignature,parseFlags} from '../lib/attendance-rules.mjs';
 import {createApp} from '../server.mjs';
@@ -233,6 +233,62 @@ test('re-registering the same phone revokes the old registration only with proof
  const r=await f.form('register',{token:next.token,public_key:keys.public_key,replaces:await sign(old,'replace',{token:next.token})});
  assert.equal(r.status,'ACTIVE');assert.equal(one(f.db,'SELECT status FROM attendance_devices WHERE id=?',old.id).status,'REVOKED');
  await assert.rejects(f.form('context',await sign(old,'context',{})).then(c=>{if(c.device.status!=='ACTIVE')throw Object.assign(new Error('inactive'),{status:403});}),errorWith(403));
+});
+test('lost replies: the same link and the same key give the same phone back; other keys stay refused',async t=>{
+ const f=fixture(t);
+ const created=await f.route(f.users.manager,'devices','POST',{kind:'PERSONAL',owner_employee_id:f.e.guard.id});
+ const keys=await newKeys();
+ const first=await f.form('register',{token:created.token,public_key:keys.public_key});
+ // Sinyal putus sesudah server menyimpan: HP mengirim ulang dengan kunci yang sama.
+ const again=await f.form('register',{token:created.token,public_key:keys.public_key});
+ assert.deepEqual([again.device_id,again.status,again.recovered],[first.device_id,'ACTIVE',true]);
+ await assert.rejects(f.form('register',{token:created.token,public_key:(await newKeys()).public_key}),errorWith(404),'tautan tetap sekali pakai untuk kunci lain');
+ assert.equal(all(f.db,"SELECT id FROM audit_events WHERE action='ACTIVATE' AND object_key=?",first.device_id).length,1);
+ // HP yang sudah dinonaktifkan tidak hidup lagi lewat tautan lama.
+ const row=one(f.db,'SELECT row_version FROM attendance_devices WHERE id=?',first.device_id);
+ await f.route(f.users.manager,`devices/${first.device_id}/revoke`,'POST',{row_version:row.row_version,reason:'HP hilang di pos'});
+ await assert.rejects(f.form('register',{token:created.token,public_key:keys.public_key}),errorWith(404));
+ // Sesi pendaftaran: sesi, kunci, dan nama yang sama → HP yang sama, tidak tercatat dua kali.
+ const opened=await f.route(f.users.manager,'sessions','POST',{org_unit_id:f.units.field.id,minutes:10});
+ const phone=await newKeys();
+ const a=await f.form('session-register',{token:opened.token,employee_id:f.e.thl.id,public_key:phone.public_key});
+ const b=await f.form('session-register',{token:opened.token,employee_id:f.e.thl.id,public_key:phone.public_key});
+ assert.deepEqual([b.device_id,b.status,b.recovered],[a.device_id,'PENDING',true]);
+ assert.equal(one(f.db,'SELECT count(*) n FROM attendance_devices WHERE session_id=?',opened.session.id).n,1);
+ await assert.rejects(f.form('session-register',{token:opened.token,employee_id:f.e.guard.id,public_key:phone.public_key}),errorWith(409),'kunci yang sama untuk nama lain');
+});
+test('re-registering with proof from a phone the server does not know (restored backup) is allowed; known phones still need their key',async t=>{
+ const f=fixture(t),known=await registerDevice(f,{owner:f.e.guard});
+ const link=await f.route(f.users.manager,'devices','POST',{kind:'SHARED',org_unit_id:f.units.field.id,label:'HP Pos Pulih'});
+ const preview=await f.form('registration',{token:link.token});assert(Number.isFinite(Date.parse(preview.server_time)),'jam server untuk menandatangani bukti');
+ const ghost=await newKeys();ghost.id=randomUUID();
+ const keys=await newKeys(),r=await f.form('register',{token:link.token,public_key:keys.public_key,replaces:await sign(ghost,'replace',{token:link.token})});
+ assert.equal(r.status,'ACTIVE');
+ const next=await f.route(f.users.manager,'devices','POST',{kind:'SHARED',org_unit_id:f.units.field.id,label:'HP Pos Lain'});
+ const impostor=await newKeys();impostor.id=known.id;
+ await assert.rejects(f.form('register',{token:next.token,public_key:(await newKeys()).public_key,replaces:await sign(impostor,'replace',{token:next.token})}),errorWith(401),'ID HP yang dikenal tanpa kuncinya');
+ assert.equal(one(f.db,'SELECT status FROM attendance_devices WHERE id=?',known.id).status,'ACTIVE');
+ const session=await f.route(f.users.manager,'sessions','POST',{org_unit_id:f.units.field.id,minutes:10});
+ assert(Number.isFinite(Date.parse((await f.form('session',{token:session.token})).server_time)));
+});
+test('person status: times only for the owner on their own phone; borrowers and shared phones see the state only',async t=>{
+ const f=fixture(t),personal=await registerDevice(f,{owner:f.e.guard}),shared=await registerDevice(f,{kind:'SHARED',unit:f.units.field});await addPoint(f);
+ const day=yesterday(),inAt=wita(day,'07:58'),outAt=wita(day,'16:03');
+ const status=async(device,employee,nowMs)=>f.form('person',await sign(device,'person',{employee_id:employee.id},nowMs),{nowMs});
+ await submit(f,shared,submission(f.e.guard),inAt);
+ const morning=wita(day,'09:00');
+ const own=await status(personal,f.e.guard,morning);
+ assert.deepEqual([own.suggested,own.state,own.open_since],['OUT','OPEN',new Date(inAt).toISOString()]);
+ const borrowed=await status(shared,f.e.guard,morning);
+ assert.deepEqual([borrowed.suggested,borrowed.state,borrowed.open_since,borrowed.last_today],['OUT','OPEN',null,null]);
+ const friend=await status(personal,f.e.thl,morning);
+ assert.deepEqual([friend.suggested,friend.state,friend.open_since,friend.last_today],['IN','NONE',null,null]);
+ await submit(f,shared,submission(f.e.guard,'OUT'),outAt);
+ const evening=wita(day,'17:00');
+ const after=await status(shared,f.e.guard,evening);
+ assert.deepEqual([after.suggested,after.state,after.open_since,after.last_today],['IN','DONE',null,null]);
+ const mine=await status(personal,f.e.guard,evening);
+ assert.deepEqual([mine.state,mine.last_today.kind,mine.last_today.recorded_at],['DONE','OUT',new Date(outAt).toISOString()]);
 });
 
 /* ---------- Absen ---------- */
@@ -467,6 +523,21 @@ test('retention: selfies older than 90 days are removed, reference photos kept, 
  // Lease yang masih berlaku menahan proses kedua.
  run(f.db,"UPDATE attendance_state SET lease_owner='lain',lease_until=? WHERE id=1",new Date(later+2*DAY+60000).toISOString());
  assert.equal((await runAttendanceRetention({runTx:f.runTx,photos:f.photos,nowMs:later+2*DAY,force:true})).skipped,true);
+});
+test('retention runs after new check-ins and when the absen page opens on an active phone; overdue selfies are visible to managers',async t=>{
+ assert.equal(attendanceRetentionDue('submit',{duplicate:false}),true);
+ assert.equal(attendanceRetentionDue('submit',{duplicate:true}),false);
+ assert.equal(attendanceRetentionDue('context',{device:{status:'ACTIVE'}}),true);
+ for(const status of ['PENDING','REVOKED','REJECTED'])assert.equal(attendanceRetentionDue('context',{device:{status}}),false,status);
+ for(const action of ['person','search','registration','register'])assert.equal(attendanceRetentionDue(action,{device:{status:'ACTIVE'},duplicate:false}),false,action);
+ const f=fixture(t),device=await registerDevice(f,{kind:'SHARED',unit:f.units.field});await addPoint(f);
+ const old=Date.now()-91*DAY;await submit(f,device,submission(f.e.guard),old);
+ let overview=await f.route(f.users.manager,'overview');
+ assert.deepEqual([overview.retention.due_photos,overview.retention.deleted_photos,overview.retention.last_run_at],[1,0,null]);
+ assert.equal((await f.route(f.users.staff,'overview')).retention,null,'hanya pemegang pengaturan absensi');
+ await runAttendanceRetention({runTx:f.runTx,photos:f.photos});
+ overview=await f.route(f.users.manager,'overview');
+ assert.deepEqual([overview.retention.due_photos,overview.retention.deleted_photos],[0,1]);assert(overview.retention.last_run_at);
 });
 test('local photo store keeps selfies inside the data directory and rejects foreign keys',async t=>{
  const dir=mkdtempSync(resolve(tmpdir(),'besakih-absen-'));t.after(()=>{assert(dir.startsWith(resolve(tmpdir())+sep));rmSync(dir,{recursive:true,force:true});});

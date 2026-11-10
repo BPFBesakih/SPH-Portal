@@ -4,7 +4,7 @@
 //  - Setiap permintaan ke /api/attendance-form/* (kecuali pendaftaran) ditandatangani
 //    bersama jam yang sudah disesuaikan ke jam server, jadi jam HP yang salah tidak masalah.
 //  - Tidak ada data pegawai, selfie, atau riwayat yang disimpan di HP.
-const DB_NAME='sph-absen',STORE='device',KEY='current';
+const DB_NAME='sph-absen',STORE='device',KEY='current',PENDING='pending';
 function openStore(){
  return new Promise((resolve,reject)=>{
   const request=indexedDB.open(DB_NAME,1);
@@ -23,7 +23,18 @@ async function withStore(mode,work){
 }
 export const loadDevice=()=>withStore('readonly',store=>store.get(KEY));
 export const saveDevice=record=>withStore('readwrite',store=>store.put(record,KEY));
-export const forgetDevice=()=>withStore('readwrite',store=>store.delete(KEY));
+export const forgetDevice=()=>withStore('readwrite',store=>{store.delete(PENDING);return store.delete(KEY);});
+// Pendaftaran yang sedang berjalan: kunci baru disimpan SEBELUM dikirim, sehingga bila balasan
+// server hilang (sinyal putus sesudah server menyimpan), kiriman ulang memakai kunci yang sama
+// dan server mengenali HP ini lagi.
+export const loadPending=()=>withStore('readonly',store=>store.get(PENDING));
+export const savePending=record=>withStore('readwrite',store=>store.put(record,PENDING));
+export const clearPending=()=>withStore('readwrite',store=>store.delete(PENDING));
+// Minta browser menyimpan data halaman ini secara permanen, supaya kunci HP tidak ikut
+// terhapus otomatis saat ruang HP sempit. Tidak memunculkan pertanyaan di Chrome/Safari.
+export async function persistStorage(){
+ try{if(navigator.storage?.persist&&!(await navigator.storage.persisted?.()))await navigator.storage.persist();}catch{}
+}
 
 export const newKeys=()=>crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
 export async function publicKeyOf(keys){const jwk=await crypto.subtle.exportKey('jwk',keys.publicKey);return {kty:jwk.kty,crv:jwk.crv,x:jwk.x,y:jwk.y};}
