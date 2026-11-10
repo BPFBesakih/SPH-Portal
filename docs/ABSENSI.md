@@ -1,6 +1,6 @@
 # Absensi — absen harian lewat HP terdaftar (tahap 1)
 
-**Status: kode di cabang `claude/modul-absensi`, belum dirilis.** Pemilik repo menguji lokal lebih dulu, lalu merge dan merilis sendiri. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`).
+**Status (10 November 2026): dipasang ulang di cabang `claude/absensi-pasang-ulang` di atas master `187455b`, siap di-merge, belum dirilis.** PR #23 sempat di-merge 7 November lalu dibatalkan lewat PR #28 sebelum langkah server dijalankan. Cabang ini membalik pembatalan itu dan menambah enam perbaikan hasil review 10 November. Pemilik repo menguji lokal, lalu merge dan merilis sendiri. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`); review kesiapan deploy ada di Project `claude/kesiapan-deploy-absensi.md`.
 
 Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari HP, untuk pegawai kantor, petugas shift/lapangan, dan THL (guide tidak ikut). Hasilnya rekap untuk atasan dan SDM, belum untuk gaji atau sanksi. Jam kerja unit dan shift diimpor belakangan; sampai saat itu portal belum menilai terlambat atau alpa, sehingga hari tanpa absen tampil sebagai **"Tidak ada catatan"**. Ekspor data aplikasi absen lama ditunda sesuai keputusan pemilik.
 
@@ -43,16 +43,20 @@ Izin baru: `hr.attendance.read`, `.manage`, `.devices`, `.settings` (modul `hr`)
 | Gateway Pages `/api/attendance-form/*` | `site-info/lib/attendance-form.mjs`, `site-info/functions/api/attendance-form/[[action]].js` |
 | Tambalan `portal-api` | `scripts/build-attendance-deploy.mjs` → `supabase/deploy/portal-api/index.ts` |
 | Migrasi | `supabase/migrations/20261105120000_attendance_module.sql` (dan padanan SQLite di `schema.sql`) |
+| Pra-cek rilis (hanya membaca) | `supabase/checks/check-attendance-readiness.sql` |
+| Jadwal retensi selfie (opsional) | `supabase/setup/schedule-attendance-retention.sql` (pg_cron + pg_net → operasi `retention`) |
 | Antarmuka | `public/attendance.js` (menu Absensi), `public/absen/` (PWA HP), `public/assets/vendor/leaflet/` (Leaflet 1.9.4, BSD-2) |
 
 Pilihan yang penting untuk produksi:
 
 - **Kunci HP**: saat mendaftar, HP membuat pasangan kunci ECDSA P-256 dengan WebCrypto; kunci privat *tidak bisa diekspor* dan tersimpan di IndexedDB HP. Server hanya menyimpan kunci publik. Setiap permintaan menandatangani tindakan, ID HP, jam, dan isi kiriman. Selisih jam lebih dari 10 menit ditolak dengan jam server, lalu HP otomatis mengulang sekali dengan jam yang disesuaikan.
-- **Token** tautan dan sesi hanya disimpan sebagai hash (SHA-256) dan hanya ditampilkan sekali kepada pembuatnya. Mendaftar ulang di HP yang sama mencabut pendaftaran lama hanya bila HP membuktikan masih memegang kunci lama.
+- **Pendaftaran tahan sinyal putus**: kunci baru disimpan di HP *sebelum* pendaftaran dikirim. Bila balasan hilang padahal server sudah menyimpan, kiriman ulang (tombol *Coba lagi*, atau otomatis saat halaman dibuka lagi) memakai kunci yang sama dan mendapat HP yang sama: tautan + kunci sama, atau sesi + kunci + nama sama. Kunci lain tetap ditolak, dan HP yang sudah dinonaktifkan tidak hidup lagi. Halaman juga meminta penyimpanan permanen (`navigator.storage.persist`) supaya kunci tidak terhapus saat ruang HP sempit.
+- **Token** tautan dan sesi hanya disimpan sebagai hash (SHA-256) dan hanya ditampilkan sekali kepada pembuatnya. Mendaftar ulang di HP yang sama mencabut pendaftaran lama hanya bila HP membuktikan masih memegang kunci lama. Bukti dari HP yang tidak dikenal server (misalnya sesudah basis data dipulihkan dari backup) diabaikan, sehingga HP tetap bisa mendaftar.
+- **Status di HP**: jam masuk/pulang hari ini hanya dikirim untuk pemilik HP pribadi di HP-nya sendiri. Penumpang dan HP bersama hanya melihat keadaannya (belum masuk, sudah masuk, sudah pulang), cukup untuk menyorot tombol yang benar tanpa membuka jam orang lain.
 - **Tanpa kunci global portal.** Edge `attendance-form` memakai transaksi pendek dan mengunci per pegawai (`pg_advisory_xact_lock(hashtextextended('portal.attendance:<id>',0))`), sehingga lonjakan absen pagi tidak menahan transaksi portal lain. Batas frekuensi per IP dan per HP (lebih longgar untuk HP bersama).
 - **Selfie** (JPEG ≤ 300 KB, diambil ≤ 5 menit sebelum dikirim) diunggah ke Google Drive folder **SPH-Portal-Absensi** *di luar* transaksi; bila penyimpanan absen gagal, berkasnya dihapus lagi. Kiriman ulang dengan kunci kiriman yang sama tidak mengunggah dua kali. Portal membaca selfie satu per satu lewat `attendance/photos/<id>`.
 - **Catatan absen append-only**: pemicu basis data menolak DELETE dan semua UPDATE kecuali penghapusan selfie oleh retensi.
-- **Retensi 90 hari**: selfie lebih tua dari 90 hari dihapus dari Drive (paling sering 6 jam sekali, berjalan di latar belakang sesudah absen, dengan lease agar tidak ganda). Baris absen tetap. Selfie yang menjadi foto acuan disimpan selama pegawai aktif; foto acuan pegawai yang sudah nonaktif lebih dari 90 hari ikut dilepas. Tidak memakai pg_cron.
+- **Retensi 90 hari**: selfie lebih tua dari 90 hari dihapus dari Drive. Penghapusan berjalan di latar belakang sesudah absen baru atau saat halaman absen dibuka di HP aktif, paling sering 6 jam sekali, dengan lease agar tidak ganda. Baris absen tetap. Selfie yang menjadi foto acuan disimpan selama pegawai aktif; foto acuan pegawai yang sudah nonaktif lebih dari 90 hari ikut dilepas. Untuk masa tanpa pemakaian sama sekali, Edge `attendance-form` menerima operasi terjadwal `retention` (hanya dengan secret key; gateway HP tidak meneruskannya) yang bisa dipanggil pg_cron + pg_net lewat `supabase/setup/schedule-attendance-retention.sql` (opsional). Status penghapusan dan jumlah selfie yang menunggu tampil di tab Titik Absen.
 - Semua tabel baru memakai RLS tanpa grant ke `anon`, `authenticated`, maupun `service_role`; hanya fungsi server yang membaca/menulis.
 - CSP ditambah `img-src https://tile.openstreetmap.org` untuk ubin peta di halaman Titik Absen. HP absen tidak memuat peta.
 
@@ -67,18 +71,54 @@ PLAYWRIGHT_MODULE=<path playwright> node scripts/verify-attendance-ui.mjs [folde
 
 Akun pratinjau (password `Preview2026!`): `pengelola.absen`, `koordinator.absen`, `pegawai.absen`, `admin.preview`. Skrip mencetak tautan HP bersama contoh. Kamera dan lokasi hanya jalan di *secure context*: buka `/absen/` di laptop yang sama (Chrome DevTools → Toggle device toolbar, Sensors → Location), atau lewatkan port melalui tunnel HTTPS dan jalankan dengan `PREVIEW_ORIGIN=https://alamat-tunnel`. Di iPhone, ikon layar utama punya penyimpanan sendiri: pasang ikon dulu, buka dari ikon, lalu tempel tautan pendaftaran.
 
-Yang diuji otomatis di cabang ini: 29 tes aturan/rute/alur HP (SQLite, tanda tangan WebCrypto sungguhan), 5 tes gateway, 11 pemeriksaan PostgreSQL (PGlite: RLS, role, pemicu, Edge terpaket dengan Drive tiruan, kunci per pegawai tanpa kunci global, tambalan portal-api, Cuti, retensi), dan 9 pemeriksaan browser (peta, tautan WhatsApp/QR, absen di HP bersama/pribadi dengan kamera dan GPS tiruan, di luar titik, sesi pendaftaran, Perlu dicek, ekspor Excel, tanpa pelanggaran CSP). Kamera dan GPS di HP sungguhan, pemasangan ikon, serta sinyal lemah di lapangan tetap perlu uji pengguna.
+Yang diuji otomatis di cabang ini: 33 tes aturan/rute/alur HP (SQLite, tanda tangan WebCrypto sungguhan), 5 tes gateway, 12 pemeriksaan PostgreSQL (PGlite: RLS, role, pemicu, Edge terpaket dengan Drive tiruan, kunci per pegawai tanpa kunci global, pemulihan pendaftaran, tambalan portal-api, Cuti, retensi, operasi `retention` terjadwal), dan 12 pemeriksaan browser (pengaman rilis termasuk galat sementara, peta, tautan WhatsApp/QR, absen di HP bersama/pribadi dengan kamera dan GPS tiruan, di luar titik, sesi pendaftaran, balasan pendaftaran yang hilang, Perlu dicek, ekspor Excel, tanpa pelanggaran CSP). SQL pra-cek dan jadwal retensi diuji di PGlite dengan semua migrasi. Kamera dan GPS di HP sungguhan, pemasangan ikon, serta sinyal lemah di lapangan tetap perlu uji pengguna.
 
 ## Rilis (oleh pemilik repo)
 
-1. **Migrasi** di SQL Editor: `20261105120000_attendance_module.sql`. Aditif; membuat 10 tabel, izin, dan role Pengelola Absensi / Koordinator HP Absen (Super Admin otomatis mendapat izin).
-2. **Edge Function `attendance-form`** (baru): deploy `supabase/deploy/attendance-form/index.ts` (SHA-256 `b4a6610b9210088cebcc391c435ca858ee4d9a7d4f5c2f5daff8936ebe05ee23`), `verify_jwt=false` seperti fungsi tanpa login lainnya. Secret Drive dan `SUPABASE_DB_URL` yang sudah ada terbaca otomatis.
-3. **Edge Function `portal-api`**: pastikan versi aktif sama dengan snapshot dasar (SHA-256 `e580bd6e8747399aa7fe870812da08cb872ab7f7fb9d50b77ec418b82288aa8b`, yaitu `supabase/deploy/portal-api/index.ts` di master `3c7274d`). Bila sama, deploy `supabase/deploy/portal-api/index.ts` dari cabang ini (SHA-256 `9bfcd649cdba581d78567065eadc7967e49c7e11b376f38423c32912a0292e4e`). Bila berbeda (misalnya PR #20 dirilis lebih dulu), unduh versi aktif lalu jalankan `node scripts/build-attendance-deploy.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya. Hal yang sama berlaku sebaliknya untuk PR lain yang menambal portal-api.
-4. **Merge** ke `master`: Pages menayangkan menu Absensi di `/app/`, halaman `/absen/`, dan gateway `/api/attendance-form/*` (memakai `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `PORTAL_ORIGIN` yang sudah ada). **Pengaman rilis:** menu Absensi hanya muncul bila `portal-api` sudah menjawab `attendance/overview`. Jadi merge boleh dilakukan sebelum langkah 1–3: selama rute itu masih 404, menu tetap tersembunyi dan `#attendance` tidak bisa dibuka. Setelah langkah 1–3 selesai, menu muncul sendiri saat pengguna memuat ulang halaman atau masuk lagi.
-5. **Persiapan**: beri role Pengelola Absensi dan Koordinator HP Absen (dengan unit) di Role & Izin → Titik Absen: tambahkan titik kantor/pos (tempel koordinat dari Google Maps, atau klik peta) → HP Absen: daftarkan HP pilot.
-6. **Pilot** satu unit selama ±2 minggu: mesin sidik jari/wajah dan aplikasi lama tetap dipakai berdampingan. Bandingkan rekap portal dengan sistem lama, periksa antrean Perlu dicek, lalu putuskan perpindahan unit berikutnya.
+Urutan mengikuti kebiasaan proyek: migrasi → Edge Function → aset Pages → pemeriksaan produksi. Pengaman rilis membuat urutan Pages dan server aman bila tertukar: menu Absensi baru tampil setelah `portal-api` menjawab `attendance/overview`.
 
-Rollback: hentikan pemakaian `/absen/` (nonaktifkan HP atau cabut tautan), Pages → deployment sebelumnya, `portal-api` → versi sebelumnya, Edge `attendance-form` boleh dibiarkan atau dihapus. Migrasi aditif dan tidak perlu dibatalkan; selfie tetap di folder Drive SPH-Portal-Absensi sampai terhapus retensi atau dihapus manual.
+0. **Pra-cek** di SQL Editor: `supabase/checks/check-attendance-readiness.sql` (hanya membaca, satu tabel hasil). Semua prasyarat harus OK, terutama kolom `leave_request_days.leave_type` dari migrasi Cuti khusus; tanpa kolom itu rekap Absensi gagal. Periksa juga data unit pilot (penempatan utama tunggal, atasan, nomor HP, akun atasan). Di Google Cloud, status OAuth consent screen untuk Drive portal harus *In production*: bila masih *Testing*, refresh token kedaluwarsa 7 hari dan absen gagal karena selfie tidak bisa diunggah.
+1. **Migrasi** di SQL Editor: `20261105120000_attendance_module.sql`. Aditif, satu transaksi; membuat 10 tabel, izin, dan role Pengelola Absensi / Koordinator HP Absen (Super Admin otomatis mendapat izin).
+2. **Edge Function `attendance-form`** (baru): deploy `supabase/deploy/attendance-form/index.ts` (SHA-256 `5624a7c01db4c6722ff4a5d2c951568022a69f7dff3c7d0481d3fc9698774472`) dengan `verify_jwt=false`, seperti fungsi tanpa login lainnya. Secret Drive dan `SUPABASE_DB_URL` yang sudah ada terbaca otomatis.
+3. **Edge Function `portal-api`**: unduh dulu versi yang aktif, simpan salinannya sebagai titik kembali, lalu hitung SHA-256-nya.
+   - Bila sama dengan snapshot dasar `e580bd6e8747399aa7fe870812da08cb872ab7f7fb9d50b77ec418b82288aa8b` (isi `supabase/deploy/portal-api/index.ts` di master `187455b`), deploy `supabase/deploy/portal-api/index.ts` dari cabang ini (SHA-256 `d3c7448447f92bafc0e93b107c93d9d657166e947fefde32f8755876a50f98b1`).
+   - Bila berbeda, jalankan `node scripts/build-attendance-deploy.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya. Skrip menolak sendiri bila hash tidak cocok atau snapshot sudah memuat Absensi.
+   - PR lain yang menambal `portal-api` (misalnya PR #20) harus dibangun ulang di atas snapshot yang tayang setelah langkah ini; jangan deploy berkas `portal-api` dari cabang lain apa adanya.
+4. **Merge** PR ke `master`: Pages menayangkan menu Absensi di `/app/`, halaman `/absen/`, dan gateway `/api/attendance-form/*` (memakai `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `PORTAL_ORIGIN` yang sudah ada). Bundel `/app/`: `portal-5ac191fc4de9.js` + `portal-ec6c0b3c086c.css`.
+5. **Uji asap** sekitar 15 menit sebagai Super Admin:
+   - muat ulang `/app/`; menu Absensi muncul;
+   - karena `portal-api` berganti, buka Cuti, Kunjungan, Merchandise, dan Pengadaan;
+   - Titik Absen: tambah titik kantor; HP Absen: daftarkan satu HP bersama untuk uji;
+   - dari HP uji: absen MASUK di dalam titik, lalu di luar titik; cek Hari ini; di Perlu dicek buka selfie (tercatat di Riwayat Aktivitas); coba ekspor;
+   - folder Drive SPH-Portal-Absensi terbentuk; log Edge `attendance-form` tanpa galat.
+6. **Persiapan**: beri role Pengelola Absensi dan Koordinator HP Absen (dengan unit) di Role & Izin → Titik Absen: tambahkan titik kantor/pos (tempel koordinat dari Google Maps, atau klik peta) → HP Absen: daftarkan HP pilot, misalnya lewat sesi pendaftaran.
+7. **Pilot** satu unit selama ±2 minggu: mesin sidik jari/wajah dan aplikasi lama tetap dipakai berdampingan. Bandingkan rekap portal dengan sistem lama, periksa antrean Perlu dicek, lalu putuskan perpindahan unit berikutnya.
+8. *(Opsional)* jadwal harian penghapusan selfie: `supabase/setup/schedule-attendance-retention.sql` (isi `<PROJECT_REF>` dan `<SECRET_KEY>` dulu). Belum diuji di Supabase sungguhan; periksa "Terakhir berjalan" di Titik Absen keesokan harinya.
+
+## Rollback
+
+**Titik kembali** (versi sebelum Absensi, 10 November 2026). Bila master bergerak sebelum PR ini di-merge, titik kembali Pages adalah parent pertama merge commit PR ini.
+
+| Bagian | Versi sebelum Absensi | Cara kembali |
+|---|---|---|
+| Pages | master `187455b` (PR #30), bundel `portal-8448a95e95c8.js` + `portal-d51de915396d.css`; cabang `claude/rollback-sebelum-absensi-20261110` | Cepat: Cloudflare → Workers & Pages → sph-portal → Deployments → deployment produksi terakhir sebelum merge → *Rollback to this deployment* (sementara; deploy berikutnya dari master menimpanya). Permanen: tombol *Revert* di PR, lalu merge PR revert itu. |
+| `portal-api` | SHA-256 `e580bd6e…` (v30, dicocokkan saat langkah rilis 3) | Deploy ulang salinan versi aktif yang disimpan, atau `supabase/deploy/portal-api/index.ts` dari cabang titik kembali. |
+| Edge `attendance-form` | belum ada | Hapus fungsi, atau biarkan (tanpa HP terdaftar tidak dipanggil). |
+| Migrasi | belum ada | Tidak dibatalkan: aditif, tabel dan data pilot tetap tersimpan dan tidak dipakai versi lama. |
+| Jadwal retensi (bila dipasang) | belum ada | `SELECT cron.unschedule('attendance-selfie-retention');` |
+
+**Pilih tingkatnya:**
+1. *Hanya Absensi bermasalah, modul lain normal*: deploy ulang `portal-api` versi sebelumnya; rute absensi kembali 404 dan menu hilang saat pengguna memuat ulang. Bila absen dari HP juga harus berhenti, hapus Edge `attendance-form`. Pages tidak perlu diubah.
+2. *Modul lain ikut bermasalah sesudah `portal-api` berganti*: langsung lakukan tingkat 1, lalu cek ulang Cuti, Kunjungan, Merchandise, dan Pengadaan.
+3. *Tampilan bermasalah, atau kembali penuh*: rollback deployment Pages di Cloudflare, lalu revert PR di GitHub, ditambah tingkat 1.
+
+**Sesudah rollback:**
+- Periksa versi tayang lewat daftar Deployments Cloudflare atau nama bundel di sumber halaman `/app/`. Jangan mengandalkan `portal-static/manifest.json`: `/portal-static/*` di-cache 1 tahun, jadi manifest bisa menampilkan versi lama.
+- `/absen/` menjadi 404 bila Pages dikembalikan.
+- Beri tahu peserta pilot untuk kembali ke mesin/aplikasi lama.
+- Data absen pilot tetap di tabel. Selfie tetap di folder Drive SPH-Portal-Absensi dan tidak lagi terhapus otomatis bila Edge `attendance-form` dihapus; putuskan apakah disimpan untuk dipakai lagi atau folder dihapus manual.
+
+**Memasang lagi sesudah revert**: revert commit revert-nya (seperti pemasangan ulang 10 November), bangun ulang frontend bila master sudah bergerak (`node scripts/build-cloud-deploy.mjs --frontend-only`), lalu ulangi langkah rilis. Jangan merge ulang cabang lama, karena Git menganggapnya sudah masuk.
 
 ## Pemberitahuan privasi (draf untuk pegawai)
 
