@@ -1,3 +1,11 @@
+import { Buffer as __attendance_Buffer3 } from "node:buffer";
+import { randomBytes as __attendance_randomBytes } from "node:crypto";
+import { randomUUID as __attendance_randomUUID } from "node:crypto";
+import { createHash as __attendance_createHash } from "node:crypto";
+import { Buffer as __attendance_Buffer } from "node:buffer";
+import { createHash as __attendance_createHash2, webcrypto as __attendance_webcrypto } from "node:crypto";
+import { Buffer as __attendance_Buffer2 } from "node:buffer";
+import { createHash as __attendance_createHash3, randomUUID as __attendance_randomUUID2 } from "node:crypto";
 import { randomBytes as __visits_randomBytes } from "node:crypto";
 import { randomUUID as __visits_randomUUID } from "node:crypto";
 import { createHash as __visits_createHash } from "node:crypto";
@@ -673,7 +681,8 @@ var driveModuleFolders = Object.freeze({
   pengadaan: "SPH-Portal-Pengadaan",
   website: "SPH-Portal-Website",
   coaching: "SPH-Portal-Coaching",
-  briefing: "SPH-Portal-Briefing"
+  briefing: "SPH-Portal-Briefing",
+  absensi: "SPH-Portal-Absensi"
 });
 function driveModuleForOperation(path, body = {}) {
   const resource = typeof path === "string" ? path.split("/")[0] : "";
@@ -7585,6 +7594,1337 @@ async function visitsSheetRequest(client, identity, storage, b, env, authorize) 
     adoptVisitError(error);
   }
 }
+// --- Modul Absensi, dibangkitkan dari lib/attendance*.mjs (build-attendance-deploy.mjs) ---
+const __attendance = (() => {
+  const Buffer3 = __attendance_Buffer3;
+  const randomBytes = __attendance_randomBytes;
+  const randomUUID = __attendance_randomUUID;
+  const createHash = __attendance_createHash;
+  const Buffer = __attendance_Buffer;
+  const createHash2 = __attendance_createHash2;
+  const webcrypto = __attendance_webcrypto;
+  const Buffer2 = __attendance_Buffer2;
+  const createHash3 = __attendance_createHash3;
+  const randomUUID2 = __attendance_randomUUID2;
+// supabase/functions/_shared/portal/arrays.mjs
+async function asyncMap(items, fn) {
+  const out = [];
+  for (let i = 0; i < items.length; i++) out.push(await fn(items[i], i, items));
+  return out;
+}
+async function asyncSome(items, fn) {
+  for (let i = 0; i < items.length; i++) if (await fn(items[i], i, items)) return true;
+  return false;
+}
+
+// supabase/functions/_shared/portal/attendance.mjs
+
+// supabase/functions/_shared/portal/db.mjs
+var now = () => (/* @__PURE__ */ new Date()).toISOString();
+var today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Makassar" }).format(/* @__PURE__ */ new Date());
+var uid = () => randomUUID();
+var AppError = class extends Error {
+  constructor(status, message, details) {
+    super(message);
+    this.status = status;
+    this.details = details;
+  }
+};
+var assert = (condition, message, status = 422) => {
+  if (!condition) throw new AppError(status, message);
+};
+var sqlName = (n) => {
+  if (!/^[a-z_][a-z0-9_]*$/.test(n)) throw new Error("Invalid SQL identifier");
+  return n;
+};
+function postgresQuery(sql) {
+  let quoted = false, index = 0, out = "";
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    if (c === "'") {
+      out += c;
+      if (quoted && sql[i + 1] === "'") {
+        out += sql[++i];
+        continue;
+      }
+      quoted = !quoted;
+      continue;
+    }
+    out += c === "?" && !quoted ? `$${++index}` : c;
+  }
+  return out.replace(/\b([a-z_]\w*)\.rowid\b/gi, "$1.id");
+}
+var all = (db, sql, ...args) => db.query(postgresQuery(sql), args.map((v) => v ?? null));
+var one = async (db, sql, ...args) => (await all(db, sql, ...args))[0];
+var run = async (db, sql, ...args) => {
+  const rows = await db.query(postgresQuery(sql), args.map((v) => v ?? null));
+  return { changes: rows.count ?? rows.affectedRows ?? 0 };
+};
+async function insert(db, table, values) {
+  const row = { id: uid(), created_at: now(), updated_at: now(), row_version: 1, ...values };
+  const columns = Object.keys(row).map(sqlName);
+  await run(db, `INSERT INTO ${sqlName(table)} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`, ...Object.values(row).map((v) => typeof v === "boolean" ? Number(v) : v ?? null));
+  return one(db, `SELECT * FROM ${sqlName(table)} WHERE id=?`, row.id);
+}
+async function update(db, table, id, version, values) {
+  assert(Number.isInteger(version), "Versi data wajib dikirim. Muat ulang data.", 409);
+  const row = { ...values, updated_at: now() };
+  const result = await run(db, `UPDATE ${sqlName(table)} SET ${Object.keys(row).map((k) => `${sqlName(k)}=?`).join(",")},row_version=row_version+1 WHERE id=? AND row_version=?`, ...Object.values(row).map((v) => typeof v === "boolean" ? Number(v) : v ?? null), id, version);
+  assert(result.changes === 1, "Data sudah berubah. Muat ulang sebelum menyimpan.", 409);
+  return one(db, `SELECT * FROM ${sqlName(table)} WHERE id=?`, id);
+}
+async function tx(db, work) {
+  assert(db.inTransaction, "Transaction required.", 500);
+  return await work();
+}
+async function audit(db, actor, action, type, key, summary = {}, reason = "") {
+  await insert(db, "audit_events", { actor_user_id: actor?.id || null, action, object_type: type, object_key: String(key), occurred_at: now(), outcome: "SUCCESS", request_id: actor?.request_id || uid(), reason, change_summary: JSON.stringify(summary) });
+}
+function date(v, label = "Tanggal") {
+  assert(typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v, `${label} tidak valid.`);
+  return v;
+}
+function instant(v) {
+  assert(typeof v === "string" && /(Z|[+-]\d\d:\d\d)$/.test(v) && !isNaN(Date.parse(v)), "Waktu harus menyertakan zona waktu.");
+  return new Date(v).toISOString();
+}
+
+// supabase/functions/_shared/portal/auth.mjs
+var digest = (value) => createHash("sha256").update(value).digest("hex");
+var purchasingRoleCodes = {
+  PURCHASE_REQUESTER: ["Pemohon Pengadaan", ["purchasing.requests.create", "purchasing.requests.read"]],
+  PURCHASING_STAFF: ["Staf Purchasing", ["purchasing.requests.read", "purchasing.procurement.manage", "purchasing.vendors.read", "purchasing.vendors.manage", "purchasing.vendors.sensitive", "purchasing.budget.read", "purchasing.reports.read"]],
+  FINANCE_VERIFIER: ["Verifikator Keuangan", ["purchasing.requests.read", "purchasing.requests.verify", "purchasing.budget.read", "purchasing.budget.manage", "purchasing.vendors.read", "purchasing.vendors.sensitive", "purchasing.reports.read"]],
+  PURCHASE_AUDITOR: ["Pemeriksa SPI", ["purchasing.requests.read", "purchasing.vendors.read", "purchasing.budget.read", "purchasing.reports.read", "purchasing.reports.export", "admin.audit.read"]],
+  PURCHASE_ADMIN: ["Pengelola Pengadaan", ["purchasing.settings.manage", "purchasing.requests.read", "purchasing.vendors.read", "purchasing.vendors.manage", "purchasing.vendors.sensitive", "purchasing.budget.read", "purchasing.budget.manage"]]
+};
+var purchasingRoles = Object.entries(purchasingRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+var merchandiseRoleCodes = {
+  BISNIS_PIMPINAN: ["Pimpinan Bisnis", ["merchandise.catalog.read", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.sales.read", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_MANAGER: ["Pengelola Bisnis", ["merchandise.catalog.read", "merchandise.catalog.manage", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.stock.record", "merchandise.stock.adjust", "merchandise.sales.read", "merchandise.sales.create", "merchandise.sales.void", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_KOORDINATOR: ["Koordinator Merchandise", ["merchandise.catalog.read", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.stock.record", "merchandise.stock.adjust", "merchandise.sales.read", "merchandise.sales.create", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_PETUGAS: ["Petugas Penjualan Merchandise", ["merchandise.catalog.read", "merchandise.stock.read", "merchandise.stock.record", "merchandise.sales.read", "merchandise.sales.create"]]
+};
+var merchandiseRoles = Object.entries(merchandiseRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+var visitRoleCodes = {
+  KUNJUNGAN_PENGELOLA: ["Pengelola Kunjungan", ["visits.dashboard.read", "visits.guides.read", "visits.guides.manage", "visits.records.read", "visits.forms.read", "visits.forms.manage", "visits.reports.read", "visits.reports.export", "visits.settings.manage"]],
+  KUNJUNGAN_PIMPINAN: ["Pimpinan Kunjungan", ["visits.dashboard.read", "visits.guides.read", "visits.records.read", "visits.reports.read", "visits.reports.export"]]
+};
+var visitRoles = Object.entries(visitRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+async function grants(db, user) {
+  const key = `grants:${user.id}`, cache = db.authorizationCache;
+  if (cache?.has(key)) return cache.get(key);
+  const rows = await all(db, `SELECT ur.id,ur.scope_kind,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=?`, user.id);
+  cache?.set(key, rows);
+  return rows;
+}
+async function authorizationScopeRows(db, kind, id, target) {
+  const key = JSON.stringify(["scope", kind, id, target]), cache = db.authorizationCache;
+  if (cache?.has(key)) return cache.get(key);
+  const sql = kind === "units" ? "SELECT * FROM user_role_units WHERE user_role_id=?" : kind === "post" ? "SELECT 1 FROM user_role_posts WHERE user_role_id=? AND post_id=?" : "WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE parent_id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree WHERE id=?";
+  const rows = await all(db, sql, ...kind === "units" ? [id] : [id, target]);
+  cache?.set(key, rows);
+  return rows;
+}
+async function can(db, user, permission, context = {}) {
+  const matches = (await grants(db, user)).filter((g) => g.code === permission);
+  return await asyncSome(matches, async (g) => {
+    if (g.scope_kind === "ALL") return true;
+    if (g.scope_kind === "SELF") return Boolean(user.employee_id && [context.employee_id, context.reporter_employee_id, ...context.related_employees || []].includes(user.employee_id));
+    if (g.scope_kind === "ASSIGNED_POSTS") return permission.startsWith("security.") && Boolean(context.post_id && (await authorizationScopeRows(db, "post", g.id, context.post_id)).length);
+    if (!context.org_unit_id) return false;
+    return await asyncSome(await authorizationScopeRows(db, "units", g.id), async (u) => {
+      if (u.org_unit_id === context.org_unit_id) return true;
+      return u.include_descendants && Boolean((await authorizationScopeRows(db, "descendants", u.org_unit_id, context.org_unit_id)).length);
+    });
+  });
+}
+async function has(db, user, permission) {
+  return (await grants(db, user)).some((g) => g.code === permission);
+}
+
+// supabase/functions/_shared/portal/attendance-rules.mjs
+var attendanceRules = Object.freeze({
+  sessionHours: 16,
+  radiusDefault: 100,
+  radiusMin: 20,
+  radiusMax: 1e3,
+  accuracyLimit: 100,
+  crowdedPeople: 4,
+  crowdedMinutes: 10,
+  jumpKmh: 120,
+  jumpMinMeters: 1e3,
+  jumpWindowHours: 12,
+  photoMaxBytes: 300 * 1024,
+  photoMaxAgeMinutes: 5,
+  locationMaxAgeMinutes: 2,
+  photoRetentionDays: 90,
+  referenceRetentionDays: 90,
+  correctionDays: 7,
+  signatureSkewMinutes: 10,
+  registrationDays: 7,
+  sessionMinutesMax: 30,
+  recapMaxDays: 62,
+  reviewDays: 31
+});
+var attendanceFlags = Object.freeze({
+  DI_LUAR_TITIK: "Di luar titik",
+  GPS_KURANG_AKURAT: "GPS kurang akurat",
+  LOKASI_MELOMPAT: "Lokasi melompat",
+  HP_PRIBADI_RAMAI: "Banyak pegawai di satu HP pribadi",
+  TANPA_FOTO_ACUAN: "Belum ada foto acuan",
+  TANPA_MASUK: "Tanpa absen masuk",
+  TANPA_PULANG: "Tanpa absen pulang",
+  SAAT_CUTI: "Absen saat cuti",
+  TITIK_BELUM_ADA: "Titik absen belum diatur"
+});
+var outsideReasons = Object.freeze({
+  DINAS_LUAR: "Dinas luar",
+  TUGAS_LAPANGAN: "Tugas lapangan",
+  LAINNYA: "Lainnya"
+});
+var dayNoteKinds = Object.freeze({
+  IZIN: "Izin",
+  SAKIT: "Sakit",
+  DINAS_LUAR: "Dinas luar"
+});
+var dayStatuses = Object.freeze({
+  HADIR: "Hadir",
+  BELUM_PULANG: "Masuk, belum pulang",
+  TANPA_PULANG: "Hadir, tanpa absen pulang",
+  TANPA_MASUK: "Pulang tanpa absen masuk",
+  CUTI: "Cuti",
+  IZIN: "Izin",
+  SAKIT: "Sakit",
+  DINAS_LUAR: "Dinas luar",
+  TIDAK_ADA_CATATAN: "Tidak ada catatan"
+});
+var presentStatuses = Object.freeze(["HADIR", "BELUM_PULANG", "TANPA_PULANG", "TANPA_MASUK"]);
+var DAY = 864e5;
+var witaDate = (ms) => new Date(ms + 8 * 36e5).toISOString().slice(0, 10);
+var shiftDay = (day, days) => new Date(Date.parse(day + "T00:00:00Z") + days * DAY).toISOString().slice(0, 10);
+function daysBetween(from, to) {
+  const out = [];
+  for (let d = from; d <= to; d = shiftDay(d, 1)) out.push(d);
+  return out;
+}
+var parseFlags = (value) => {
+  if (Array.isArray(value)) return value.filter((f) => typeof f === "string" && Object.hasOwn(attendanceFlags, f));
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.filter((f) => typeof f === "string" && Object.hasOwn(attendanceFlags, f)) : [];
+  } catch {
+    return [];
+  }
+};
+function dayStatus({ events = [], corrections = [], note = null, leave = null, nowMs = Date.now() }) {
+  const voided = new Set(corrections.filter((c) => c.void_event_id).map((c) => c.void_event_id));
+  const live = events.filter((e) => !voided.has(e.id)).sort((a, b) => String(a.recorded_at).localeCompare(String(b.recorded_at)));
+  const ins = live.filter((e) => e.kind === "IN"), outs = live.filter((e) => e.kind === "OUT");
+  let correctedIn = null, correctedOut = null;
+  for (const c of [...corrections].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))) {
+    if (c.in_at) correctedIn = c.in_at;
+    if (c.out_at) correctedOut = c.out_at;
+  }
+  const inAt = correctedIn || ins[0]?.recorded_at || null;
+  let outAt = correctedOut || outs.at(-1)?.recorded_at || null;
+  if (inAt && outAt && outAt <= inAt) outAt = null;
+  const flags = /* @__PURE__ */ new Set();
+  for (const e of live) for (const f of parseFlags(e.flags)) flags.add(f);
+  let status;
+  if (inAt && outAt) status = "HADIR";
+  else if (inAt) status = nowMs - Date.parse(inAt) <= attendanceRules.sessionHours * 36e5 ? "BELUM_PULANG" : "TANPA_PULANG";
+  else if (outAt) status = "TANPA_MASUK";
+  else if (leave) status = "CUTI";
+  else if (note) status = note.kind;
+  else status = "TIDAK_ADA_CATATAN";
+  if (inAt) flags.delete("TANPA_MASUK");
+  else if (outAt) flags.add("TANPA_MASUK");
+  if (status === "TANPA_PULANG") flags.add("TANPA_PULANG");
+  if (leave && (inAt || outAt)) flags.add("SAAT_CUTI");
+  return {
+    status,
+    in_at: inAt,
+    out_at: outAt,
+    minutes: inAt && outAt ? Math.round((Date.parse(outAt) - Date.parse(inAt)) / 6e4) : null,
+    flags: [...flags],
+    corrected: Boolean(correctedIn || correctedOut || voided.size),
+    event_ids: live.map((e) => e.id),
+    note: note ? {
+      id: note.id,
+      kind: note.kind,
+      note: note.note || ""
+    } : null,
+    leave_type: leave?.leave_type || null
+  };
+}
+function buildRecap({ employees, events = [], corrections = [], notes = [], leaveDays: leaveDays2 = [], from, to, nowMs = Date.now() }) {
+  const key = (employeeId, day) => `${employeeId}\0${day}`;
+  const group = (rows, field = "work_date") => {
+    const map = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      const k = key(r.employee_id, r[field]);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(r);
+    }
+    return map;
+  };
+  const byEvents = group(events), byCorrections = group(corrections), byLeave = group(leaveDays2);
+  const byNotes = new Map(notes.map((n) => [key(n.employee_id, n.work_date), n]));
+  const dates = daysBetween(from, to);
+  return employees.map((e) => {
+    const days = [];
+    const summary = {
+      hadir: 0,
+      tanpa_pulang: 0,
+      tanpa_masuk: 0,
+      belum_pulang: 0,
+      cuti: 0,
+      izin: 0,
+      sakit: 0,
+      dinas_luar: 0,
+      tanpa_catatan: 0,
+      ditandai: 0,
+      menit: 0
+    };
+    for (const day of dates) {
+      const k = key(e.id, day);
+      const result = dayStatus({
+        events: byEvents.get(k) || [],
+        corrections: byCorrections.get(k) || [],
+        note: byNotes.get(k) || null,
+        leave: byLeave.get(k)?.[0] || null,
+        nowMs
+      });
+      if (presentStatuses.includes(result.status)) summary.hadir++;
+      if (result.status === "TANPA_PULANG") summary.tanpa_pulang++;
+      if (result.status === "TANPA_MASUK") summary.tanpa_masuk++;
+      if (result.status === "BELUM_PULANG") summary.belum_pulang++;
+      if (result.status === "CUTI") summary.cuti++;
+      if (result.status === "IZIN") summary.izin++;
+      if (result.status === "SAKIT") summary.sakit++;
+      if (result.status === "DINAS_LUAR") summary.dinas_luar++;
+      if (result.status === "TIDAK_ADA_CATATAN") summary.tanpa_catatan++;
+      if (result.flags.length) summary.ditandai++;
+      if (result.minutes) summary.menit += result.minutes;
+      if (result.status !== "TIDAK_ADA_CATATAN" || result.flags.length) days.push({
+        date: day,
+        ...result
+      });
+    }
+    return {
+      employee_id: e.id,
+      days,
+      summary
+    };
+  });
+}
+
+// supabase/functions/_shared/portal/attendance-form.mjs
+var attendanceFormActions = Object.freeze(["registration", "register", "session", "session-register", "context", "search", "person", "submit"]);
+var attendanceFormLimits = Object.freeze({
+  windowMinutes: 10,
+  ip: {
+    registration: 60,
+    register: 30,
+    session: 300,
+    "session-register": 120,
+    context: 1500,
+    search: 800,
+    person: 2e3,
+    submit: 800
+  },
+  device: {
+    context: 120,
+    search: 120,
+    person: 300,
+    submit: 60
+  },
+  sharedDevice: {
+    context: 300,
+    search: 300,
+    person: 900,
+    submit: 150
+  }
+});
+var peopleSql = `SELECT e.id,e.full_name,e.is_active,ep.supervisor_employee_id,p.org_unit_id,p.name position_name,u.name unit_name
+ FROM employees e
+ LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)
+ LEFT JOIN positions p ON p.id=ep.position_id LEFT JOIN org_units u ON u.id=p.org_unit_id`;
+function groupPeople(rows) {
+  const map = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const list = map.get(r.id) || [];
+    list.push(r);
+    map.set(r.id, list);
+  }
+  return [...map.values()].map((list) => ({
+    ...list[0],
+    ambiguous: list.length !== 1
+  }));
+}
+async function attendancePeople(db, where = "", ...args) {
+  const day = witaDate(Date.now());
+  return groupPeople(await all(db, `${peopleSql} WHERE e.is_active=1${where ? ` AND ${where}` : ""} ORDER BY e.full_name,e.id`, day, day, ...args));
+}
+var personView = (p) => p && {
+  id: p.id,
+  name: p.full_name,
+  position: p.position_name || "",
+  unit: p.unit_name || ""
+};
+async function unitTree(db, unitId) {
+  return (await all(db, "WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree", unitId)).map((r) => r.id);
+}
+var unitName = async (db, id) => id ? (await one(db, "SELECT name FROM org_units WHERE id=?", id))?.name || "" : "";
+async function deviceView(db, d) {
+  const owner = d.owner_employee_id ? (await attendancePeople(db, "e.id=?", d.owner_employee_id))[0] || null : null;
+  const ownerName = owner ? owner.full_name : d.owner_employee_id ? (await one(db, "SELECT full_name FROM employees WHERE id=?", d.owner_employee_id))?.full_name || "" : "";
+  return {
+    id: d.id,
+    kind: d.kind,
+    status: d.status,
+    label: d.kind === "SHARED" ? d.label : `HP pribadi ${ownerName}`.trim(),
+    owner: owner ? personView(owner) : d.owner_employee_id ? {
+      id: d.owner_employee_id,
+      name: ownerName,
+      position: "",
+      unit: ""
+    } : null,
+    unit: d.kind === "SHARED" ? {
+      id: d.org_unit_id,
+      name: await unitName(db, d.org_unit_id)
+    } : owner?.org_unit_id ? {
+      id: owner.org_unit_id,
+      name: owner.unit_name
+    } : null
+  };
+}
+
+// supabase/functions/_shared/portal/attendance.mjs
+var localDeps = {
+  has,
+  can,
+  audit,
+  readPhoto: null
+};
+var DAY2 = 864e5;
+var peopleSql2 = `SELECT e.id,e.employee_no,e.full_name,e.is_active,e.employment_status,ep.supervisor_employee_id,p.org_unit_id,p.name position_name,u.name unit_name
+ FROM employees e
+ LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)
+ LEFT JOIN positions p ON p.id=ep.position_id LEFT JOIN org_units u ON u.id=p.org_unit_id`;
+async function directory(db, employeeId = null) {
+  const day = today(), map = /* @__PURE__ */ new Map();
+  const rows = employeeId ? await all(db, `${peopleSql2} WHERE e.id=?`, day, day, employeeId) : await all(db, `${peopleSql2} ORDER BY e.full_name,e.id`, day, day);
+  for (const r of rows) {
+    const list = map.get(r.id) || [];
+    list.push(r);
+    map.set(r.id, list);
+  }
+  return [...map.values()].map((list) => ({
+    ...list[0],
+    is_active: Number(list[0].is_active) === 1,
+    ambiguous: list.length !== 1
+  }));
+}
+var view = (p) => ({
+  id: p.id,
+  name: p.full_name,
+  employee_no: p.employee_no || "",
+  position: p.position_name || "",
+  unit: p.unit_name || "",
+  unit_id: p.org_unit_id || null,
+  active: p.is_active,
+  ambiguous: p.ambiguous
+});
+async function scopeOf(db, user, deps) {
+  const { has: has2, can: can2 } = deps;
+  const people = await directory(db), byId = new Map(people.map((p) => [p.id, p]));
+  const subordinates = /* @__PURE__ */ new Set(), direct = /* @__PURE__ */ new Set(), queue = user.employee_id ? [user.employee_id] : [];
+  while (queue.length) {
+    const parent = queue.shift();
+    for (const e of people) if (!e.ambiguous && e.supervisor_employee_id === parent && !subordinates.has(e.id) && e.id !== user.employee_id) {
+      subordinates.add(e.id);
+      queue.push(e.id);
+      if (parent === user.employee_id) direct.add(e.id);
+    }
+  }
+  const hasRead = await has2(db, user, "hr.attendance.read"), hasManage = await has2(db, user, "hr.attendance.manage");
+  const allRead = hasRead && await can2(db, user, "hr.attendance.read", {}), allManage = hasManage && await can2(db, user, "hr.attendance.manage", {});
+  const readable = /* @__PURE__ */ new Set(), managed = /* @__PURE__ */ new Set();
+  for (const e of people) {
+    const context = {
+      employee_id: e.id,
+      org_unit_id: e.org_unit_id
+    };
+    const manage = allManage || hasManage && await can2(db, user, "hr.attendance.manage", context);
+    if (manage) managed.add(e.id);
+    if (e.id === user.employee_id || subordinates.has(e.id) || manage || allRead || hasRead && await can2(db, user, "hr.attendance.read", context)) readable.add(e.id);
+  }
+  return {
+    people,
+    byId,
+    subordinates,
+    direct,
+    readable,
+    managed,
+    hasRead,
+    hasManage,
+    allRead
+  };
+}
+function writeAccess(scope, employeeId) {
+  if (scope.managed.has(employeeId)) return {
+    allowed: true,
+    manager: true
+  };
+  if (scope.direct.has(employeeId)) return {
+    allowed: true,
+    manager: false
+  };
+  return {
+    allowed: false,
+    manager: false
+  };
+}
+async function targetAccess(db, user, deps, employeeId, message = "Hanya atasan langsung atau Pengelola Absensi yang dapat mengubah data absen pegawai ini.") {
+  const { has: has2, can: can2 } = deps;
+  assert(typeof employeeId === "string" && employeeId.length <= 100, "Pegawai tidak ditemukan.", 404);
+  const [person] = await directory(db, employeeId);
+  assert(person, "Pegawai tidak ditemukan.", 404);
+  const direct = Boolean(user.employee_id) && !person.ambiguous && person.supervisor_employee_id === user.employee_id && person.id !== user.employee_id;
+  const manager = await has2(db, user, "hr.attendance.manage") && await can2(db, user, "hr.attendance.manage", {
+    employee_id: person.id,
+    org_unit_id: person.org_unit_id
+  });
+  assert(manager || direct, message, 403);
+  return {
+    person,
+    allowed: true,
+    manager
+  };
+}
+function range(url, { maxDays = attendanceRules.recapMaxDays, defaultFrom } = {}) {
+  const end = today(), from = date(url?.searchParams.get("from") || defaultFrom || end.slice(0, 8) + "01", "Tanggal mulai"), to = date(url?.searchParams.get("to") || end, "Tanggal akhir");
+  assert(from <= to, "Tanggal mulai harus sebelum tanggal akhir.");
+  assert((Date.parse(to) - Date.parse(from)) / DAY2 < maxDays, `Rentang maksimal ${maxDays} hari.`);
+  return {
+    from,
+    to
+  };
+}
+var eventSql = `SELECT e.id,e.employee_id,e.kind,e.recorded_at,e.work_date,e.pair_event_id,e.flags,e.within_point,e.point_name,e.distance_m,e.outside_reason,e.outside_note,
+ e.accuracy_m,e.latitude,e.longitude,e.device_id,e.photo_storage_key,e.photo_deleted_at,e.confirmed_order,d.kind device_kind,d.label device_label,d.owner_employee_id device_owner
+ FROM attendance_events e JOIN attendance_devices d ON d.id=e.device_id`;
+async function leaveDays(db, from, to) {
+  if (typeof db.query !== "function" && !await one(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='leave_request_days'")) return [];
+  return await all(db, "SELECT employee_id,CAST(work_date AS TEXT) work_date,leave_type FROM leave_request_days WHERE state='APPROVED' AND work_date>=? AND work_date<=?", from, to);
+}
+async function loadRange(db, from, to, ids) {
+  const keep = (r) => ids.has(r.employee_id);
+  return {
+    events: (await all(db, `${eventSql} WHERE e.work_date>=? AND e.work_date<=? ORDER BY e.recorded_at`, from, to)).filter(keep),
+    corrections: (await all(db, "SELECT * FROM attendance_corrections WHERE revoked_at IS NULL AND work_date>=? AND work_date<=? ORDER BY created_at", from, to)).filter(keep),
+    notes: (await all(db, "SELECT * FROM attendance_day_notes WHERE revoked_at IS NULL AND work_date>=? AND work_date<=?", from, to)).filter(keep),
+    leaveDays: (await leaveDays(db, from, to)).filter(keep)
+  };
+}
+async function ownerNames(db, events) {
+  const ids = [...new Set(events.map((e) => e.device_owner).filter(Boolean))], names = /* @__PURE__ */ new Map();
+  for (const id of ids) names.set(id, (await one(db, "SELECT full_name FROM employees WHERE id=?", id))?.full_name || "");
+  return names;
+}
+function eventView(e, owners) {
+  return {
+    id: e.id,
+    employee_id: e.employee_id,
+    kind: e.kind,
+    recorded_at: e.recorded_at,
+    work_date: e.work_date,
+    paired: Boolean(e.pair_event_id),
+    flags: parseFlags(e.flags),
+    within_point: Number(e.within_point) === 1,
+    point_name: e.point_name || null,
+    distance_m: e.distance_m == null ? null : Number(e.distance_m),
+    outside_reason: e.outside_reason || null,
+    outside_note: e.outside_note || "",
+    accuracy_m: Math.round(Number(e.accuracy_m)),
+    latitude: Number(e.latitude),
+    longitude: Number(e.longitude),
+    has_photo: Boolean(e.photo_storage_key),
+    photo_deleted: Boolean(e.photo_deleted_at),
+    device: {
+      id: e.device_id,
+      kind: e.device_kind,
+      label: e.device_kind === "SHARED" ? e.device_label : `HP pribadi ${owners.get(e.device_owner) || ""}`.trim(),
+      borrowed: e.device_kind === "PERSONAL" && e.device_owner !== e.employee_id
+    }
+  };
+}
+async function filterUnit(db, scope, url) {
+  const unit = url?.searchParams.get("unit") || "";
+  const ids = new Set(scope.readable);
+  if (unit) {
+    const units2 = new Set(await unitTree(db, unit));
+    for (const id of [...ids]) if (!units2.has(scope.byId.get(id)?.org_unit_id)) ids.delete(id);
+  }
+  return ids;
+}
+async function photoOf(db, user, deps, event, scope, kind) {
+  const { audit: audit2, readPhoto } = deps;
+  assert(event && scope.readable.has(event.employee_id), "Akses foto ditolak.", 403);
+  assert(event.photo_storage_key, "Selfie ini sudah dihapus sesuai masa simpan 90 hari.", 404);
+  assert(typeof readPhoto === "function", "Penyimpanan selfie belum tersedia.", 503);
+  const data = await readPhoto(event.photo_storage_key);
+  assert(data && data.length === Number(event.photo_size), "Selfie belum dapat dibaca. Coba lagi.", 503);
+  await audit2(db, user, kind === "reference" ? "VIEW_REFERENCE_PHOTO" : "VIEW_PHOTO", "attendance_events", event.id, {
+    employee_id: event.employee_id
+  });
+  return {
+    event_id: event.id,
+    mime_type: "image/jpeg",
+    data: Buffer3.from(data).toString("base64")
+  };
+}
+function tokenPair() {
+  const token = randomBytes(32).toString("hex");
+  return {
+    token,
+    hash: digest(token)
+  };
+}
+var units = async (db) => await all(db, "SELECT id,name FROM org_units WHERE is_active=1 ORDER BY name,id");
+async function deviceScope(db, user, deps, device, byId = null) {
+  const { can: can2 } = deps;
+  if (device.kind === "SHARED") return await can2(db, user, "hr.attendance.devices", {
+    org_unit_id: device.org_unit_id
+  });
+  const owner = byId ? byId.get(device.owner_employee_id) : (await directory(db, device.owner_employee_id))[0];
+  return await can2(db, user, "hr.attendance.devices", {
+    employee_id: device.owner_employee_id,
+    org_unit_id: owner?.org_unit_id || null
+  });
+}
+async function sessionView(db, s) {
+  const devices = await asyncMap(await all(db, "SELECT * FROM attendance_devices WHERE session_id=? ORDER BY created_at", s.id), async (d) => ({
+    ...await deviceView(db, d),
+    row_version: d.row_version,
+    created_at: d.created_at
+  }));
+  const counts = /* @__PURE__ */ new Map();
+  for (const d of devices) if (d.status !== "REJECTED" && d.owner) counts.set(d.owner.id, (counts.get(d.owner.id) || 0) + 1);
+  return {
+    id: s.id,
+    unit: {
+      id: s.org_unit_id,
+      name: (await one(db, "SELECT name FROM org_units WHERE id=?", s.org_unit_id))?.name || ""
+    },
+    expires_at: s.expires_at,
+    closed_at: s.closed_at,
+    open: !s.closed_at && s.expires_at > now(),
+    row_version: s.row_version,
+    devices: devices.map((d) => ({
+      ...d,
+      duplicate_name: Boolean(d.owner && counts.get(d.owner.id) > 1)
+    }))
+  };
+}
+async function deviceRow(db, d, stats) {
+  const v = await deviceView(db, d), usage = stats.get(d.id) || {
+    events: 0,
+    people: 0,
+    last: null
+  };
+  const ownerActive = d.kind !== "PERSONAL" || Boolean(await one(db, "SELECT id FROM employees WHERE id=? AND is_active=1", d.owner_employee_id));
+  return {
+    ...v,
+    row_version: d.row_version,
+    registered: Boolean(d.public_key),
+    activated_at: d.activated_at || d.approved_at || null,
+    expires_at: d.registration_expires_at || null,
+    session_id: d.session_id || null,
+    revoked_at: d.revoked_at || null,
+    revoke_reason: d.revoke_reason || "",
+    last_seen_at: d.last_seen_at || null,
+    created_at: d.created_at,
+    owner_active: ownerActive,
+    events_7d: usage.events,
+    people_7d: usage.people
+  };
+}
+async function ownerPhone(db, d) {
+  if (d.kind !== "PERSONAL") return "";
+  const digits = String((await one(db, "SELECT phone FROM employees WHERE id=?", d.owner_employee_id))?.phone || "").replace(/\D/g, "");
+  const phone = digits.startsWith("0") ? "62" + digits.slice(1) : digits.startsWith("8") ? "62" + digits : digits;
+  return /^62\d{8,13}$/.test(phone) ? phone : "";
+}
+function validatePoint(b, old = {}) {
+  const name = typeof b.name === "string" ? b.name.trim().replace(/\s+/g, " ") : old.name;
+  assert(typeof name === "string" && name.length >= 1 && name.length <= 80, "Nama titik wajib diisi (maksimal 80 karakter).");
+  const lat = b.latitude === void 0 ? old.latitude : Number(b.latitude), lon = b.longitude === void 0 ? old.longitude : Number(b.longitude);
+  assert(Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lon) && lon >= -180 && lon <= 180, "Koordinat titik tidak valid.");
+  const radius = b.radius_m === void 0 ? old.radius_m ?? attendanceRules.radiusDefault : Number(b.radius_m);
+  assert(Number.isInteger(radius) && radius >= attendanceRules.radiusMin && radius <= attendanceRules.radiusMax, `Radius harus ${attendanceRules.radiusMin}\u2013${attendanceRules.radiusMax} meter.`);
+  const active = b.is_active === void 0 ? old.is_active ?? 1 : b.is_active === true || b.is_active === 1 || b.is_active === "1" ? 1 : 0;
+  return {
+    name,
+    latitude: Math.round(lat * 1e7) / 1e7,
+    longitude: Math.round(lon * 1e7) / 1e7,
+    radius_m: radius,
+    is_active: active
+  };
+}
+var pointView = (p) => ({
+  id: p.id,
+  name: p.name,
+  latitude: Number(p.latitude),
+  longitude: Number(p.longitude),
+  radius_m: Number(p.radius_m),
+  is_active: Number(p.is_active) === 1,
+  row_version: p.row_version,
+  updated_at: p.updated_at
+});
+function workDate(value, label = "Tanggal kerja") {
+  return date(value, label);
+}
+async function reviewItems(db, scope, from, to, nowMs) {
+  const ids = new Set(scope.readable), data = await loadRange(db, from, to, ids), owners = await ownerNames(db, data.events);
+  const voided = new Set(data.corrections.filter((c) => c.void_event_id).map((c) => c.void_event_id));
+  const paired = new Set(data.events.filter((e) => e.pair_event_id).map((e) => e.pair_event_id));
+  const leave = new Set(data.leaveDays.map((l) => `${l.employee_id}\0${l.work_date}`));
+  const reviews = new Map((await all(db, "SELECT r.*,u.username reviewer FROM attendance_reviews r JOIN attendance_events e ON e.id=r.event_id LEFT JOIN users u ON u.id=r.reviewed_by WHERE e.work_date>=? AND e.work_date<=?", from, to)).map((r) => [r.event_id, r]));
+  const references = new Set((await all(db, "SELECT employee_id FROM attendance_reference_photos")).map((r) => r.employee_id));
+  const items = [];
+  for (const e of data.events) {
+    if (voided.has(e.id)) continue;
+    const flags = new Set(parseFlags(e.flags));
+    if (e.kind === "IN" && !paired.has(e.id) && nowMs - Date.parse(e.recorded_at) > attendanceRules.sessionHours * 36e5) flags.add("TANPA_PULANG");
+    if (leave.has(`${e.employee_id}\0${e.work_date}`)) flags.add("SAAT_CUTI");
+    if (references.has(e.employee_id)) flags.delete("TANPA_FOTO_ACUAN");
+    if (!flags.size) continue;
+    const review = reviews.get(e.id), person = scope.byId.get(e.employee_id);
+    items.push({
+      ...eventView(e, owners),
+      flags: [...flags],
+      employee: view(person),
+      has_reference: references.has(e.employee_id),
+      can_review: writeAccess(scope, e.employee_id).allowed,
+      review: review ? {
+        decision: review.decision,
+        note: review.note || "",
+        reviewed_at: review.reviewed_at,
+        reviewer: review.reviewer || ""
+      } : null
+    });
+  }
+  items.sort((a, b) => b.recorded_at.localeCompare(a.recorded_at));
+  const latest = /* @__PURE__ */ new Map();
+  for (const e of data.events) if (e.photo_storage_key && !voided.has(e.id) && !references.has(e.employee_id)) latest.set(e.employee_id, e);
+  const missing = [...latest.values()].map((e) => ({
+    employee: view(scope.byId.get(e.employee_id)),
+    event_id: e.id,
+    recorded_at: e.recorded_at,
+    can_set: writeAccess(scope, e.employee_id).allowed
+  })).sort((a, b) => a.employee.name.localeCompare(b.employee.name, "id"));
+  return {
+    items,
+    missing_reference: missing
+  };
+}
+async function attendanceRoutes({ db, user, p, method, body: b = {}, url }, deps = localDeps) {
+  if (p[0] !== "attendance") return void 0;
+  const { has: has2, can: can2, audit: audit2 } = deps;
+  assert(!user.must_change_password, "Anda wajib mengganti password sementara terlebih dahulu.", 428);
+  const nowMs = Date.now();
+  if (p[1] === "overview" && p.length === 2 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    const canDevices = await has2(db, user, "hr.attendance.devices"), canSettings = await can2(db, user, "hr.attendance.settings", {});
+    const state = await one(db, "SELECT last_retention_at,last_error,deleted_photos FROM attendance_state WHERE id=1");
+    return {
+      today: today(),
+      self: Boolean(user.employee_id && scope.byId.has(user.employee_id)),
+      employee_id: user.employee_id || null,
+      subordinates: scope.subordinates.size,
+      readable: scope.readable.size,
+      read_scope: scope.hasRead,
+      manage: scope.hasManage || scope.direct.size > 0,
+      devices: canDevices,
+      settings: canSettings,
+      points_ready: Number((await one(db, "SELECT count(*) n FROM attendance_points WHERE is_active=1"))?.n || 0) > 0,
+      units: await units(db),
+      retention: canSettings ? {
+        last_run_at: state?.last_retention_at || null,
+        last_error: state?.last_error || null,
+        deleted_photos: Number(state?.deleted_photos || 0)
+      } : null
+    };
+  }
+  if (p[1] === "today" && p.length === 2 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    const day = today(), ids = await filterUnit(db, scope, url), data = await loadRange(db, day, day, ids), owners = await ownerNames(db, data.events);
+    const rows = [];
+    for (const id of ids) {
+      const person = scope.byId.get(id);
+      if (!person?.is_active) continue;
+      const events = data.events.filter((e) => e.employee_id === id), result = dayStatus({
+        events,
+        corrections: data.corrections.filter((c) => c.employee_id === id),
+        note: data.notes.find((n) => n.employee_id === id) || null,
+        leave: data.leaveDays.find((l) => l.employee_id === id) || null,
+        nowMs
+      });
+      const last = events.at(-1);
+      rows.push({
+        employee: view(person),
+        ...result,
+        last_event: last ? eventView(last, owners) : null,
+        can_manage: writeAccess(scope, id).allowed,
+        self: id === user.employee_id
+      });
+    }
+    rows.sort((a, b2) => a.employee.name.localeCompare(b2.employee.name, "id"));
+    return {
+      date: day,
+      rows
+    };
+  }
+  if (p[1] === "recap" && p.length === 2 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    const r = range(url), ids = await filterUnit(db, scope, url), data = await loadRange(db, r.from, r.to, ids);
+    const withEvents = new Set(data.events.map((x) => x.employee_id));
+    const people = [...ids].map((id) => scope.byId.get(id)).filter((e) => e && (e.is_active || withEvents.has(e.id)));
+    const recap = buildRecap({
+      employees: people,
+      ...data,
+      from: r.from,
+      to: r.to,
+      nowMs
+    });
+    const detail = url?.searchParams.get("detail") === "1";
+    return {
+      from: r.from,
+      to: r.to,
+      employees: recap.map((x) => ({
+        employee: view(scope.byId.get(x.employee_id)),
+        summary: x.summary,
+        can_manage: writeAccess(scope, x.employee_id).allowed,
+        ...detail ? {
+          days: x.days
+        } : {}
+      })).sort((a, b2) => a.employee.name.localeCompare(b2.employee.name, "id"))
+    };
+  }
+  if (p[1] === "recap" && p.length === 3 && method === "GET") {
+    const scope = await scopeOf(db, user, deps), id = p[2];
+    assert(scope.readable.has(id), "Akses data absen pegawai ini ditolak.", 403);
+    const r = range(url), person = scope.byId.get(id), data = await loadRange(db, r.from, r.to, /* @__PURE__ */ new Set([id])), owners = await ownerNames(db, data.events);
+    const [recap] = buildRecap({
+      employees: [person],
+      ...data,
+      from: r.from,
+      to: r.to,
+      nowMs
+    });
+    const access = writeAccess(scope, id), names = /* @__PURE__ */ new Map();
+    for (const uid2 of new Set([...data.corrections, ...data.notes].map((x) => x.created_by))) names.set(uid2, (await one(db, "SELECT username FROM users WHERE id=?", uid2))?.username || "");
+    const reference = await one(db, "SELECT event_id,set_at FROM attendance_reference_photos WHERE employee_id=?", id);
+    return {
+      employee: view(person),
+      from: r.from,
+      to: r.to,
+      days: recap.days,
+      summary: recap.summary,
+      events: data.events.map((e) => eventView(e, owners)),
+      corrections: data.corrections.map((c) => ({
+        id: c.id,
+        work_date: c.work_date,
+        in_at: c.in_at,
+        out_at: c.out_at,
+        void_event_id: c.void_event_id,
+        reason: c.reason,
+        created_at: c.created_at,
+        created_by: names.get(c.created_by) || "",
+        row_version: c.row_version
+      })),
+      notes: data.notes.map((n) => ({
+        id: n.id,
+        work_date: n.work_date,
+        kind: n.kind,
+        note: n.note || "",
+        created_at: n.created_at,
+        created_by: names.get(n.created_by) || "",
+        row_version: n.row_version
+      })),
+      reference: reference ? {
+        event_id: reference.event_id,
+        set_at: reference.set_at
+      } : null,
+      can_manage: access.allowed,
+      manager: access.manager,
+      correction_from: access.manager ? null : shiftDay(today(), -attendanceRules.correctionDays)
+    };
+  }
+  if (p[1] === "review" && p.length === 2 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    const r = range(url, {
+      maxDays: attendanceRules.reviewDays,
+      defaultFrom: shiftDay(today(), -13)
+    });
+    const status = url?.searchParams.get("status") || "open";
+    assert(["open", "all"].includes(status), "Saringan tidak valid.");
+    const result = await reviewItems(db, scope, r.from, r.to, nowMs);
+    return {
+      from: r.from,
+      to: r.to,
+      items: status === "open" ? result.items.filter((i) => !i.review) : result.items,
+      missing_reference: result.missing_reference
+    };
+  }
+  if (p[1] === "photos" && p.length === 3 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    return await photoOf(db, user, deps, await one(db, "SELECT * FROM attendance_events WHERE id=?", p[2]), scope, "event");
+  }
+  if (p[1] === "references" && p.length === 3 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    assert(scope.readable.has(p[2]), "Akses foto ditolak.", 403);
+    const ref = await one(db, "SELECT event_id FROM attendance_reference_photos WHERE employee_id=?", p[2]);
+    assert(ref, "Pegawai ini belum punya foto acuan.", 404);
+    return await photoOf(db, user, deps, await one(db, "SELECT * FROM attendance_events WHERE id=?", ref.event_id), scope, "reference");
+  }
+  if (p[1] === "references" && p.length === 2 && method === "POST") {
+    const event = await one(db, "SELECT * FROM attendance_events WHERE id=?", typeof b.event_id === "string" ? b.event_id : "");
+    assert(event && event.employee_id === b.employee_id, "Selfie tidak sesuai dengan pegawai.", 422);
+    await targetAccess(db, user, deps, event.employee_id);
+    assert(event.photo_storage_key, "Selfie ini sudah dihapus. Pilih selfie lain.", 409);
+    return await tx(db, async () => {
+      const old = await one(db, "SELECT * FROM attendance_reference_photos WHERE employee_id=?", event.employee_id);
+      const row = old ? await update(db, "attendance_reference_photos", old.id, old.row_version, {
+        event_id: event.id,
+        set_by: user.id,
+        set_at: now()
+      }) : await insert(db, "attendance_reference_photos", {
+        employee_id: event.employee_id,
+        event_id: event.id,
+        set_by: user.id,
+        set_at: now()
+      });
+      await audit2(db, user, old ? "REPLACE_REFERENCE" : "SET_REFERENCE", "attendance_reference_photos", row.id, {
+        employee_id: event.employee_id,
+        event_id: event.id
+      });
+      return {
+        employee_id: row.employee_id,
+        event_id: row.event_id,
+        set_at: row.set_at
+      };
+    });
+  }
+  if (p[1] === "reviews" && p.length === 2 && method === "POST") {
+    const event = await one(db, "SELECT * FROM attendance_events WHERE id=?", typeof b.event_id === "string" ? b.event_id : "");
+    assert(event, "Absen tidak ditemukan.", 404);
+    await targetAccess(db, user, deps, event.employee_id, "Hanya atasan langsung atau Pengelola Absensi yang dapat menilai absen ini.");
+    assert(["SESUAI", "KLARIFIKASI"].includes(b.decision), "Pilih Sesuai atau Perlu klarifikasi.");
+    const note = typeof b.note === "string" ? b.note.trim().slice(0, 500) : "";
+    assert(b.decision !== "KLARIFIKASI" || note.length >= 3, "Tuliskan hal yang perlu diklarifikasi.");
+    return await tx(db, async () => {
+      const old = await one(db, "SELECT * FROM attendance_reviews WHERE event_id=?", event.id);
+      const values = {
+        decision: b.decision,
+        note: note || null,
+        reviewed_by: user.id,
+        reviewed_at: now()
+      };
+      const row = old ? await update(db, "attendance_reviews", old.id, old.row_version, values) : await insert(db, "attendance_reviews", {
+        event_id: event.id,
+        ...values
+      });
+      await audit2(db, user, "REVIEW", "attendance_events", event.id, {
+        decision: b.decision
+      });
+      return {
+        event_id: event.id,
+        decision: row.decision,
+        note: row.note || "",
+        reviewed_at: row.reviewed_at
+      };
+    });
+  }
+  if (p[1] === "notes" && p.length === 2 && method === "POST") {
+    await targetAccess(db, user, deps, b.employee_id);
+    const day = workDate(b.work_date);
+    assert(day <= shiftDay(today(), 31), "Keterangan paling jauh 31 hari ke depan.");
+    assert(["IZIN", "SAKIT", "DINAS_LUAR"].includes(b.kind), "Pilih Izin, Sakit, atau Dinas luar.");
+    const note = typeof b.note === "string" ? b.note.trim().slice(0, 500) : "";
+    return await tx(db, async () => {
+      assert(!await one(db, "SELECT id FROM attendance_day_notes WHERE employee_id=? AND work_date=? AND revoked_at IS NULL", b.employee_id, day), "Tanggal ini sudah punya keterangan. Cabut dulu bila ingin mengganti.", 409);
+      const row = await insert(db, "attendance_day_notes", {
+        employee_id: b.employee_id,
+        work_date: day,
+        kind: b.kind,
+        note: note || null,
+        created_by: user.id
+      });
+      await audit2(db, user, "CREATE", "attendance_day_notes", row.id, {
+        employee_id: b.employee_id,
+        work_date: day,
+        kind: b.kind
+      });
+      return {
+        id: row.id,
+        work_date: row.work_date,
+        kind: row.kind,
+        note: row.note || "",
+        row_version: row.row_version
+      };
+    });
+  }
+  if (p[1] === "notes" && p.length === 4 && p[3] === "revoke" && method === "POST") {
+    const row = await one(db, "SELECT * FROM attendance_day_notes WHERE id=?", p[2]);
+    assert(row && !row.revoked_at, "Keterangan tidak ditemukan.", 404);
+    await targetAccess(db, user, deps, row.employee_id);
+    return await tx(db, async () => {
+      const next = await update(db, "attendance_day_notes", row.id, b.row_version, {
+        revoked_at: now(),
+        revoked_by: user.id
+      });
+      await audit2(db, user, "REVOKE", "attendance_day_notes", row.id, {
+        employee_id: row.employee_id,
+        work_date: row.work_date
+      });
+      return {
+        id: next.id,
+        revoked: true
+      };
+    });
+  }
+  if (p[1] === "corrections" && p.length === 2 && method === "POST") {
+    const access = await targetAccess(db, user, deps, b.employee_id);
+    const day = workDate(b.work_date);
+    assert(day <= today(), "Koreksi hanya untuk tanggal yang sudah lewat atau hari ini.");
+    if (!access.manager) assert(day >= shiftDay(today(), -attendanceRules.correctionDays), `Atasan dapat mengoreksi paling lambat ${attendanceRules.correctionDays} hari setelah tanggal kerja. Setelah itu hubungi Pengelola Absensi.`, 403);
+    const reason = typeof b.reason === "string" ? b.reason.trim() : "";
+    assert(reason.length >= 3 && reason.length <= 500, "Alasan koreksi wajib diisi (3\u2013500 karakter).");
+    const inAt = b.in_at ? instant(b.in_at) : null, outAt = b.out_at ? instant(b.out_at) : null;
+    if (inAt) assert(witaDate(Date.parse(inAt)) === day, "Jam masuk harus pada tanggal kerja yang sama.");
+    if (outAt) assert([day, shiftDay(day, 1)].includes(witaDate(Date.parse(outAt))), "Jam pulang harus pada tanggal kerja atau sehari sesudahnya.");
+    assert(!inAt || !outAt || inAt < outAt, "Jam pulang harus sesudah jam masuk.");
+    assert(!inAt || Date.parse(inAt) <= nowMs + 5 * 6e4, "Jam masuk belum terjadi.");
+    assert(!outAt || Date.parse(outAt) <= nowMs + 5 * 6e4, "Jam pulang belum terjadi.");
+    let voidId = null;
+    if (b.void_event_id) {
+      const event = await one(db, "SELECT * FROM attendance_events WHERE id=?", String(b.void_event_id));
+      assert(event && event.employee_id === b.employee_id && event.work_date === day, "Absen yang disisihkan harus milik pegawai ini pada tanggal yang sama.", 422);
+      voidId = event.id;
+    }
+    assert(inAt || outAt || voidId, "Isi jam masuk, jam pulang, atau pilih absen yang disisihkan.");
+    return await tx(db, async () => {
+      if (voidId) assert(!await one(db, "SELECT id FROM attendance_corrections WHERE void_event_id=? AND revoked_at IS NULL", voidId), "Absen ini sudah disisihkan.", 409);
+      const row = await insert(db, "attendance_corrections", {
+        employee_id: b.employee_id,
+        work_date: day,
+        in_at: inAt,
+        out_at: outAt,
+        void_event_id: voidId,
+        reason,
+        created_by: user.id
+      });
+      await audit2(db, user, "CREATE", "attendance_corrections", row.id, {
+        employee_id: b.employee_id,
+        work_date: day,
+        in_at: inAt,
+        out_at: outAt,
+        void_event_id: voidId
+      }, reason);
+      return {
+        id: row.id,
+        work_date: row.work_date,
+        row_version: row.row_version
+      };
+    });
+  }
+  if (p[1] === "corrections" && p.length === 4 && p[3] === "revoke" && method === "POST") {
+    const row = await one(db, "SELECT * FROM attendance_corrections WHERE id=?", p[2]);
+    assert(row && !row.revoked_at, "Koreksi tidak ditemukan.", 404);
+    const access = await targetAccess(db, user, deps, row.employee_id);
+    if (!access.manager) assert(row.work_date >= shiftDay(today(), -attendanceRules.correctionDays), "Koreksi lama hanya dapat dicabut Pengelola Absensi.", 403);
+    return await tx(db, async () => {
+      const next = await update(db, "attendance_corrections", row.id, b.row_version, {
+        revoked_at: now(),
+        revoked_by: user.id
+      });
+      await audit2(db, user, "REVOKE", "attendance_corrections", row.id, {
+        employee_id: row.employee_id,
+        work_date: row.work_date
+      });
+      return {
+        id: next.id,
+        revoked: true
+      };
+    });
+  }
+  if (p[1] === "exports" && p.length === 2 && method === "POST") {
+    assert(["recap", "detail"].includes(b.kind), "Jenis ekspor tidak valid.");
+    const from = date(b.from, "Tanggal mulai"), to = date(b.to, "Tanggal akhir");
+    assert(from <= to, "Rentang tanggal tidak valid.");
+    const rows = Number(b.rows);
+    assert(Number.isInteger(rows) && rows >= 0 && rows <= 2e5, "Jumlah baris tidak valid.");
+    const allowed = Boolean(user.employee_id) || await has2(db, user, "hr.attendance.read") || await has2(db, user, "hr.attendance.manage");
+    assert(allowed, "Akses ekspor absensi ditolak.", 403);
+    return await tx(db, async () => {
+      await audit2(db, user, "EXPORT", "attendance_" + b.kind, `${from}..${to}`, {
+        row_count: rows
+      });
+      return {
+        ok: true
+      };
+    });
+  }
+  if (p[1] === "points") {
+    const manage = await can2(db, user, "hr.attendance.settings", {});
+    if (p.length === 2 && method === "GET") {
+      assert(manage || await has2(db, user, "hr.attendance.devices") || await has2(db, user, "hr.attendance.read") || await has2(db, user, "hr.attendance.manage"), "Akses titik absen ditolak.", 403);
+      return {
+        points: (await all(db, "SELECT * FROM attendance_points ORDER BY is_active DESC,name,id")).map(pointView),
+        can_manage: manage
+      };
+    }
+    assert(manage, "Hanya Pengelola Absensi (cakupan seluruh organisasi) yang dapat mengubah titik absen.", 403);
+    if (p.length === 2 && method === "POST") return await tx(db, async () => {
+      const row = await insert(db, "attendance_points", {
+        ...validatePoint(b),
+        created_by: user.id
+      });
+      await audit2(db, user, "CREATE", "attendance_points", row.id, {
+        name: row.name,
+        radius_m: row.radius_m
+      });
+      return pointView(row);
+    });
+    if (p.length === 3 && method === "PATCH") {
+      const old = await one(db, "SELECT * FROM attendance_points WHERE id=?", p[2]);
+      assert(old, "Titik tidak ditemukan.", 404);
+      return await tx(db, async () => {
+        const row = await update(db, "attendance_points", old.id, b.row_version, validatePoint(b, old));
+        await audit2(db, user, "UPDATE", "attendance_points", row.id, {
+          name: row.name,
+          radius_m: row.radius_m,
+          is_active: row.is_active
+        });
+        return pointView(row);
+      });
+    }
+  }
+  if (["devices", "sessions", "people"].includes(p[1])) {
+    assert(await has2(db, user, "hr.attendance.devices"), "Akses pendaftaran HP absen ditolak.", 403);
+    if (p[1] === "people" && p.length === 2 && method === "GET") {
+      const list = [], everyone = await can2(db, user, "hr.attendance.devices", {});
+      for (const e of await directory(db)) if (e.is_active && (everyone || await can2(db, user, "hr.attendance.devices", {
+        employee_id: e.id,
+        org_unit_id: e.org_unit_id
+      }))) list.push(view(e));
+      return {
+        people: list
+      };
+    }
+    if (p[1] === "devices" && p.length === 2 && method === "GET") {
+      const since = new Date(nowMs - 7 * DAY2).toISOString(), byId = new Map((await directory(db)).map((e) => [e.id, e]));
+      const stats = new Map((await all(db, "SELECT device_id,count(*) events,count(DISTINCT employee_id) people,max(recorded_at) last FROM attendance_events WHERE recorded_at>=? GROUP BY device_id", since)).map((r) => [r.device_id, {
+        events: Number(r.events),
+        people: Number(r.people),
+        last: r.last
+      }]));
+      const devices = [];
+      for (const d of await all(db, "SELECT * FROM attendance_devices WHERE session_id IS NULL OR status<>'PENDING' ORDER BY created_at DESC")) if (await deviceScope(db, user, deps, d, byId)) devices.push(await deviceRow(db, d, stats));
+      const sessions = [];
+      for (const s of await all(db, "SELECT * FROM attendance_registration_sessions WHERE closed_at IS NULL AND expires_at>? ORDER BY created_at DESC", now())) if (await can2(db, user, "hr.attendance.devices", {
+        org_unit_id: s.org_unit_id
+      })) sessions.push(await sessionView(db, s));
+      return {
+        devices,
+        sessions,
+        units: await units(db)
+      };
+    }
+    if (p[1] === "devices" && p.length === 2 && method === "POST") {
+      assert(["PERSONAL", "SHARED"].includes(b.kind), "Pilih HP pribadi atau HP bersama.");
+      let values;
+      if (b.kind === "PERSONAL") {
+        const [owner] = typeof b.owner_employee_id === "string" ? await directory(db, b.owner_employee_id) : [];
+        assert(owner && owner.is_active, "Pilih pemilik HP dari pegawai aktif.", 422);
+        assert(await can2(db, user, "hr.attendance.devices", {
+          employee_id: owner.id,
+          org_unit_id: owner.org_unit_id
+        }), "Pegawai ini di luar cakupan unit Anda.", 403);
+        values = {
+          kind: "PERSONAL",
+          owner_employee_id: owner.id,
+          org_unit_id: null,
+          label: null
+        };
+      } else {
+        const unit = await one(db, "SELECT id FROM org_units WHERE id=? AND is_active=1", typeof b.org_unit_id === "string" ? b.org_unit_id : "");
+        assert(unit, "Pilih unit HP bersama.", 422);
+        assert(await can2(db, user, "hr.attendance.devices", {
+          org_unit_id: unit.id
+        }), "Unit ini di luar cakupan Anda.", 403);
+        const label = typeof b.label === "string" ? b.label.trim().replace(/\s+/g, " ") : "";
+        assert(label.length >= 3 && label.length <= 80, 'Beri label HP bersama, misalnya "HP Koordinator Pos 3".');
+        values = {
+          kind: "SHARED",
+          owner_employee_id: null,
+          org_unit_id: unit.id,
+          label
+        };
+      }
+      const { token, hash } = tokenPair(), expires = new Date(nowMs + attendanceRules.registrationDays * DAY2).toISOString();
+      return await tx(db, async () => {
+        const row = await insert(db, "attendance_devices", {
+          ...values,
+          status: "PENDING",
+          registration_token_hash: hash,
+          registration_expires_at: expires,
+          created_by: user.id
+        });
+        await audit2(db, user, "CREATE", "attendance_devices", row.id, {
+          kind: row.kind,
+          owner_employee_id: row.owner_employee_id,
+          org_unit_id: row.org_unit_id
+        });
+        return {
+          device: await deviceRow(db, row, /* @__PURE__ */ new Map()),
+          token,
+          expires_at: expires,
+          phone: await ownerPhone(db, row)
+        };
+      });
+    }
+    if (p[1] === "devices" && p.length === 4 && method === "POST") {
+      const d = await one(db, "SELECT * FROM attendance_devices WHERE id=?", p[2]);
+      assert(d, "HP tidak ditemukan.", 404);
+      assert(await deviceScope(db, user, deps, d), "HP ini di luar cakupan unit Anda.", 403);
+      assert(b.row_version === d.row_version, "Data HP sudah berubah. Muat ulang halaman HP Absen.", 409);
+      if (p[3] === "link") {
+        assert(d.status === "PENDING" && !d.public_key && !d.session_id, "Tautan baru hanya untuk HP yang belum mendaftar.", 409);
+        const { token, hash } = tokenPair(), expires = new Date(nowMs + attendanceRules.registrationDays * DAY2).toISOString();
+        return await tx(db, async () => {
+          const row = await update(db, "attendance_devices", d.id, d.row_version, {
+            registration_token_hash: hash,
+            registration_expires_at: expires
+          });
+          await audit2(db, user, "ROTATE_LINK", "attendance_devices", d.id);
+          return {
+            device: await deviceRow(db, row, /* @__PURE__ */ new Map()),
+            token,
+            expires_at: expires,
+            phone: await ownerPhone(db, row)
+          };
+        });
+      }
+      if (p[3] === "approve" || p[3] === "reject") {
+        assert(d.status === "PENDING" && d.session_id && d.public_key, "HP ini tidak sedang menunggu persetujuan.", 409);
+        const session = await one(db, "SELECT * FROM attendance_registration_sessions WHERE id=?", d.session_id);
+        if (p[3] === "approve") assert(session && !session.closed_at && session.expires_at > now(), "Sesi pendaftaran sudah berakhir. Buka sesi baru.", 409);
+        return await tx(db, async () => {
+          const row = await update(db, "attendance_devices", d.id, d.row_version, p[3] === "approve" ? {
+            status: "ACTIVE",
+            approved_by: user.id,
+            approved_at: now()
+          } : {
+            status: "REJECTED",
+            revoked_by: user.id,
+            revoked_at: now(),
+            revoke_reason: "Ditolak saat sesi pendaftaran"
+          });
+          await audit2(db, user, p[3] === "approve" ? "APPROVE" : "REJECT", "attendance_devices", d.id, {
+            session_id: d.session_id
+          });
+          return {
+            device: await deviceRow(db, row, /* @__PURE__ */ new Map())
+          };
+        });
+      }
+      if (p[3] === "revoke") {
+        assert(["PENDING", "ACTIVE"].includes(d.status), "HP ini sudah tidak aktif.", 409);
+        const reason = typeof b.reason === "string" ? b.reason.trim() : "";
+        assert(reason.length >= 3 && reason.length <= 300, "Tuliskan alasan menonaktifkan HP (misalnya HP hilang).");
+        return await tx(db, async () => {
+          const row = await update(db, "attendance_devices", d.id, d.row_version, {
+            status: "REVOKED",
+            revoked_by: user.id,
+            revoked_at: now(),
+            revoke_reason: reason,
+            registration_token_hash: null
+          });
+          await audit2(db, user, "REVOKE", "attendance_devices", d.id, {}, reason);
+          return {
+            device: await deviceRow(db, row, /* @__PURE__ */ new Map())
+          };
+        });
+      }
+    }
+    if (p[1] === "sessions" && p.length === 2 && method === "POST") {
+      const unit = await one(db, "SELECT id FROM org_units WHERE id=? AND is_active=1", typeof b.org_unit_id === "string" ? b.org_unit_id : "");
+      assert(unit, "Pilih unit untuk sesi pendaftaran.", 422);
+      assert(await can2(db, user, "hr.attendance.devices", {
+        org_unit_id: unit.id
+      }), "Unit ini di luar cakupan Anda.", 403);
+      const minutes = b.minutes === void 0 ? attendanceRules.sessionMinutesMax : Number(b.minutes);
+      assert(Number.isInteger(minutes) && minutes >= 5 && minutes <= attendanceRules.sessionMinutesMax, `Lama sesi 5\u2013${attendanceRules.sessionMinutesMax} menit.`);
+      const { token, hash } = tokenPair();
+      return await tx(db, async () => {
+        const row = await insert(db, "attendance_registration_sessions", {
+          org_unit_id: unit.id,
+          token_hash: hash,
+          expires_at: new Date(nowMs + minutes * 6e4).toISOString(),
+          created_by: user.id
+        });
+        await audit2(db, user, "OPEN_SESSION", "attendance_registration_sessions", row.id, {
+          org_unit_id: unit.id,
+          minutes
+        });
+        return {
+          session: await sessionView(db, row),
+          token
+        };
+      });
+    }
+    if (p[1] === "sessions" && p.length >= 3) {
+      const s = await one(db, "SELECT * FROM attendance_registration_sessions WHERE id=?", p[2]);
+      assert(s, "Sesi tidak ditemukan.", 404);
+      assert(await can2(db, user, "hr.attendance.devices", {
+        org_unit_id: s.org_unit_id
+      }), "Sesi ini di luar cakupan Anda.", 403);
+      if (p.length === 3 && method === "GET") return {
+        session: await sessionView(db, s)
+      };
+      if (p.length === 4 && p[3] === "close" && method === "POST") {
+        assert(!s.closed_at, "Sesi sudah ditutup.", 409);
+        return await tx(db, async () => {
+          const row = await update(db, "attendance_registration_sessions", s.id, b.row_version, {
+            closed_at: now(),
+            closed_by: user.id
+          });
+          const rejected = (await run(db, "UPDATE attendance_devices SET status='REJECTED',revoked_by=?,revoked_at=?,revoke_reason=?,updated_at=?,row_version=row_version+1 WHERE session_id=? AND status='PENDING'", user.id, now(), "Sesi ditutup sebelum disetujui", now(), s.id)).changes;
+          await audit2(db, user, "CLOSE_SESSION", "attendance_registration_sessions", s.id, {
+            rejected
+          });
+          return {
+            session: await sessionView(db, row)
+          };
+        });
+      }
+    }
+  }
+  assert(false, "Alamat API tidak ditemukan.", 404);
+}
+  return { attendanceRoutes: attendanceRoutes };
+})();
+// Galat dari modul Absensi memakai kelas AppError salinannya sendiri; diubah ke
+// AppError snapshot supaya status 403/404/409/422 tidak berubah menjadi 503.
+function adoptAttendanceError(error) {
+  if (!(error instanceof AppError) && error instanceof Error && Number.isInteger(error.status) && error.status >= 400 && error.status < 600) throw new AppError(error.status, error.message, error.details);
+  throw error;
+}
 async function routeOperation({ db, user, path, method, body = {}, query = "" }) {
   assert(typeof path === "string" && /^[a-z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path) && path.length <= 512, "Alamat API tidak valid.", 404);
   assert(["GET", "POST", "PATCH", "DELETE"].includes(method), "Metode tidak diizinkan.", 405);
@@ -7595,6 +8935,7 @@ async function routeOperation({ db, user, path, method, body = {}, query = "" })
   await guardLeaveRoleChanges({ db, user, p, method, body }, assert);
   if (p[0] === "leaves") return leaveRoutes({ db, user, p, method, body, url }, { assert, can, has, audit, today });
   if (p[0] === "visits") return __visits.visitRoutes({ db, user, p, method, body, url }, { has, audit }).catch(adoptVisitError);
+  if (p[0] === "attendance") return __attendance.attendanceRoutes({ db, user, p, method, body, url }, { has, can, audit, readPhoto: (key) => db.storage.get(key) }).catch(adoptAttendanceError);
   if (path === "dashboard" && method === "GET") return dashboard(db, user, url.searchParams.get("module") || "hr", url.searchParams.get("as_of") || void 0);
   if (path === "lookups" && method === "GET") return lookups(db, user, url.searchParams.get("purpose") || "employees", url.searchParams.get("session_id"));
   if (p[0] === "exports" && method === "GET") {
