@@ -56,7 +56,7 @@ Dashboard dan Laporan bisa dibuka untuk **rentang tanggal mana pun** — juga mi
 | Edge publik | `supabase/functions/guide-form/index.ts` → `supabase/deploy/guide-form/index.ts` (`scripts/build-guide-form.mjs`) | Batas frekuensi, token → tautan aktif, aturan terima di bawah kunci khusus modul, salinan di latar belakang. Tanpa kunci global portal. |
 | Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap dan peringkat (aturan `05_Ringkasan.gs` dan `08_Peringkat.gs`), rekap per hari untuk rentang bebas, migrasi awal NilaiGuide. |
 | Salinan & retensi | `lib/visit-sheets.mjs` | Google Sheets/Drive lewat OAuth yang sama dengan unggah berkas (`GOOGLE_DRIVE_*`), lease, tulis posisional, verifikasi, pelipatan bulanan, pemeriksaan koneksi. |
-| Rute pengelolaan | `lib/visits.mjs` → `_shared/portal/*.mjs`, disuntikkan ke snapshot `portal-api` oleh `scripts/build-visits-deploy.mjs` | Rute basis data di `routeOperation`; `visits/sheet/sync` dan `visits/sheet/check` dicegat sebelum transaksi permintaan. |
+| Rute pengelolaan | `lib/visits.mjs` → `_shared/portal/*.mjs`, disuntikkan ke snapshot `portal-api` oleh `scripts/build-visits-deploy.mjs` (snapshot sebelum Kunjungan) atau diperbarui oleh `scripts/build-visits-update.mjs` (snapshot yang sudah memuat Kunjungan, misalnya setelah Absensi) | Rute basis data di `routeOperation`; `visits/sheet/sync` dan `visits/sheet/check` dicegat sebelum transaksi permintaan. |
 | Formulir pos | `lib/guide-form.mjs` | Pemeriksaan bentuk, batas 60 `context` dan 300 penilaian per 10 menit per tautan dan per IP, catatan kiriman tanpa isi nilai (90 hari). |
 | Ruang kerja | `public/visits.js`, `public/visit-import.js` (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Tautan Pos + Salinan spreadsheet, Laporan & Ekspor (+ kartu Migrasi awal NilaiGuide). |
 | Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `…/20261104120000_visit_daily_totals_history.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_daily_totals`, `visit_history_import`, `visit_history_ids`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
@@ -134,12 +134,16 @@ Rollback: HP kembali ke aplikasi lama (masih tayang dan tidak berubah) dan tauta
 
 Harus selesai **sebelum ±16 Desember 2026** (pelipatan pertama). Urutan:
 
+Diperbarui 11 November 2026 di atas master `b739829` (Absensi PR #31): `portal-api` dibangun ulang dari snapshot yang memuat Absensi, jadi Absensi, Cuti khusus, dan tambalan lain tetap utuh.
+
 1. SQL Editor: `20261104120000_visit_daily_totals_history.sql`. Bila muncul *"visit_monthly_totals sudah terisi"*, berhenti dan laporkan — jangan dipaksa.
-2. Edge Function `guide-form`: deploy `supabase/deploy/guide-form/index.ts` (pelipatan berjalan dari fungsi ini).
-3. Edge Function `portal-api`: pastikan SHA-256 versi aktif `8ad551a8e95663b17d245be8864512dd50a2b7467ccb05d1f997cdfddd95355a` (PR #19), lalu deploy `supabase/deploy/portal-api/index.ts`. Bila berbeda, unduh versi aktif lalu jalankan `node scripts/build-visits-deploy.mjs` dari snapshot sebelum modul Kunjungan (lihat langkah 5 di atas).
+2. Edge Function `guide-form`: deploy `supabase/deploy/guide-form/index.ts` (SHA-256 `a2b43df876ed6f0de6c023ecad5085b0091966a42366629211f5e46ea957142b`; pelipatan berjalan dari fungsi ini).
+3. Edge Function `portal-api`: unduh versi aktif, simpan salinannya sebagai titik kembali, lalu hitung SHA-256-nya.
+   - Bila sama dengan `d3c7448447f92bafc0e93b107c93d9d657166e947fefde32f8755876a50f98b1` (master `b739829`, Absensi), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `7a301b848978a6052c803e13ddf2fc2da1b36d7d773281ddf6d32345e10833b7`).
+   - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya. Skrip ini hanya mengganti lingkup `__visits` dan impor `__visits_*`; isi snapshot lain tidak berubah. Skrip menolak sendiri bila hash tidak cocok atau snapshot belum memuat modul Kunjungan.
 4. Merge PR: Pages menayangkan kartu Migrasi awal.
 
-Rollback: `portal-api` dan `guide-form` → versi sebelumnya (keduanya tetap mengisi/membaca `visit_monthly_totals`), Pages → deployment sebelumnya. Tabel baru dibiarkan. Migrasi awal yang sudah diterapkan bisa dibatalkan dari kartunya kapan pun sebelum rollback.
+Rollback: `portal-api` → salinan versi aktif yang disimpan di langkah 3 (`d3c7448…98b1`), `guide-form` → versi sebelumnya (`632ca9b2…`; keduanya tetap mengisi/membaca `visit_monthly_totals`), Pages → deployment sebelumnya. Tabel baru dibiarkan. Migrasi awal yang sudah diterapkan bisa dibatalkan dari kartunya kapan pun sebelum rollback.
 
 ## Keputusan yang dipakai
 

@@ -42,7 +42,7 @@ export async function publicLeaveForm(db,action,body,requestId){
  // Neither pathway impersonates an authenticated account. Direct supervisors must verify identity.
  const user={id:null,employee_id:link.employee_id,must_change_password:0,request_id:requestId};
  const ctx={db,user,p:['leaves',...(action==='preview'?['preview']:[])],method:action==='context'?'GET':'POST',
-  body:{dates:body.dates,reason:body.reason,client_key:body.client_key},url:new URL('https://internal.invalid/leaves')};
+  body:{dates:body.dates,reason:body.reason,client_key:body.client_key,leave_type:body.leave_type},url:new URL('https://internal.invalid/leaves')};
  const result=await leaveRoutes(ctx,{assert,can:async()=>false,has:async()=>false,audit,today,formLink:link});
  if(action==='context'){
   assert(result.me?.eligible,'THL atau pegawai nonaktif tidak memperoleh cuti tahunan.',403);

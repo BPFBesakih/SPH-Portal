@@ -379,3 +379,76 @@ CREATE TABLE IF NOT EXISTS visit_history_import (
 CREATE TABLE IF NOT EXISTS visit_history_ids (
  id TEXT PRIMARY KEY CHECK(length(id)=36), import_id TEXT NOT NULL REFERENCES visit_history_import(id));
 CREATE INDEX IF NOT EXISTS visit_history_ids_import ON visit_history_ids(import_id);
+-- Absensi (tahap 1): HP terdaftar, absen GPS + selfie, koreksi sebagai baris baru.
+CREATE TABLE IF NOT EXISTS attendance_points (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80),
+ latitude REAL NOT NULL CHECK(latitude BETWEEN -90 AND 90), longitude REAL NOT NULL CHECK(longitude BETWEEN -180 AND 180),
+ radius_m INTEGER NOT NULL DEFAULT 100 CHECK(radius_m BETWEEN 20 AND 1000), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS attendance_registration_sessions (
+ id TEXT PRIMARY KEY, org_unit_id TEXT NOT NULL REFERENCES org_units(id), token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash)=64),
+ expires_at TEXT NOT NULL, closed_at TEXT, closed_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS attendance_devices (
+ id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN('PERSONAL','SHARED')),
+ owner_employee_id TEXT REFERENCES employees(id), org_unit_id TEXT REFERENCES org_units(id), label TEXT CHECK(label IS NULL OR length(label) BETWEEN 1 AND 80),
+ status TEXT NOT NULL CHECK(status IN('PENDING','ACTIVE','REJECTED','REVOKED')),
+ registration_token_hash TEXT UNIQUE CHECK(registration_token_hash IS NULL OR length(registration_token_hash)=64), registration_expires_at TEXT,
+ session_id TEXT REFERENCES attendance_registration_sessions(id),
+ public_key TEXT CHECK(public_key IS NULL OR length(public_key)<=400), key_thumbprint TEXT UNIQUE CHECK(key_thumbprint IS NULL OR length(key_thumbprint)=64),
+ activated_at TEXT, approved_by TEXT REFERENCES users(id), approved_at TEXT,
+ revoked_by TEXT REFERENCES users(id), revoked_at TEXT, revoke_reason TEXT CHECK(revoke_reason IS NULL OR length(revoke_reason)<=300),
+ last_seen_at TEXT, client_info TEXT CHECK(client_info IS NULL OR length(client_info)<=200),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id),
+ CHECK(kind<>'PERSONAL' OR owner_employee_id IS NOT NULL), CHECK(kind<>'SHARED' OR (org_unit_id IS NOT NULL AND label IS NOT NULL)),
+ CHECK(status<>'ACTIVE' OR public_key IS NOT NULL), CHECK(session_id IS NULL OR kind='PERSONAL'));
+CREATE INDEX IF NOT EXISTS attendance_devices_owner ON attendance_devices(owner_employee_id);
+CREATE TABLE IF NOT EXISTS attendance_events (
+ id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id), kind TEXT NOT NULL CHECK(kind IN('IN','OUT')), recorded_at TEXT NOT NULL,
+ work_date TEXT NOT NULL CHECK(length(work_date)=10), pair_event_id TEXT REFERENCES attendance_events(id),
+ device_id TEXT NOT NULL REFERENCES attendance_devices(id), client_key TEXT NOT NULL CHECK(length(client_key)=36),
+ latitude REAL NOT NULL CHECK(latitude BETWEEN -90 AND 90), longitude REAL NOT NULL CHECK(longitude BETWEEN -180 AND 180),
+ accuracy_m REAL NOT NULL CHECK(accuracy_m>=0 AND accuracy_m<=100000), location_captured_at TEXT,
+ point_id TEXT REFERENCES attendance_points(id), point_name TEXT CHECK(point_name IS NULL OR length(point_name)<=80),
+ distance_m INTEGER CHECK(distance_m IS NULL OR distance_m>=0), within_point INTEGER NOT NULL CHECK(within_point IN(0,1)),
+ outside_reason TEXT CHECK(outside_reason IS NULL OR outside_reason IN('DINAS_LUAR','TUGAS_LAPANGAN','LAINNYA')), outside_note TEXT CHECK(outside_note IS NULL OR length(outside_note)<=300),
+ photo_storage_key TEXT CHECK(photo_storage_key IS NULL OR length(photo_storage_key)<=200), photo_mime TEXT NOT NULL CHECK(photo_mime='image/jpeg'),
+ photo_size INTEGER NOT NULL CHECK(photo_size BETWEEN 1 AND 307200), photo_checksum TEXT NOT NULL CHECK(length(photo_checksum)=64), photo_deleted_at TEXT,
+ flags TEXT NOT NULL DEFAULT '[]' CHECK(length(flags)<=400), confirmed_order INTEGER NOT NULL DEFAULT 0 CHECK(confirmed_order IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ UNIQUE(device_id,client_key), CHECK(pair_event_id IS NULL OR kind='OUT'),
+ CHECK(within_point=1 OR point_id IS NULL OR outside_reason IS NOT NULL), CHECK((photo_storage_key IS NULL)=(photo_deleted_at IS NOT NULL)));
+CREATE UNIQUE INDEX IF NOT EXISTS attendance_events_one_pair ON attendance_events(pair_event_id) WHERE pair_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS attendance_events_employee_time ON attendance_events(employee_id,recorded_at);
+CREATE INDEX IF NOT EXISTS attendance_events_day ON attendance_events(work_date,employee_id);
+CREATE INDEX IF NOT EXISTS attendance_events_device_time ON attendance_events(device_id,recorded_at);
+CREATE TRIGGER IF NOT EXISTS attendance_events_no_delete BEFORE DELETE ON attendance_events BEGIN SELECT RAISE(ABORT,'Catatan absen tidak boleh dihapus.'); END;
+CREATE TRIGGER IF NOT EXISTS attendance_events_no_update BEFORE UPDATE OF id,employee_id,kind,recorded_at,work_date,pair_event_id,device_id,client_key,latitude,longitude,accuracy_m,location_captured_at,point_id,point_name,distance_m,within_point,outside_reason,outside_note,photo_mime,photo_size,photo_checksum,flags,confirmed_order,created_at ON attendance_events BEGIN SELECT RAISE(ABORT,'Catatan absen tidak boleh diubah. Tambahkan koreksi.'); END;
+CREATE TRIGGER IF NOT EXISTS attendance_events_no_photo_restore BEFORE UPDATE OF photo_storage_key ON attendance_events WHEN OLD.photo_storage_key IS NULL AND NEW.photo_storage_key IS NOT NULL BEGIN SELECT RAISE(ABORT,'Catatan absen tidak boleh diubah. Tambahkan koreksi.'); END;
+CREATE TABLE IF NOT EXISTS attendance_corrections (
+ id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id), work_date TEXT NOT NULL CHECK(length(work_date)=10),
+ in_at TEXT, out_at TEXT, void_event_id TEXT REFERENCES attendance_events(id), reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 500),
+ revoked_at TEXT, revoked_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id),
+ CHECK(in_at IS NOT NULL OR out_at IS NOT NULL OR void_event_id IS NOT NULL), CHECK(in_at IS NULL OR out_at IS NULL OR in_at<out_at));
+CREATE INDEX IF NOT EXISTS attendance_corrections_day ON attendance_corrections(work_date,employee_id);
+CREATE TABLE IF NOT EXISTS attendance_day_notes (
+ id TEXT PRIMARY KEY, employee_id TEXT NOT NULL REFERENCES employees(id), work_date TEXT NOT NULL CHECK(length(work_date)=10),
+ kind TEXT NOT NULL CHECK(kind IN('IZIN','SAKIT','DINAS_LUAR')), note TEXT CHECK(note IS NULL OR length(note)<=500),
+ revoked_at TEXT, revoked_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id));
+CREATE UNIQUE INDEX IF NOT EXISTS attendance_day_notes_active ON attendance_day_notes(employee_id,work_date) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS attendance_reviews (
+ id TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE REFERENCES attendance_events(id), decision TEXT NOT NULL CHECK(decision IN('SESUAI','KLARIFIKASI')),
+ note TEXT CHECK(note IS NULL OR length(note)<=500), reviewed_by TEXT NOT NULL REFERENCES users(id), reviewed_at TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS attendance_reference_photos (
+ id TEXT PRIMARY KEY, employee_id TEXT NOT NULL UNIQUE REFERENCES employees(id), event_id TEXT NOT NULL REFERENCES attendance_events(id),
+ set_by TEXT NOT NULL REFERENCES users(id), set_at TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS attendance_rate_limits (id TEXT PRIMARY KEY, window_start TEXT NOT NULL, hits INTEGER NOT NULL CHECK(hits>0));
+CREATE TABLE IF NOT EXISTS attendance_state (
+ id INTEGER PRIMARY KEY CHECK(id=1), lease_owner TEXT, lease_until TEXT, last_retention_at TEXT,
+ last_error TEXT CHECK(last_error IS NULL OR length(last_error)<=300), deleted_photos INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+ CHECK((lease_owner IS NULL)=(lease_until IS NULL)));
+INSERT OR IGNORE INTO attendance_state(id,updated_at) VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));

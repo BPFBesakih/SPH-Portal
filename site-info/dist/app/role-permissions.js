@@ -5,7 +5,7 @@ const resourceNames={
   'hr.briefings':'Briefing Pagi (Wewarah Semeng)','hr.employees':'Data pegawai',
   'hr.organization':'Organisasi','hr.employee_files':'Berkas pegawai',
   'hr.documents':'Regulasi & SOP','hr.training':'Kegiatan & Pelatihan',
-  'hr.coaching':'Coaching','hr.leaves':'Kontrol Cuti','security.config':'Konfigurasi keamanan',
+  'hr.coaching':'Coaching','hr.leaves':'Kontrol Cuti','hr.attendance':'Absensi','security.config':'Konfigurasi keamanan',
   'security.roster':'Jadwal & penugasan','security.logbook':'Logbook',
   'security.incidents':'Kejadian','admin.users':'Akun pengguna',
   'admin.roles':'Role & izin','admin.audit':'Audit',
@@ -33,7 +33,7 @@ const actionNames={
   acknowledge:'Akui kekurangan',reopen:'Buka kembali',reset:'Reset password',
   verify:'Verifikasi',sensitive:'Lihat data sensitif',
   costs:'Lihat harga modal',record:'Catat stok',adjust:'Koreksi stok',
-  void:'Batalkan transaksi'
+  void:'Batalkan transaksi',devices:'Daftarkan HP absen',settings:'Atur titik absen'
 };
 const escapeHtml=value=>String(value).replace(/[&<>"']/g,char=>({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'

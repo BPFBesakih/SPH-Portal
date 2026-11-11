@@ -3,6 +3,14 @@ import { randomUUID as __visits_randomUUID } from "node:crypto";
 import { createHash as __visits_createHash } from "node:crypto";
 import { createHmac as __visits_createHmac } from "node:crypto";
 import { createHash as __visits_createHash2, randomUUID as __visits_randomUUID2 } from "node:crypto";
+import { Buffer as __attendance_Buffer3 } from "node:buffer";
+import { randomBytes as __attendance_randomBytes } from "node:crypto";
+import { randomUUID as __attendance_randomUUID } from "node:crypto";
+import { createHash as __attendance_createHash } from "node:crypto";
+import { Buffer as __attendance_Buffer } from "node:buffer";
+import { createHash as __attendance_createHash2, webcrypto as __attendance_webcrypto } from "node:crypto";
+import { Buffer as __attendance_Buffer2 } from "node:buffer";
+import { createHash as __attendance_createHash3, randomUUID as __attendance_randomUUID2 } from "node:crypto";
 // supabase/functions/_shared/portal/leave-control.mjs
 async function leaveControlEligible(db, user) {
   if (!user?.id) return false;
@@ -43,355 +51,433 @@ function leaveApprovalRoute(employee, byId, assert2) {
 // supabase/functions/_shared/portal/leaves.mjs
 var eligible = (e) => Boolean(e?.is_active === 1 && ["Pegawai Kontrak (PKWT)", "Pegawai Probation"].includes(e.employment_status));
 var uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
-  const { assert: assert2, can: can2, has: has2, audit: audit2, today: today2, formLink } = services;
-  db.authorizationCache ??= /* @__PURE__ */ new Map();
-  const q = (sql, ...values) => db.query(sql, values), one2 = async (sql, ...values) => (await q(sql, ...values))[0];
-  const day = today2(), stamp = () => (/* @__PURE__ */ new Date()).toISOString(), id = p[1], action = p[2];
-  assert2(!user.must_change_password, "Ganti password awal terlebih dahulu.", 428);
-  const controlEligible = !formLink && await leaveControlEligible(db, user);
-  const validDate = (value) => {
-    assert2(typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value, "Tanggal tidak valid.");
-    return value;
+// BEGIN SPECIAL LEAVE MODULE
+var __specialLeave = (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
   };
-  const clean = (value, label, max = 2e3) => {
-    assert2(typeof value === "string" && value.trim().length > 0 && value.length <= max, `${label} wajib diisi (maksimal ${max} karakter).`);
-    return value.trim();
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
   };
-  const people = await q(`SELECT e.id,e.employee_no,e.full_name,e.employment_status,e.is_active,e.joined_on,e.ended_on,
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // supabase/functions/_shared/portal/leaves.mjs
+  var leaves_exports = {};
+  __export(leaves_exports, {
+    leaveRoutes: () => leaveRoutes
+  });
+
+  // supabase/functions/_shared/portal/leave-control.mjs
+  async function leaveControlEligible(db, user) {
+    if (!user?.id) return false;
+    const [row] = await db.query(`SELECT EXISTS(SELECT 1 FROM leave_controller_accounts WHERE user_id=$1)
+  OR EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1 AND r.code='SUPER_ADMIN' AND r.is_active=1) allowed`, [user.id]);
+    return row?.allowed === true;
+  }
+
+  // supabase/functions/_shared/portal/leave-approval.mjs
+  function leaveApprovalRoute(employee, byId, assert) {
+    const bossOf = (e) => {
+      const boss = byId.get(e?.supervisor_employee_id);
+      assert(e && !e.placement_ambiguous && boss?.is_active === 1 && !boss.placement_ambiguous && boss.id !== e.id, "Data jenjang atasan belum lengkap atau tidak tunggal. Hubungi pengelola Kontrol Cuti.");
+      return boss;
+    };
+    const first = bossOf(employee), head = /^Kepala Bidang\b/i.test(employee.position_name || ""), leader = /^Kepala Badan\b|^Pimpinan\b/i.test(first.position_name || "");
+    if (head) assert(leader, "Atasan kepala bidang harus Pimpinan/Kepala Badan. Periksa master penempatan.");
+    const route = head || leader ? [first] : [first, bossOf(first)];
+    assert((/* @__PURE__ */ new Set([employee.id, ...route.map((e) => e.id)])).size === route.length + 1, "Struktur atasan berulang. Periksa master penempatan.");
+    return route.map((e) => ({ id: e.id, name: e.full_name }));
+  }
+
+  // public/leave-policy.js
+  var LEAVE_TYPES = Object.freeze([
+    { code: "ANNUAL", name: "Cuti tahunan", max_days: 366, calendar_days: false, deducts_balance: true, entitlement: "Sesuai saldo cuti tahunan", note: "Pilih hanya hari kerja Anda. Saldo dipotong setelah persetujuan terakhir." },
+    { code: "MARRIAGE", name: "Menikah", max_days: 3, calendar_days: false, deducts_balance: false, entitlement: "3 hari", note: "Tenaga kerja yang bersangkutan menikah: maksimal 3 hari kerja." },
+    { code: "CHILD_MARRIAGE", name: "Menikahkan anak", max_days: 2, calendar_days: false, deducts_balance: false, entitlement: "2 hari", note: "Menikahkan anak: maksimal 2 hari kerja." },
+    { code: "FAMILY_BEREAVEMENT", name: "Keluarga inti meninggal dunia", max_days: 2, calendar_days: false, deducts_balance: false, entitlement: "2 hari", note: "Suami/istri, orang tua/mertua, atau anak/menantu meninggal dunia: maksimal 2 hari kerja. Sebutkan hubungan keluarga dalam alasan." },
+    { code: "HOUSEHOLD_BEREAVEMENT", name: "Keluarga serumah meninggal dunia", max_days: 1, calendar_days: false, deducts_balance: false, entitlement: "1 hari", note: "Keluarga yang tinggal serumah meninggal dunia: maksimal 1 hari kerja." },
+    { code: "WIFE_CHILDBIRTH", name: "Istri melahirkan", max_days: 2, calendar_days: false, deducts_balance: false, entitlement: "2 hari", note: "Suami mendapat cuti saat istri melahirkan: maksimal 2 hari kerja." },
+    { code: "MATERNITY", name: "Melahirkan", max_days: 84, calendar_days: true, deducts_balance: false, entitlement: "3 bulan / 12 minggu", note: "Menggunakan acuan 12 minggu (84 hari kalender), dengan ketentuan 6 minggu sebelum dan 6 minggu setelah melahirkan. Atasan memverifikasi jadwalnya." },
+    { code: "MISCARRIAGE", name: "Keguguran", max_days: 45, calendar_days: true, deducts_balance: false, entitlement: "1,5 bulan", note: "Untuk tenaga kerja perempuan, sesuai surat keterangan dokter kandungan. Batas sistem 45 hari kalender (acuan 30 hari per bulan); pilih tanggal sesuai surat dokter dan jelaskan dalam alasan." }
+  ].map(Object.freeze));
+  var getLeaveType = (code) => LEAVE_TYPES.find((t) => t.code === (code ?? "ANNUAL"));
+
+  // supabase/functions/_shared/portal/leaves.mjs
+  var eligible = (e) => Boolean(e?.is_active === 1 && ["Pegawai Kontrak (PKWT)", "Pegawai Probation"].includes(e.employment_status));
+  var uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  async function leaveRoutes({ db, user, p, method, body = {}, url }, services) {
+    const { assert, can, has, audit, today, formLink } = services;
+    db.authorizationCache ??= /* @__PURE__ */ new Map();
+    const q = (sql, ...values) => db.query(sql, values), one = async (sql, ...values) => (await q(sql, ...values))[0];
+    const day = today(), stamp = () => (/* @__PURE__ */ new Date()).toISOString(), id = p[1], action = p[2];
+    assert(!user.must_change_password, "Ganti password awal terlebih dahulu.", 428);
+    const controlEligible = !formLink && await leaveControlEligible(db, user);
+    const validDate = (value) => {
+      assert(typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value, "Tanggal tidak valid.");
+      return value;
+    };
+    const clean = (value, label, max = 2e3) => {
+      assert(typeof value === "string" && value.trim().length > 0 && value.length <= max, `${label} wajib diisi (maksimal ${max} karakter).`);
+      return value.trim();
+    };
+    const people = await q(`SELECT e.id,e.employee_no,e.full_name,e.employment_status,e.is_active,e.joined_on,e.ended_on,
    ep.supervisor_employee_id,p.org_unit_id,p.name position_name,u.name unit_name
    FROM employees e LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1
      AND ep.valid_from<=$1 AND (ep.valid_to IS NULL OR ep.valid_to>=$1)
    LEFT JOIN positions p ON p.id=ep.position_id LEFT JOIN org_units u ON u.id=p.org_unit_id
    ORDER BY e.full_name,e.id`, day);
-  const groups = /* @__PURE__ */ new Map();
-  for (const e of people) {
-    const list = groups.get(e.id) || [];
-    list.push(e);
-    groups.set(e.id, list);
-  }
-  const employees2 = [...groups.values()].map((list) => ({ ...list[0], placement_ambiguous: list.length !== 1 }));
-  const byId = new Map(employees2.map((e) => [e.id, e])), me = byId.get(user.employee_id);
-  const subordinateIds = /* @__PURE__ */ new Set(), queue = user.employee_id ? [user.employee_id] : [];
-  while (queue.length) {
-    const parent = queue.shift();
-    for (const e of employees2) if (!e.placement_ambiguous && e.supervisor_employee_id === parent && !subordinateIds.has(e.id) && e.id !== user.employee_id) {
-      subordinateIds.add(e.id);
-      queue.push(e.id);
+    const groups = /* @__PURE__ */ new Map();
+    for (const e of people) {
+      const list = groups.get(e.id) || [];
+      list.push(e);
+      groups.set(e.id, list);
     }
-  }
-  const reportAccess = /* @__PURE__ */ new Map();
-  for (const e of employees2) reportAccess.set(e.id, controlEligible && await can2(db, user, "hr.leaves.read", { employee_id: e.id, org_unit_id: e.org_unit_id }));
-  const privateAllowed = (e) => Boolean(e && (e.id === user.employee_id || subordinateIds.has(e.id) || reportAccess.get(e.id)));
-  const calendarAllowed = (e) => privateAllowed(e) || Boolean(me?.org_unit_id && e?.org_unit_id === me.org_unit_id);
-  const routeFor = (e) => leaveApprovalRoute(e, byId, assert2), supervisor = (e) => routeFor(e)[0];
-  const stepRows = (requestIds) => requestIds.length ? q("SELECT * FROM leave_approval_steps WHERE request_id=ANY($1::text[]) ORDER BY cycle_no,step_no", requestIds) : [];
-  const progress = (r2, allSteps) => {
-    let route;
-    try {
-      route = routeFor(byId.get(r2.employee_id));
-    } catch {
-      return { valid: false, steps: allSteps, current: null, total: 0 };
+    const employees = [...groups.values()].map((list) => ({ ...list[0], placement_ambiguous: list.length !== 1 }));
+    const byId = new Map(employees.map((e) => [e.id, e])), me = byId.get(user.employee_id);
+    const subordinateIds = /* @__PURE__ */ new Set(), queue = user.employee_id ? [user.employee_id] : [];
+    while (queue.length) {
+      const parent = queue.shift();
+      for (const e of employees) if (!e.placement_ambiguous && e.supervisor_employee_id === parent && !subordinateIds.has(e.id) && e.id !== user.employee_id) {
+        subordinateIds.add(e.id);
+        queue.push(e.id);
+      }
     }
-    const stored = allSteps.filter((s) => s.cycle_no === r2.approval_cycle), legacy = !stored.length;
-    if (legacy && !["PENDING", "CANCELLATION_PENDING"].includes(r2.status)) return { valid: false, steps: [], current: null, total: route.length, legacy: true, route };
-    const steps = legacy ? route.map((a, i) => ({ step_no: i + 1, approver_employee_id: a.id, state: i ? "WAITING" : "PENDING", cycle_no: r2.approval_cycle, purpose: r2.status === "CANCELLATION_PENDING" ? "CANCELLATION" : "APPROVAL" })) : stored;
-    const current = steps.find((s) => s.state === "PENDING");
-    const valid = steps.length === route.length && steps.every((s, i) => s.approver_employee_id === route[i].id) && Boolean(current && current.approver_employee_id === r2.approver_employee_id && steps.filter((s) => s.step_no < current.step_no).every((s) => s.state === "APPROVED") && steps.filter((s) => s.step_no > current.step_no).every((s) => s.state === "WAITING"));
-    return { valid, steps, current, total: route.length, legacy, route };
-  };
-  const canDecide = (r2, steps) => {
-    const p2 = progress(r2, steps);
-    return Boolean(["PENDING", "CANCELLATION_PENDING"].includes(r2.status) && p2.valid && p2.current.approver_employee_id === user.employee_id && r2.employee_id !== user.employee_id);
-  };
-  const createSteps = async (requestId, cycle, purpose, route) => {
-    for (let i = 0; i < route.length; i++) await q("INSERT INTO leave_approval_steps(request_id,cycle_no,step_no,purpose,approver_employee_id,state) VALUES($1,$2,$3,$4,$5,$6)", requestId, cycle, i + 1, purpose, route[i].id, i ? "WAITING" : "PENDING");
-  };
-  if (id === "notifications" && method === "GET") {
-    const raw = user.employee_id ? await q("SELECT to_jsonb(r) row FROM leave_requests r WHERE approver_employee_id=$1 AND status IN ('PENDING','CANCELLATION_PENDING') ORDER BY id", user.employee_id) : [];
-    const steps = await stepRows(raw.map((x) => x.row.id)), rows = raw.map((x) => x.row).filter((r2) => canDecide(r2, steps.filter((s) => s.request_id === r2.id))).map((r2) => ({ id: r2.id, status: r2.status, row_version: r2.row_version }));
-    const digest2 = async (v) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)))].map((x) => x.toString(16).padStart(2, "0")).join("");
-    return { total: rows.length, pending: rows.filter((r2) => r2.status === "PENDING").length, cancellations: rows.filter((r2) => r2.status === "CANCELLATION_PENDING").length, signature: rows.length ? await digest2(JSON.stringify(rows)) : "", keys: await Promise.all(rows.map((r2) => digest2(`${r2.id}:${r2.status}:${r2.row_version}`))) };
-  }
-  const request = async (requestId) => {
-    const r2 = (await one2("SELECT to_jsonb(r) row FROM leave_requests r WHERE id=$1 FOR UPDATE", requestId))?.row;
-    assert2(r2, "Pengajuan tidak ditemukan.", 404);
-    assert2(privateAllowed(byId.get(r2.employee_id)), "Akses pengajuan ditolak.", 403);
-    return r2;
-  };
-  const requestDays = async (requestId) => q("SELECT work_date::text work_date,balance_year,state FROM leave_request_days WHERE request_id=$1 ORDER BY work_date", requestId);
-  const balanceRows = async (employeeId) => q("SELECT to_jsonb(b) row FROM leave_effective_balances b WHERE employee_id=$1 ORDER BY expires_on", employeeId);
-  const heldRows = async (employeeId) => q("SELECT balance_year,count(*)::int days FROM leave_request_days WHERE employee_id=$1 AND state='PENDING' GROUP BY balance_year", employeeId);
-  const conflicts = async (dates2) => {
-    if (!me?.org_unit_id) return [];
-    const rows = await q(`SELECT d.employee_id,d.work_date::text work_date FROM leave_request_days d
+    const reportAccess = /* @__PURE__ */ new Map();
+    for (const e of employees) reportAccess.set(e.id, controlEligible && await can(db, user, "hr.leaves.read", { employee_id: e.id, org_unit_id: e.org_unit_id }));
+    const privateAllowed = (e) => Boolean(e && (e.id === user.employee_id || subordinateIds.has(e.id) || reportAccess.get(e.id)));
+    const calendarAllowed = (e) => privateAllowed(e) || Boolean(me?.org_unit_id && e?.org_unit_id === me.org_unit_id);
+    const routeFor = (e) => leaveApprovalRoute(e, byId, assert), supervisor = (e) => routeFor(e)[0];
+    const stepRows = (requestIds) => requestIds.length ? q("SELECT * FROM leave_approval_steps WHERE request_id=ANY($1::text[]) ORDER BY cycle_no,step_no", requestIds) : [];
+    const progress = (r2, allSteps) => {
+      let route;
+      try {
+        route = routeFor(byId.get(r2.employee_id));
+      } catch {
+        return { valid: false, steps: allSteps, current: null, total: 0 };
+      }
+      const stored = allSteps.filter((s) => s.cycle_no === r2.approval_cycle), legacy = !stored.length;
+      if (legacy && !["PENDING", "CANCELLATION_PENDING"].includes(r2.status)) return { valid: false, steps: [], current: null, total: route.length, legacy: true, route };
+      const steps = legacy ? route.map((a, i) => ({ step_no: i + 1, approver_employee_id: a.id, state: i ? "WAITING" : "PENDING", cycle_no: r2.approval_cycle, purpose: r2.status === "CANCELLATION_PENDING" ? "CANCELLATION" : "APPROVAL" })) : stored;
+      const current = steps.find((s) => s.state === "PENDING");
+      const valid = steps.length === route.length && steps.every((s, i) => s.approver_employee_id === route[i].id) && Boolean(current && current.approver_employee_id === r2.approver_employee_id && steps.filter((s) => s.step_no < current.step_no).every((s) => s.state === "APPROVED") && steps.filter((s) => s.step_no > current.step_no).every((s) => s.state === "WAITING"));
+      return { valid, steps, current, total: route.length, legacy, route };
+    };
+    const canDecide = (r2, steps) => {
+      const p2 = progress(r2, steps);
+      return Boolean(["PENDING", "CANCELLATION_PENDING"].includes(r2.status) && p2.valid && p2.current.approver_employee_id === user.employee_id && r2.employee_id !== user.employee_id);
+    };
+    const createSteps = async (requestId, cycle, purpose, route) => {
+      for (let i = 0; i < route.length; i++) await q("INSERT INTO leave_approval_steps(request_id,cycle_no,step_no,purpose,approver_employee_id,state) VALUES($1,$2,$3,$4,$5,$6)", requestId, cycle, i + 1, purpose, route[i].id, i ? "WAITING" : "PENDING");
+    };
+    if (id === "notifications" && method === "GET") {
+      const raw = user.employee_id ? await q("SELECT to_jsonb(r) row FROM leave_requests r WHERE approver_employee_id=$1 AND status IN ('PENDING','CANCELLATION_PENDING') ORDER BY id", user.employee_id) : [];
+      const steps = await stepRows(raw.map((x) => x.row.id)), rows = raw.map((x) => x.row).filter((r2) => canDecide(r2, steps.filter((s) => s.request_id === r2.id))).map((r2) => ({ id: r2.id, status: r2.status, row_version: r2.row_version }));
+      const digest = async (v) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      return { total: rows.length, pending: rows.filter((r2) => r2.status === "PENDING").length, cancellations: rows.filter((r2) => r2.status === "CANCELLATION_PENDING").length, signature: rows.length ? await digest(JSON.stringify(rows)) : "", keys: await Promise.all(rows.map((r2) => digest(`${r2.id}:${r2.status}:${r2.row_version}`))) };
+    }
+    const request = async (requestId) => {
+      const r2 = (await one("SELECT to_jsonb(r) row FROM leave_requests r WHERE id=$1 FOR UPDATE", requestId))?.row;
+      assert(r2, "Pengajuan tidak ditemukan.", 404);
+      assert(privateAllowed(byId.get(r2.employee_id)), "Akses pengajuan ditolak.", 403);
+      return r2;
+    };
+    const requestDays = async (requestId) => q("SELECT work_date::text work_date,balance_year,state FROM leave_request_days WHERE request_id=$1 ORDER BY work_date", requestId);
+    const balanceRows = async (employeeId) => q("SELECT to_jsonb(b) row FROM leave_effective_balances b WHERE employee_id=$1 ORDER BY expires_on", employeeId);
+    const heldRows = async (employeeId) => q("SELECT balance_year,count(*)::int days FROM leave_request_days WHERE employee_id=$1 AND state='PENDING' AND balance_year IS NOT NULL GROUP BY balance_year", employeeId);
+    const conflicts = async (dates2) => {
+      if (!me?.org_unit_id) return [];
+      const rows = await q(`SELECT d.employee_id,d.work_date::text work_date FROM leave_request_days d
     JOIN leave_requests r ON r.id=d.request_id WHERE d.state='APPROVED' AND r.status IN ('APPROVED','CANCELLATION_PENDING')
       AND d.work_date=ANY($1::date[]) AND d.employee_id<>$2`, dates2, me.id);
-    return rows.filter((r2) => byId.get(r2.employee_id)?.org_unit_id === me.org_unit_id).map((r2) => ({ date: r2.work_date, name: byId.get(r2.employee_id).full_name }));
-  };
-  const plan = async (input) => {
-    assert2(eligible(me), "THL atau pegawai nonaktif tidak memperoleh cuti tahunan.", 403);
-    const route = routeFor(me), boss = route[0];
-    assert2(Array.isArray(input) && input.length >= 1 && input.length <= 366, "Pilih minimal satu hari kerja, maksimal 366 hari.");
-    const dates2 = input.map(validDate).sort();
-    assert2(new Set(dates2).size === dates2.length, "Tanggal hari kerja tidak boleh berulang.");
-    assert2(dates2.every((d) => d >= day), "Pengajuan baru tidak dapat memakai tanggal yang sudah lewat.");
-    assert2(!await one2("SELECT 1 FROM leave_request_days WHERE employee_id=$1 AND work_date=ANY($2::date[]) AND state IN ('PENDING','APPROVED') LIMIT 1", me.id, dates2), "Tanggal tersebut sudah memiliki pengajuan aktif.");
-    const balances = (await balanceRows(me.id)).map((x) => x.row), held = new Map((await heldRows(me.id)).map((r2) => [r2.balance_year, r2.days]));
-    const available = balances.map((b) => ({ ...b, left: Math.max(0, b.available_days - (held.get(b.balance_year) || 0)) }));
-    const allocations = [];
-    for (const date2 of dates2) {
-      const b = available.find((b2) => b2.left > 0 && b2.effective_from <= date2 && b2.expires_on > date2 && b2.closed_at === null);
-      assert2(b, "Saldo yang berlaku pada tanggal pilihan tidak mencukupi. Saldo tahun mendatang belum dapat dipakai sebelum diberikan.");
-      b.left--;
-      allocations.push({ date: date2, balance_year: b.balance_year });
+      return rows.filter((r2) => byId.get(r2.employee_id)?.org_unit_id === me.org_unit_id).map((r2) => ({ date: r2.work_date, name: byId.get(r2.employee_id).full_name }));
+    };
+    const plan = async (input, code) => {
+      const type2 = getLeaveType(code);
+      assert(type2, "Jenis cuti tidak valid.");
+      assert(eligible(me), "Status pegawai tidak memenuhi syarat pengajuan cuti.", 403);
+      const route = routeFor(me), boss = route[0];
+      assert(Array.isArray(input) && input.length >= 1 && input.length <= 366, "Pilih minimal satu hari kerja, maksimal 366 hari.");
+      const dates2 = input.map(validDate).sort();
+      assert(new Set(dates2).size === dates2.length, "Tanggal hari kerja tidak boleh berulang.");
+      assert(dates2.length <= type2.max_days, `${type2.name} maksimal ${type2.entitlement}.`);
+      if (type2.calendar_days) assert(dates2.every((d, i) => !i || Date.parse(d) - Date.parse(dates2[i - 1]) === 864e5), "Cuti ini dihitung dalam hari kalender berurutan, termasuk hari libur.");
+      assert(dates2.every((d) => d >= day), "Pengajuan baru tidak dapat memakai tanggal yang sudah lewat.");
+      assert(!await one("SELECT 1 FROM leave_request_days WHERE employee_id=$1 AND work_date=ANY($2::date[]) AND state IN ('PENDING','APPROVED') LIMIT 1", me.id, dates2), "Tanggal tersebut sudah memiliki pengajuan aktif.");
+      if (!type2.deducts_balance) return { dates: dates2, leave_type: type2.code, allocations: dates2.map((date) => ({ date, balance_year: null })), approver: boss, approvers: route, conflicts: await conflicts(dates2) };
+      const balances = (await balanceRows(me.id)).map((x) => x.row), held = new Map((await heldRows(me.id)).map((r2) => [r2.balance_year, r2.days]));
+      const available = balances.map((b) => ({ ...b, left: Math.max(0, b.available_days - (held.get(b.balance_year) || 0)) }));
+      const allocations = [];
+      for (const date of dates2) {
+        const b = available.find((b2) => b2.left > 0 && b2.effective_from <= date && b2.expires_on > date && b2.closed_at === null);
+        assert(b, "Saldo yang berlaku pada tanggal pilihan tidak mencukupi. Saldo tahun mendatang belum dapat dipakai sebelum diberikan.");
+        b.left--;
+        allocations.push({ date, balance_year: b.balance_year });
+      }
+      return { dates: dates2, leave_type: type2.code, allocations, approver: boss, approvers: route, conflicts: await conflicts(dates2) };
+    };
+    const locked = () => q("SELECT pg_advisory_xact_lock(hashtextextended('portal.leave_year_maintenance',0))");
+    const manageLink = async (e) => Boolean(controlEligible && e && await can(db, user, "hr.leaves.manage", { employee_id: e.id, org_unit_id: e.org_unit_id }));
+    const manageShared = Boolean(controlEligible && await can(db, user, "hr.leaves.manage", {}));
+    if (id === "shared-form") {
+      assert(manageShared, "Tautan semua pegawai hanya dapat dikelola SDM dengan cakupan seluruh organisasi.", 403);
+      const current = () => one("SELECT id,share_token token,expires_at::text expires_at FROM leave_shared_form_links WHERE revoked_at IS NULL AND expires_at>now()");
+      if (method === "GET") return { link: await current() || null };
+      assert(method === "POST" && ["issue", "revoke"].includes(body.action), "Tindakan tautan tidak valid.");
+      await locked();
+      await q("UPDATE leave_shared_form_links SET revoked_at=now() WHERE revoked_at IS NULL");
+      if (body.action === "revoke") {
+        await audit(db, user, "LEAVE_SHARED_FORM_REVOKED", "leave_shared_form_links", "all");
+        return { ok: true };
+      }
+      const token = [...crypto.getRandomValues(new Uint8Array(32))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      const linkId = crypto.randomUUID();
+      await q("INSERT INTO leave_shared_form_links(id,token_hash,share_token,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '90 days')", linkId, hash, token, user.id);
+      await audit(db, user, "LEAVE_SHARED_FORM_ISSUED", "leave_shared_form_links", linkId, { audience: "ALL_ELIGIBLE_EMPLOYEES" });
+      return { link: await current() };
     }
-    return { dates: dates2, allocations, approver: boss, approvers: route, conflicts: await conflicts(dates2) };
-  };
-  const locked = () => q("SELECT pg_advisory_xact_lock(hashtextextended('portal.leave_year_maintenance',0))");
-  const manageLink = async (e) => Boolean(controlEligible && e && await can2(db, user, "hr.leaves.manage", { employee_id: e.id, org_unit_id: e.org_unit_id }));
-  const manageShared = Boolean(controlEligible && await can2(db, user, "hr.leaves.manage", {}));
-  if (id === "shared-form") {
-    assert2(manageShared, "Tautan semua pegawai hanya dapat dikelola SDM dengan cakupan seluruh organisasi.", 403);
-    const current = () => one2("SELECT id,share_token token,expires_at::text expires_at FROM leave_shared_form_links WHERE revoked_at IS NULL AND expires_at>now()");
-    if (method === "GET") return { link: await current() || null };
-    assert2(method === "POST" && ["issue", "revoke"].includes(body.action), "Tindakan tautan tidak valid.");
-    await locked();
-    await q("UPDATE leave_shared_form_links SET revoked_at=now() WHERE revoked_at IS NULL");
-    if (body.action === "revoke") {
-      await audit2(db, user, "LEAVE_SHARED_FORM_REVOKED", "leave_shared_form_links", "all");
-      return { ok: true };
+    if (id === "form-links") {
+      assert(!formLink, "Akses ditolak.", 403);
+      if (method === "GET") {
+        const allowed = [];
+        for (const e2 of employees) if (await manageLink(e2)) allowed.push(e2.id);
+        assert(allowed.length, "Hanya pengelola data pegawai yang dapat mengelola tautan.", 403);
+        return { items: allowed.length ? await q("SELECT id,employee_id,created_at::text created_at,expires_at::text expires_at FROM leave_form_links WHERE employee_id=ANY($1::text[]) AND revoked_at IS NULL AND expires_at>now()", allowed) : [] };
+      }
+      assert(method === "POST", "Alamat tidak ditemukan.", 404);
+      const e = byId.get(body.employee_id);
+      assert(await manageLink(e), "Hanya pengelola data pegawai yang dapat mengelola tautan.", 403);
+      await locked();
+      assert(["issue", "revoke"].includes(body.action), "Tindakan tautan tidak valid.");
+      if (body.action === "issue") {
+        assert(eligible(e), "THL atau pegawai nonaktif tidak memperoleh formulir cuti.", 403);
+        supervisor(e);
+      }
+      await q("UPDATE leave_form_links SET revoked_at=now() WHERE employee_id=$1 AND revoked_at IS NULL", e.id);
+      if (body.action === "revoke") {
+        await audit(db, user, "LEAVE_FORM_REVOKED", "employees", e.id);
+        return { ok: true };
+      }
+      const bytes = crypto.getRandomValues(new Uint8Array(32)), token = [...bytes].map((x) => x.toString(16).padStart(2, "0")).join("");
+      const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      const linkId = crypto.randomUUID(), link = await one("INSERT INTO leave_form_links(id,employee_id,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '90 days') RETURNING expires_at::text expires_at", linkId, e.id, digest, user.id);
+      await audit(db, user, "LEAVE_FORM_ISSUED", "leave_form_links", linkId, { employee_id: e.id, expires_at: link.expires_at });
+      return { token, expires_at: link.expires_at, name: e.full_name };
     }
-    const token = [...crypto.getRandomValues(new Uint8Array(32))].map((x) => x.toString(16).padStart(2, "0")).join("");
-    const hash2 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map((x) => x.toString(16).padStart(2, "0")).join("");
-    const linkId = crypto.randomUUID();
-    await q("INSERT INTO leave_shared_form_links(id,token_hash,share_token,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '90 days')", linkId, hash2, token, user.id);
-    await audit2(db, user, "LEAVE_SHARED_FORM_ISSUED", "leave_shared_form_links", linkId, { audience: "ALL_ELIGIBLE_EMPLOYEES" });
-    return { link: await current() };
-  }
-  if (id === "form-links") {
-    assert2(!formLink, "Akses ditolak.", 403);
-    if (method === "GET") {
-      const allowed = [];
-      for (const e2 of employees2) if (await manageLink(e2)) allowed.push(e2.id);
-      assert2(allowed.length, "Hanya pengelola data pegawai yang dapat mengelola tautan.", 403);
-      return { items: allowed.length ? await q("SELECT id,employee_id,created_at::text created_at,expires_at::text expires_at FROM leave_form_links WHERE employee_id=ANY($1::text[]) AND revoked_at IS NULL AND expires_at>now()", allowed) : [] };
-    }
-    assert2(method === "POST", "Alamat tidak ditemukan.", 404);
-    const e = byId.get(body.employee_id);
-    assert2(await manageLink(e), "Hanya pengelola data pegawai yang dapat mengelola tautan.", 403);
-    await locked();
-    assert2(["issue", "revoke"].includes(body.action), "Tindakan tautan tidak valid.");
-    if (body.action === "issue") {
-      assert2(eligible(e), "THL atau pegawai nonaktif tidak memperoleh formulir cuti.", 403);
-      supervisor(e);
-    }
-    await q("UPDATE leave_form_links SET revoked_at=now() WHERE employee_id=$1 AND revoked_at IS NULL", e.id);
-    if (body.action === "revoke") {
-      await audit2(db, user, "LEAVE_FORM_REVOKED", "employees", e.id);
-      return { ok: true };
-    }
-    const bytes = crypto.getRandomValues(new Uint8Array(32)), token = [...bytes].map((x) => x.toString(16).padStart(2, "0")).join("");
-    const digest2 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map((x) => x.toString(16).padStart(2, "0")).join("");
-    const linkId = crypto.randomUUID(), link = await one2("INSERT INTO leave_form_links(id,employee_id,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,now()+interval '90 days') RETURNING expires_at::text expires_at", linkId, e.id, digest2, user.id);
-    await audit2(db, user, "LEAVE_FORM_ISSUED", "leave_form_links", linkId, { employee_id: e.id, expires_at: link.expires_at });
-    return { token, expires_at: link.expires_at, name: e.full_name };
-  }
-  if (method === "GET" && !id) {
-    const year2 = Number(url.searchParams.get("year") || day.slice(0, 4));
-    assert2(Number.isInteger(year2) && year2 >= 2026 && year2 <= 2100, "Tahun laporan tidak valid.");
-    const visibleEmployees = employees2.filter(privateAllowed), visibleIds = visibleEmployees.map((e) => e.id);
-    const rawBalances = visibleIds.length ? await q("SELECT to_jsonb(b) row FROM leave_effective_balances b WHERE employee_id=ANY($1::text[]) ORDER BY balance_year", visibleIds) : [];
-    const holds = visibleIds.length ? await q("SELECT employee_id,balance_year,count(*)::int days FROM leave_request_days WHERE employee_id=ANY($1::text[]) AND state='PENDING' GROUP BY employee_id,balance_year", visibleIds) : [];
-    const balances = visibleEmployees.map((e) => {
-      const buckets = rawBalances.map((r2) => r2.row).filter((b) => b.employee_id === e.id).map((b) => ({ ...b, reserved_days: holds.find((h) => h.employee_id === e.id && h.balance_year === b.balance_year)?.days || 0 }));
-      const usable = buckets.reduce((n, b) => n + b.available_days, 0), reserved = buckets.filter((b) => b.available_days > 0).reduce((n, b) => n + b.reserved_days, 0);
-      return {
-        employee_id: e.id,
-        employee_no: e.employee_no,
-        name: e.full_name,
-        unit_id: e.org_unit_id,
-        unit_name: e.unit_name,
-        position_name: e.position_name,
-        employment_status: e.employment_status,
-        is_active: e.is_active,
-        eligible: eligible(e),
-        buckets,
-        available_days: Math.max(0, usable - reserved),
-        book_days: usable,
-        reserved_days: reserved,
-        used_days: buckets.filter((b) => b.balance_year === year2).reduce((n, b) => n + b.consumed_days, 0)
-      };
-    });
-    for (const b of balances) b.can_manage_form_link = await manageLink(byId.get(b.employee_id));
-    const rows = visibleIds.length ? await q(`SELECT to_jsonb(r)||jsonb_build_object('dates',
+    if (method === "GET" && !id) {
+      const year = Number(url.searchParams.get("year") || day.slice(0, 4));
+      assert(Number.isInteger(year) && year >= 2026 && year <= 2100, "Tahun laporan tidak valid.");
+      const visibleEmployees = employees.filter(privateAllowed), visibleIds = visibleEmployees.map((e) => e.id);
+      const rawBalances = visibleIds.length ? await q("SELECT to_jsonb(b) row FROM leave_effective_balances b WHERE employee_id=ANY($1::text[]) ORDER BY balance_year", visibleIds) : [];
+      const holds = visibleIds.length ? await q("SELECT employee_id,balance_year,count(*)::int days FROM leave_request_days WHERE employee_id=ANY($1::text[]) AND state='PENDING' AND balance_year IS NOT NULL GROUP BY employee_id,balance_year", visibleIds) : [];
+      const balances = visibleEmployees.map((e) => {
+        const buckets = rawBalances.map((r2) => r2.row).filter((b) => b.employee_id === e.id).map((b) => ({ ...b, reserved_days: holds.find((h) => h.employee_id === e.id && h.balance_year === b.balance_year)?.days || 0 }));
+        const usable = buckets.reduce((n, b) => n + b.available_days, 0), reserved = buckets.filter((b) => b.available_days > 0).reduce((n, b) => n + b.reserved_days, 0);
+        return {
+          employee_id: e.id,
+          employee_no: e.employee_no,
+          name: e.full_name,
+          unit_id: e.org_unit_id,
+          unit_name: e.unit_name,
+          position_name: e.position_name,
+          employment_status: e.employment_status,
+          is_active: e.is_active,
+          eligible: eligible(e),
+          buckets,
+          available_days: Math.max(0, usable - reserved),
+          book_days: usable,
+          reserved_days: reserved,
+          used_days: buckets.filter((b) => b.balance_year === year).reduce((n, b) => n + b.consumed_days, 0)
+        };
+      });
+      for (const b of balances) b.can_manage_form_link = await manageLink(byId.get(b.employee_id));
+      const rows = visibleIds.length ? await q(`SELECT to_jsonb(r)||jsonb_build_object('dates',
      (SELECT jsonb_agg(work_date::text ORDER BY work_date) FROM leave_request_days WHERE request_id=r.id)) row
     FROM leave_requests r WHERE employee_id=ANY($1::text[])
-    AND (first_date<=$3::date AND last_date>=$2::date OR status IN ('PENDING','CANCELLATION_PENDING')) ORDER BY created_at DESC`, visibleIds, year2 + "-01-01", year2 + "-12-31") : [];
-    const allSteps = await stepRows(rows.map((x) => x.row.id));
-    const requests = rows.map(({ row: r2 }) => {
-      const e = byId.get(r2.employee_id);
-      const history2 = allSteps.filter((s) => s.request_id === r2.id), p2 = progress(r2, history2);
-      return {
-        ...r2,
-        employee_name: e.full_name,
-        employee_no: e.employee_no,
-        unit_id: e.org_unit_id,
-        unit_name: e.unit_name,
-        approver_name: byId.get(r2.approver_employee_id)?.full_name || "Atasan",
-        can_decide: canDecide(r2, history2),
-        current_step: p2.current?.step_no || null,
-        total_steps: p2.total,
-        approval_steps: (history2.length ? history2 : p2.steps).map((s) => ({ ...s, approver_name: byId.get(s.approver_employee_id)?.full_name || "Atasan" })),
-        can_cancel: r2.employee_id === user.employee_id && ["PENDING", "APPROVED"].includes(r2.status) && r2.dates.every((d) => d >= day),
-        supervisor_changed: ["PENDING", "CANCELLATION_PENDING"].includes(r2.status) && !p2.valid
-      };
-    });
-    const calendarIds = employees2.filter(calendarAllowed).map((e) => e.id);
-    const calendar = calendarIds.length ? await q(`SELECT d.employee_id,d.work_date::text date FROM leave_request_days d JOIN leave_requests r ON r.id=d.request_id
+    AND (first_date<=$3::date AND last_date>=$2::date OR status IN ('PENDING','CANCELLATION_PENDING')) ORDER BY created_at DESC`, visibleIds, year + "-01-01", year + "-12-31") : [];
+      const allSteps = await stepRows(rows.map((x) => x.row.id));
+      const requests = rows.map(({ row: r2 }) => {
+        const e = byId.get(r2.employee_id);
+        const history2 = allSteps.filter((s) => s.request_id === r2.id), p2 = progress(r2, history2);
+        return {
+          ...r2,
+          employee_name: e.full_name,
+          employee_no: e.employee_no,
+          unit_id: e.org_unit_id,
+          unit_name: e.unit_name,
+          approver_name: byId.get(r2.approver_employee_id)?.full_name || "Atasan",
+          can_decide: canDecide(r2, history2),
+          current_step: p2.current?.step_no || null,
+          total_steps: p2.total,
+          approval_steps: (history2.length ? history2 : p2.steps).map((s) => ({ ...s, approver_name: byId.get(s.approver_employee_id)?.full_name || "Atasan" })),
+          can_cancel: r2.employee_id === user.employee_id && ["PENDING", "APPROVED"].includes(r2.status) && r2.dates.every((d) => d >= day),
+          supervisor_changed: ["PENDING", "CANCELLATION_PENDING"].includes(r2.status) && !p2.valid
+        };
+      });
+      const calendarIds = employees.filter(calendarAllowed).map((e) => e.id);
+      const calendar = calendarIds.length ? await q(`SELECT d.employee_id,d.work_date::text date FROM leave_request_days d JOIN leave_requests r ON r.id=d.request_id
     WHERE d.employee_id=ANY($1::text[]) AND d.state='APPROVED' AND r.status IN ('APPROVED','CANCELLATION_PENDING')
-    AND d.work_date BETWEEN $2::date AND $3::date ORDER BY d.work_date`, calendarIds, year2 + "-01-01", year2 + "-12-31") : [];
-    for (const r2 of requests) r2.conflicts = calendar.filter((c) => c.employee_id !== r2.employee_id && byId.get(c.employee_id)?.org_unit_id === r2.unit_id && r2.dates.includes(c.date)).map((c) => ({ date: c.date, name: byId.get(c.employee_id).full_name }));
-    let boss = null, myRoute = [];
-    try {
-      if (me) {
-        myRoute = routeFor(me);
-        boss = myRoute[0];
+    AND d.work_date BETWEEN $2::date AND $3::date ORDER BY d.work_date`, calendarIds, year + "-01-01", year + "-12-31") : [];
+      for (const r2 of requests) r2.conflicts = calendar.filter((c) => c.employee_id !== r2.employee_id && byId.get(c.employee_id)?.org_unit_id === r2.unit_id && r2.dates.includes(c.date)).map((c) => ({ date: c.date, name: byId.get(c.employee_id).full_name }));
+      let boss = null, myRoute = [];
+      try {
+        if (me) {
+          myRoute = routeFor(me);
+          boss = myRoute[0];
+        }
+      } catch {
       }
-    } catch {
+      return {
+        today: day,
+        year,
+        me: me ? { id: me.id, name: me.full_name, eligible: eligible(me), employment_status: me.employment_status } : null,
+        approver: boss,
+        approvers: myRoute,
+        balances,
+        requests,
+        leave_types: LEAVE_TYPES,
+        calendar: calendar.map((r2) => ({ ...r2, name: byId.get(r2.employee_id)?.full_name, unit_name: byId.get(r2.employee_id)?.unit_name })),
+        capabilities: { can_request: eligible(me) && Boolean(boss), can_export: controlEligible && await has(db, user, "hr.leaves.export"), can_manage_shared_form: manageShared, can_manage_form_links: controlEligible && await has(db, user, "hr.leaves.manage"), can_manage_reports: visibleEmployees.some((e) => e.id !== user.employee_id && reportAccess.get(e.id)) },
+        rules: { annual_credit: 12, next_credit_year: Math.max(2027, Number(day.slice(0, 4)) + 1), prior_year_valid_through: "31 Maret", approval: "Atasan langsung \u2192 atasan satu tingkat di atasnya; berhenti di Pimpinan" }
+      };
     }
-    return {
-      today: day,
-      year: year2,
-      me: me ? { id: me.id, name: me.full_name, eligible: eligible(me), employment_status: me.employment_status } : null,
-      approver: boss,
-      approvers: myRoute,
-      balances,
-      requests,
-      calendar: calendar.map((r2) => ({ ...r2, name: byId.get(r2.employee_id)?.full_name, unit_name: byId.get(r2.employee_id)?.unit_name })),
-      capabilities: { can_request: eligible(me) && Boolean(boss), can_export: controlEligible && await has2(db, user, "hr.leaves.export"), can_manage_shared_form: manageShared, can_manage_form_links: controlEligible && await has2(db, user, "hr.leaves.manage"), can_manage_reports: visibleEmployees.some((e) => e.id !== user.employee_id && reportAccess.get(e.id)) },
-      rules: { annual_credit: 12, next_credit_year: Math.max(2027, Number(day.slice(0, 4)) + 1), prior_year_valid_through: "31 Maret", approval: "Atasan langsung \u2192 atasan satu tingkat di atasnya; berhenti di Pimpinan" }
-    };
-  }
-  if (method === "GET" && id === "history") {
-    const employeeId = url.searchParams.get("employee_id") || user.employee_id;
-    assert2(privateAllowed(byId.get(employeeId)), "Akses riwayat saldo ditolak.", 403);
-    return { employee_name: byId.get(employeeId).full_name, items: await q(`SELECT event_type,balance_year,delta_days,before_days,after_days,effective_date::text effective_date,created_at::text created_at
+    if (method === "GET" && id === "history") {
+      const employeeId = url.searchParams.get("employee_id") || user.employee_id;
+      assert(privateAllowed(byId.get(employeeId)), "Akses riwayat saldo ditolak.", 403);
+      return { employee_name: byId.get(employeeId).full_name, items: await q(`SELECT event_type,balance_year,delta_days,before_days,after_days,effective_date::text effective_date,created_at::text created_at
     FROM leave_balance_events WHERE employee_id=$1 ORDER BY created_at DESC,id DESC LIMIT 500`, employeeId) };
-  }
-  if (method === "POST" && id === "export-audit") {
-    assert2(controlEligible && await has2(db, user, "hr.leaves.export"), "Akses ekspor ditolak.", 403);
-    const employeeIds = body.employee_ids;
-    assert2(Array.isArray(employeeIds) && employeeIds.length <= 1e3, "Daftar ekspor tidak valid.");
-    for (const employeeId of employeeIds) {
-      const e = byId.get(employeeId);
-      assert2(e && await can2(db, user, "hr.leaves.export", { employee_id: e.id, org_unit_id: e.org_unit_id }) && privateAllowed(e), "Cakupan ekspor ditolak.", 403);
     }
-    await audit2(db, user, "EXPORT", "leave_requests", "report", { employee_count: employeeIds.length, kind: body.kind || "balances" });
-    return { ok: true };
-  }
-  assert2(method === "POST", "Alamat cuti tidak ditemukan.", 404);
-  await locked();
-  if (id === "preview") return plan(body.dates);
-  if (!id) {
-    assert2(uuid.test(body.client_key || ""), "Kunci pengiriman tidak valid.");
-    const reason = clean(body.reason, "Alasan cuti");
-    const canonical = JSON.stringify({ dates: Array.isArray(body.dates) ? [...body.dates].sort() : body.dates, reason });
-    const hash2 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)))].map((x) => x.toString(16).padStart(2, "0")).join("");
-    const prior = (await (formLink?.shared ? one2("SELECT to_jsonb(r) row FROM leave_requests r WHERE source_shared_form_link_id=$1 AND employee_id=$2 AND client_key=$3", formLink.id, me?.id, body.client_key) : one2(formLink ? "SELECT to_jsonb(r) row FROM leave_requests r WHERE source_form_link_id=$1 AND client_key=$2" : "SELECT to_jsonb(r) row FROM leave_requests r WHERE created_by=$1 AND client_key=$2", formLink?.id || user.id, body.client_key)))?.row;
-    if (prior) {
-      assert2(prior.payload_hash === hash2, "Kunci pengiriman sudah dipakai untuk isi berbeda.", 409);
-      return { id: prior.id, status: prior.status, duplicate: true };
+    if (method === "POST" && id === "export-audit") {
+      assert(controlEligible && await has(db, user, "hr.leaves.export"), "Akses ekspor ditolak.", 403);
+      const employeeIds = body.employee_ids;
+      assert(Array.isArray(employeeIds) && employeeIds.length <= 1e3, "Daftar ekspor tidak valid.");
+      for (const employeeId of employeeIds) {
+        const e = byId.get(employeeId);
+        assert(e && await can(db, user, "hr.leaves.export", { employee_id: e.id, org_unit_id: e.org_unit_id }) && privateAllowed(e), "Cakupan ekspor ditolak.", 403);
+      }
+      await audit(db, user, "EXPORT", "leave_requests", "report", { employee_count: employeeIds.length, kind: body.kind || "balances" });
+      return { ok: true };
     }
-    const planned = await plan(body.dates), requestId = crypto.randomUUID(), now2 = stamp();
-    await q(`INSERT INTO leave_requests(id,employee_id,approver_employee_id,first_date,last_date,day_count,reason,client_key,payload_hash,created_by,created_at,updated_at,submission_source,source_form_link_id,source_shared_form_link_id)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,$14)`, requestId, me.id, planned.approver.id, planned.dates[0], planned.dates.at(-1), planned.dates.length, reason, body.client_key, hash2, user.id, now2, formLink ? "FORM" : "PORTAL", formLink && !formLink.shared ? formLink.id : null, formLink?.shared ? formLink.id : null);
-    for (const a of planned.allocations) await q("INSERT INTO leave_request_days(request_id,employee_id,work_date,balance_year,state) VALUES($1,$2,$3,$4,'PENDING')", requestId, me.id, a.date, a.balance_year);
-    await createSteps(requestId, 1, "APPROVAL", planned.approvers);
-    await audit2(db, user, "LEAVE_SUBMITTED", "leave_requests", requestId, { days: planned.dates.length, approver_employee_id: planned.approver.id, conflict_days: planned.conflicts.length, submission_source: formLink ? "FORM" : "PORTAL", source_form_link_id: formLink && !formLink.shared ? formLink.id : null, source_shared_form_link_id: formLink?.shared ? formLink.id : null });
-    return { id: requestId, status: "PENDING", conflicts: planned.conflicts };
-  }
-  const r = await request(id), dates = await requestDays(id);
-  assert2(Number.isInteger(body.row_version) && body.row_version === r.row_version, "Pengajuan sudah berubah. Muat ulang.", 409);
-  assert2(dates.length === r.day_count, "Rincian hari tidak konsisten. Hubungi SDM.", 409);
-  const setStatus2 = async (status, note2, decided = false) => {
-    await q(`UPDATE leave_requests SET status=$1,decision_note=$2,updated_at=$3,row_version=row_version+1,
+    assert(method === "POST", "Alamat cuti tidak ditemukan.", 404);
+    await locked();
+    if (id === "preview") return plan(body.dates, body.leave_type);
+    if (!id) {
+      assert(uuid.test(body.client_key || ""), "Kunci pengiriman tidak valid.");
+      const reason = clean(body.reason, "Alasan cuti");
+      const type2 = getLeaveType(body.leave_type);
+      assert(type2, "Jenis cuti tidak valid.");
+      const canonical = JSON.stringify({ dates: Array.isArray(body.dates) ? [...body.dates].sort() : body.dates, reason, ...type2.deducts_balance ? {} : { leave_type: type2.code } });
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      const prior = (await (formLink?.shared ? one("SELECT to_jsonb(r) row FROM leave_requests r WHERE source_shared_form_link_id=$1 AND employee_id=$2 AND client_key=$3", formLink.id, me?.id, body.client_key) : one(formLink ? "SELECT to_jsonb(r) row FROM leave_requests r WHERE source_form_link_id=$1 AND client_key=$2" : "SELECT to_jsonb(r) row FROM leave_requests r WHERE created_by=$1 AND client_key=$2", formLink?.id || user.id, body.client_key)))?.row;
+      if (prior) {
+        assert(prior.payload_hash === hash, "Kunci pengiriman sudah dipakai untuk isi berbeda.", 409);
+        return { id: prior.id, status: prior.status, duplicate: true };
+      }
+      const planned = await plan(body.dates, type2.code), requestId = crypto.randomUUID(), now = stamp();
+      await q(`INSERT INTO leave_requests(id,employee_id,approver_employee_id,first_date,last_date,day_count,reason,client_key,payload_hash,created_by,created_at,updated_at,submission_source,source_form_link_id,source_shared_form_link_id,leave_type)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,$14,$15)`, requestId, me.id, planned.approver.id, planned.dates[0], planned.dates.at(-1), planned.dates.length, reason, body.client_key, hash, user.id, now, formLink ? "FORM" : "PORTAL", formLink && !formLink.shared ? formLink.id : null, formLink?.shared ? formLink.id : null, type2.code);
+      for (const a of planned.allocations) await q("INSERT INTO leave_request_days(request_id,employee_id,work_date,balance_year,state,leave_type) VALUES($1,$2,$3,$4,'PENDING',$5)", requestId, me.id, a.date, a.balance_year, type2.code);
+      await createSteps(requestId, 1, "APPROVAL", planned.approvers);
+      await audit(db, user, "LEAVE_SUBMITTED", "leave_requests", requestId, { days: planned.dates.length, leave_type: type2.code, approver_employee_id: planned.approver.id, conflict_days: planned.conflicts.length, submission_source: formLink ? "FORM" : "PORTAL", source_form_link_id: formLink && !formLink.shared ? formLink.id : null, source_shared_form_link_id: formLink?.shared ? formLink.id : null });
+      return { id: requestId, status: "PENDING", conflicts: planned.conflicts };
+    }
+    const r = await request(id), dates = await requestDays(id);
+    assert(Number.isInteger(body.row_version) && body.row_version === r.row_version, "Pengajuan sudah berubah. Muat ulang.", 409);
+    assert(dates.length === r.day_count, "Rincian hari tidak konsisten. Hubungi SDM.", 409);
+    const type = getLeaveType(r.leave_type);
+    assert(type && dates.every((d) => type.deducts_balance ? d.balance_year !== null : d.balance_year === null), "Alokasi jenis cuti tidak konsisten. Hubungi SDM.", 409);
+    const setStatus = async (status, note2, decided = false) => {
+      await q(`UPDATE leave_requests SET status=$1,decision_note=$2,updated_at=$3,row_version=row_version+1,
     decided_by=CASE WHEN $4 THEN $5::uuid ELSE decided_by END,decided_at=CASE WHEN $4 THEN $3 ELSE decided_at END WHERE id=$6`, status, note2 || null, stamp(), decided, user.id, r.id);
-    return { id: r.id, status };
-  };
-  if (action === "cancel") {
-    assert2(r.employee_id === user.employee_id, "Hanya pemohon dapat meminta pembatalan.", 403);
-    assert2(["PENDING", "APPROVED"].includes(r.status) && dates.every((d) => d.work_date >= day), "Pengajuan ini tidak dapat dibatalkan melalui proses ini.", 409);
-    const note2 = clean(body.note, "Alasan pembatalan"), status = r.status === "PENDING" ? "CANCELLED" : "CANCELLATION_PENDING";
-    if (status === "CANCELLED") await q("UPDATE leave_request_days SET state='RELEASED' WHERE request_id=$1", r.id);
-    if (status === "CANCELLED") await q("UPDATE leave_approval_steps SET state='CANCELLED' WHERE request_id=$1 AND state IN ('PENDING','WAITING')", r.id);
-    else {
-      const route = routeFor(byId.get(r.employee_id)), cycle = r.approval_cycle + 1;
-      await createSteps(r.id, cycle, "CANCELLATION", route);
-      await q("UPDATE leave_requests SET approval_cycle=$1,approver_employee_id=$2 WHERE id=$3", cycle, route[0].id, r.id);
+      return { id: r.id, status };
+    };
+    if (action === "cancel") {
+      assert(r.employee_id === user.employee_id, "Hanya pemohon dapat meminta pembatalan.", 403);
+      assert(["PENDING", "APPROVED"].includes(r.status) && dates.every((d) => d.work_date >= day), "Pengajuan ini tidak dapat dibatalkan melalui proses ini.", 409);
+      const note2 = clean(body.note, "Alasan pembatalan"), status = r.status === "PENDING" ? "CANCELLED" : "CANCELLATION_PENDING";
+      if (status === "CANCELLED") await q("UPDATE leave_request_days SET state='RELEASED' WHERE request_id=$1", r.id);
+      if (status === "CANCELLED") await q("UPDATE leave_approval_steps SET state='CANCELLED' WHERE request_id=$1 AND state IN ('PENDING','WAITING')", r.id);
+      else {
+        const route = routeFor(byId.get(r.employee_id)), cycle = r.approval_cycle + 1;
+        await createSteps(r.id, cycle, "CANCELLATION", route);
+        await q("UPDATE leave_requests SET approval_cycle=$1,approver_employee_id=$2 WHERE id=$3", cycle, route[0].id, r.id);
+      }
+      await q("UPDATE leave_requests SET cancellation_reason=$1 WHERE id=$2", note2, r.id);
+      await setStatus(status, null);
+      await audit(db, user, "LEAVE_CANCELLATION_REQUESTED", "leave_requests", r.id, { status }, note2);
+      return { id: r.id, status };
     }
-    await q("UPDATE leave_requests SET cancellation_reason=$1 WHERE id=$2", note2, r.id);
-    await setStatus2(status, null);
-    await audit2(db, user, "LEAVE_CANCELLATION_REQUESTED", "leave_requests", r.id, { status }, note2);
-    return { id: r.id, status };
-  }
-  const history = await stepRows([r.id]), approval = progress(r, history);
-  assert2(action === "decision" && canDecide(r, history), "Hanya pejabat pada tahap persetujuan yang sedang aktif dapat memutuskan.", 403);
-  if (approval.legacy) await createSteps(r.id, r.approval_cycle, r.status === "CANCELLATION_PENDING" ? "CANCELLATION" : "APPROVAL", approval.route);
-  const decideStep = async (state, note2) => q("UPDATE leave_approval_steps SET state=$1,decided_by=$2,decided_at=now(),note=$3,verified_work_dates=$4,verified_identity=$5 WHERE request_id=$6 AND cycle_no=$7 AND step_no=$8", state, user.id, note2, body.verified_work_dates === true, body.verified_identity === true, r.id, r.approval_cycle, approval.current.step_no);
-  const decision = body.decision, note = body.note ? clean(body.note, "Catatan keputusan") : null, cancellation = r.status === "CANCELLATION_PENDING";
-  assert2(r.status === "PENDING" && ["approve", "reject"].includes(decision) || cancellation && ["approve-cancel", "reject-cancel"].includes(decision), "Keputusan tidak sesuai status pengajuan.", 409);
-  if (decision === "reject" || decision === "reject-cancel") {
-    assert2(note, "Alasan penolakan wajib diisi.");
-    if (decision === "reject") await q("UPDATE leave_request_days SET state='RELEASED' WHERE request_id=$1", r.id);
-    await decideStep("REJECTED", note);
-    await q("UPDATE leave_approval_steps SET state='CANCELLED' WHERE request_id=$1 AND cycle_no=$2 AND state='WAITING'", r.id, r.approval_cycle);
-    const result2 = await setStatus2(cancellation ? "APPROVED" : "REJECTED", note, true);
-    await audit2(db, user, cancellation ? "LEAVE_CANCELLATION_REJECTED" : "LEAVE_REJECTED", "leave_requests", r.id, {}, note);
-    return result2;
-  }
-  assert2(body.verified_work_dates === true, "Atasan wajib memverifikasi tanggal hari kerja atau pembatalan sebelum menyetujui.");
-  assert2(r.submission_source !== "FORM" || body.verified_identity === true, "Atasan wajib memverifikasi identitas pemohon dari formulir sebelum menyetujui.");
-  assert2(eligible(byId.get(r.employee_id)), "Status pegawai tidak lagi memenuhi syarat.", 409);
-  if (cancellation) assert2(dates.every((d) => d.work_date >= day), "Cuti sudah berlangsung. Pembatalan memerlukan rekonsiliasi SDM.", 409);
-  const next = approval.steps.find((s) => s.step_no === approval.current.step_no + 1);
-  if (next) {
-    await decideStep("APPROVED", note);
-    await q("UPDATE leave_approval_steps SET state='PENDING' WHERE request_id=$1 AND cycle_no=$2 AND step_no=$3", r.id, r.approval_cycle, next.step_no);
-    await q("UPDATE leave_requests SET approver_employee_id=$1,updated_at=$2,row_version=row_version+1 WHERE id=$3", next.approver_employee_id, stamp(), r.id);
-    await audit2(db, user, "LEAVE_APPROVAL_STAGE_APPROVED", "leave_requests", r.id, { cycle: r.approval_cycle, step: approval.current.step_no, next_approver_employee_id: next.approver_employee_id, purpose: cancellation ? "CANCELLATION" : "APPROVAL" }, note || "");
-    return { id: r.id, status: r.status, next_step: next.step_no };
-  }
-  const byYear = /* @__PURE__ */ new Map();
-  for (const d of dates) byYear.set(d.balance_year, (byYear.get(d.balance_year) || 0) + 1);
-  for (const [year2, count] of byYear) {
-    const b = await one2("SELECT *,expires_on::text expiry,effective_from::text start_day FROM leave_year_balances WHERE employee_id=$1 AND balance_year=$2 FOR UPDATE", r.employee_id, year2);
-    assert2(b && !b.closed_at && b.expiry > day, "Saldo asal sudah kedaluwarsa; lakukan rekonsiliasi sebelum keputusan.", 409);
-    assert2(dates.filter((d) => d.balance_year === year2).every((d) => d.work_date >= b.start_day && d.work_date < b.expiry), "Tanggal tidak sesuai masa berlaku saldo.", 409);
-    const delta = cancellation ? count : -count;
-    assert2(cancellation ? b.consumed_days >= count : b.remaining_days >= count, "Saldo berubah atau tidak mencukupi.", 409);
-    await q("UPDATE leave_year_balances SET remaining_days=remaining_days+$1,consumed_days=consumed_days-$1,updated_at=CURRENT_TIMESTAMP,row_version=row_version+1 WHERE employee_id=$2 AND balance_year=$3", delta, r.employee_id, year2);
-    await q(
-      `INSERT INTO leave_balance_events(employee_id,balance_year,event_key,event_type,delta_days,before_days,after_days,source_batch_id,effective_date,details)
+    const history = await stepRows([r.id]), approval = progress(r, history);
+    assert(action === "decision" && canDecide(r, history), "Hanya pejabat pada tahap persetujuan yang sedang aktif dapat memutuskan.", 403);
+    if (approval.legacy) await createSteps(r.id, r.approval_cycle, r.status === "CANCELLATION_PENDING" ? "CANCELLATION" : "APPROVAL", approval.route);
+    const decideStep = async (state, note2) => q("UPDATE leave_approval_steps SET state=$1,decided_by=$2,decided_at=now(),note=$3,verified_work_dates=$4,verified_identity=$5 WHERE request_id=$6 AND cycle_no=$7 AND step_no=$8", state, user.id, note2, body.verified_work_dates === true, body.verified_identity === true, r.id, r.approval_cycle, approval.current.step_no);
+    const decision = body.decision, note = body.note ? clean(body.note, "Catatan keputusan") : null, cancellation = r.status === "CANCELLATION_PENDING";
+    assert(r.status === "PENDING" && ["approve", "reject"].includes(decision) || cancellation && ["approve-cancel", "reject-cancel"].includes(decision), "Keputusan tidak sesuai status pengajuan.", 409);
+    if (decision === "reject" || decision === "reject-cancel") {
+      assert(note, "Alasan penolakan wajib diisi.");
+      if (decision === "reject") await q("UPDATE leave_request_days SET state='RELEASED' WHERE request_id=$1", r.id);
+      await decideStep("REJECTED", note);
+      await q("UPDATE leave_approval_steps SET state='CANCELLED' WHERE request_id=$1 AND cycle_no=$2 AND state='WAITING'", r.id, r.approval_cycle);
+      const result2 = await setStatus(cancellation ? "APPROVED" : "REJECTED", note, true);
+      await audit(db, user, cancellation ? "LEAVE_CANCELLATION_REJECTED" : "LEAVE_REJECTED", "leave_requests", r.id, {}, note);
+      return result2;
+    }
+    assert(body.verified_work_dates === true, "Atasan wajib memverifikasi tanggal, ketentuan jenis cuti, atau pembatalan sebelum menyetujui.");
+    assert(r.submission_source !== "FORM" || body.verified_identity === true, "Atasan wajib memverifikasi identitas pemohon dari formulir sebelum menyetujui.");
+    assert(eligible(byId.get(r.employee_id)), "Status pegawai tidak lagi memenuhi syarat.", 409);
+    if (cancellation) assert(dates.every((d) => d.work_date >= day), "Cuti sudah berlangsung. Pembatalan memerlukan rekonsiliasi SDM.", 409);
+    const next = approval.steps.find((s) => s.step_no === approval.current.step_no + 1);
+    if (next) {
+      await decideStep("APPROVED", note);
+      await q("UPDATE leave_approval_steps SET state='PENDING' WHERE request_id=$1 AND cycle_no=$2 AND step_no=$3", r.id, r.approval_cycle, next.step_no);
+      await q("UPDATE leave_requests SET approver_employee_id=$1,updated_at=$2,row_version=row_version+1 WHERE id=$3", next.approver_employee_id, stamp(), r.id);
+      await audit(db, user, "LEAVE_APPROVAL_STAGE_APPROVED", "leave_requests", r.id, { cycle: r.approval_cycle, step: approval.current.step_no, next_approver_employee_id: next.approver_employee_id, purpose: cancellation ? "CANCELLATION" : "APPROVAL" }, note || "");
+      return { id: r.id, status: r.status, next_step: next.step_no };
+    }
+    const byYear = /* @__PURE__ */ new Map();
+    if (type.deducts_balance) for (const d of dates) byYear.set(d.balance_year, (byYear.get(d.balance_year) || 0) + 1);
+    for (const [year, count] of byYear) {
+      const b = await one("SELECT *,expires_on::text expiry,effective_from::text start_day FROM leave_year_balances WHERE employee_id=$1 AND balance_year=$2 FOR UPDATE", r.employee_id, year);
+      assert(b && !b.closed_at && b.expiry > day, "Saldo asal sudah kedaluwarsa; lakukan rekonsiliasi sebelum keputusan.", 409);
+      assert(dates.filter((d) => d.balance_year === year).every((d) => d.work_date >= b.start_day && d.work_date < b.expiry), "Tanggal tidak sesuai masa berlaku saldo.", 409);
+      const delta = cancellation ? count : -count;
+      assert(cancellation ? b.consumed_days >= count : b.remaining_days >= count, "Saldo berubah atau tidak mencukupi.", 409);
+      await q("UPDATE leave_year_balances SET remaining_days=remaining_days+$1,consumed_days=consumed_days-$1,updated_at=CURRENT_TIMESTAMP,row_version=row_version+1 WHERE employee_id=$2 AND balance_year=$3", delta, r.employee_id, year);
+      await q(
+        `INSERT INTO leave_balance_events(employee_id,balance_year,event_key,event_type,delta_days,before_days,after_days,source_batch_id,effective_date,details)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
-      r.employee_id,
-      year2,
-      `${cancellation ? "CANCEL" : "APPROVE"}:${r.id}:${year2}`,
-      cancellation ? "REVERSAL" : "CONSUMPTION",
-      delta,
-      b.remaining_days,
-      b.remaining_days + delta,
-      b.source_batch_id,
-      day,
-      JSON.stringify({ request_id: r.id, decided_by: user.id })
-    );
+        r.employee_id,
+        year,
+        `${cancellation ? "CANCEL" : "APPROVE"}:${r.id}:${year}`,
+        cancellation ? "REVERSAL" : "CONSUMPTION",
+        delta,
+        b.remaining_days,
+        b.remaining_days + delta,
+        b.source_batch_id,
+        day,
+        JSON.stringify({ request_id: r.id, decided_by: user.id })
+      );
+    }
+    await q("UPDATE leave_request_days SET state=$1 WHERE request_id=$2", cancellation ? "RELEASED" : "APPROVED", r.id);
+    await decideStep("APPROVED", note);
+    const result = await setStatus(cancellation ? "CANCELLED" : "APPROVED", note, true);
+    await audit(db, user, cancellation ? "LEAVE_CANCELLATION_APPROVED" : "LEAVE_APPROVED", "leave_requests", r.id, { days: r.day_count, work_dates_verified: true, identity_verified: r.submission_source === "FORM" }, note || "");
+    return result;
   }
-  await q("UPDATE leave_request_days SET state=$1 WHERE request_id=$2", cancellation ? "RELEASED" : "APPROVED", r.id);
-  await decideStep("APPROVED", note);
-  const result = await setStatus2(cancellation ? "CANCELLED" : "APPROVED", note, true);
-  await audit2(db, user, cancellation ? "LEAVE_CANCELLATION_APPROVED" : "LEAVE_APPROVED", "leave_requests", r.id, { days: r.day_count, work_dates_verified: true, identity_verified: r.submission_source === "FORM" }, note || "");
-  return result;
-}
+  return __toCommonJS(leaves_exports);
+})();
+// END SPECIAL LEAVE MODULE
+async function leaveRoutes(context,services){return __specialLeave.leaveRoutes(context,services);}
 
 // supabase/deploy/portal-api/active-gateway-with-leave.ts
 import { createHash as driveCacheHash } from "node:crypto";
@@ -595,7 +681,8 @@ var driveModuleFolders = Object.freeze({
   pengadaan: "SPH-Portal-Pengadaan",
   website: "SPH-Portal-Website",
   coaching: "SPH-Portal-Coaching",
-  briefing: "SPH-Portal-Briefing"
+  briefing: "SPH-Portal-Briefing",
+  absensi: "SPH-Portal-Absensi"
 });
 function driveModuleForOperation(path, body = {}) {
   const resource = typeof path === "string" ? path.split("/")[0] : "";
@@ -7836,6 +7923,1340 @@ async function visitsSheetRequest(client, identity, storage, b, env, authorize) 
     adoptVisitError(error);
   }
 }
+// --- Modul Absensi, dibangkitkan dari lib/attendance*.mjs (build-attendance-deploy.mjs) ---
+const __attendance = (() => {
+  const Buffer3 = __attendance_Buffer3;
+  const randomBytes = __attendance_randomBytes;
+  const randomUUID = __attendance_randomUUID;
+  const createHash = __attendance_createHash;
+  const Buffer = __attendance_Buffer;
+  const createHash2 = __attendance_createHash2;
+  const webcrypto = __attendance_webcrypto;
+  const Buffer2 = __attendance_Buffer2;
+  const createHash3 = __attendance_createHash3;
+  const randomUUID2 = __attendance_randomUUID2;
+// supabase/functions/_shared/portal/arrays.mjs
+async function asyncMap(items, fn) {
+  const out = [];
+  for (let i = 0; i < items.length; i++) out.push(await fn(items[i], i, items));
+  return out;
+}
+async function asyncSome(items, fn) {
+  for (let i = 0; i < items.length; i++) if (await fn(items[i], i, items)) return true;
+  return false;
+}
+
+// supabase/functions/_shared/portal/attendance.mjs
+
+// supabase/functions/_shared/portal/db.mjs
+var now = () => (/* @__PURE__ */ new Date()).toISOString();
+var today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Makassar" }).format(/* @__PURE__ */ new Date());
+var uid = () => randomUUID();
+var AppError = class extends Error {
+  constructor(status, message, details) {
+    super(message);
+    this.status = status;
+    this.details = details;
+  }
+};
+var assert = (condition, message, status = 422) => {
+  if (!condition) throw new AppError(status, message);
+};
+var sqlName = (n) => {
+  if (!/^[a-z_][a-z0-9_]*$/.test(n)) throw new Error("Invalid SQL identifier");
+  return n;
+};
+function postgresQuery(sql) {
+  let quoted = false, index = 0, out = "";
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    if (c === "'") {
+      out += c;
+      if (quoted && sql[i + 1] === "'") {
+        out += sql[++i];
+        continue;
+      }
+      quoted = !quoted;
+      continue;
+    }
+    out += c === "?" && !quoted ? `$${++index}` : c;
+  }
+  return out.replace(/\b([a-z_]\w*)\.rowid\b/gi, "$1.id");
+}
+var all = (db, sql, ...args) => db.query(postgresQuery(sql), args.map((v) => v ?? null));
+var one = async (db, sql, ...args) => (await all(db, sql, ...args))[0];
+var run = async (db, sql, ...args) => {
+  const rows = await db.query(postgresQuery(sql), args.map((v) => v ?? null));
+  return { changes: rows.count ?? rows.affectedRows ?? 0 };
+};
+async function insert(db, table, values) {
+  const row = { id: uid(), created_at: now(), updated_at: now(), row_version: 1, ...values };
+  const columns = Object.keys(row).map(sqlName);
+  await run(db, `INSERT INTO ${sqlName(table)} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`, ...Object.values(row).map((v) => typeof v === "boolean" ? Number(v) : v ?? null));
+  return one(db, `SELECT * FROM ${sqlName(table)} WHERE id=?`, row.id);
+}
+async function update(db, table, id, version, values) {
+  assert(Number.isInteger(version), "Versi data wajib dikirim. Muat ulang data.", 409);
+  const row = { ...values, updated_at: now() };
+  const result = await run(db, `UPDATE ${sqlName(table)} SET ${Object.keys(row).map((k) => `${sqlName(k)}=?`).join(",")},row_version=row_version+1 WHERE id=? AND row_version=?`, ...Object.values(row).map((v) => typeof v === "boolean" ? Number(v) : v ?? null), id, version);
+  assert(result.changes === 1, "Data sudah berubah. Muat ulang sebelum menyimpan.", 409);
+  return one(db, `SELECT * FROM ${sqlName(table)} WHERE id=?`, id);
+}
+async function tx(db, work) {
+  assert(db.inTransaction, "Transaction required.", 500);
+  return await work();
+}
+async function audit(db, actor, action, type, key, summary = {}, reason = "") {
+  await insert(db, "audit_events", { actor_user_id: actor?.id || null, action, object_type: type, object_key: String(key), occurred_at: now(), outcome: "SUCCESS", request_id: actor?.request_id || uid(), reason, change_summary: JSON.stringify(summary) });
+}
+function date(v, label = "Tanggal") {
+  assert(typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v, `${label} tidak valid.`);
+  return v;
+}
+function instant(v) {
+  assert(typeof v === "string" && /(Z|[+-]\d\d:\d\d)$/.test(v) && !isNaN(Date.parse(v)), "Waktu harus menyertakan zona waktu.");
+  return new Date(v).toISOString();
+}
+
+// supabase/functions/_shared/portal/auth.mjs
+var digest = (value) => createHash("sha256").update(value).digest("hex");
+var purchasingRoleCodes = {
+  PURCHASE_REQUESTER: ["Pemohon Pengadaan", ["purchasing.requests.create", "purchasing.requests.read"]],
+  PURCHASING_STAFF: ["Staf Purchasing", ["purchasing.requests.read", "purchasing.procurement.manage", "purchasing.vendors.read", "purchasing.vendors.manage", "purchasing.vendors.sensitive", "purchasing.budget.read", "purchasing.reports.read"]],
+  FINANCE_VERIFIER: ["Verifikator Keuangan", ["purchasing.requests.read", "purchasing.requests.verify", "purchasing.budget.read", "purchasing.budget.manage", "purchasing.vendors.read", "purchasing.vendors.sensitive", "purchasing.reports.read"]],
+  PURCHASE_AUDITOR: ["Pemeriksa SPI", ["purchasing.requests.read", "purchasing.vendors.read", "purchasing.budget.read", "purchasing.reports.read", "purchasing.reports.export", "admin.audit.read"]],
+  PURCHASE_ADMIN: ["Pengelola Pengadaan", ["purchasing.settings.manage", "purchasing.requests.read", "purchasing.vendors.read", "purchasing.vendors.manage", "purchasing.vendors.sensitive", "purchasing.budget.read", "purchasing.budget.manage"]]
+};
+var purchasingRoles = Object.entries(purchasingRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+var merchandiseRoleCodes = {
+  BISNIS_PIMPINAN: ["Pimpinan Bisnis", ["merchandise.catalog.read", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.sales.read", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_MANAGER: ["Pengelola Bisnis", ["merchandise.catalog.read", "merchandise.catalog.manage", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.stock.record", "merchandise.stock.adjust", "merchandise.sales.read", "merchandise.sales.create", "merchandise.sales.void", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_KOORDINATOR: ["Koordinator Merchandise", ["merchandise.catalog.read", "merchandise.catalog.costs", "merchandise.stock.read", "merchandise.stock.record", "merchandise.stock.adjust", "merchandise.sales.read", "merchandise.sales.create", "merchandise.reports.read", "merchandise.reports.export"]],
+  BISNIS_PETUGAS: ["Petugas Penjualan Merchandise", ["merchandise.catalog.read", "merchandise.stock.read", "merchandise.stock.record", "merchandise.sales.read", "merchandise.sales.create"]]
+};
+var merchandiseRoles = Object.entries(merchandiseRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+var visitRoleCodes = {
+  KUNJUNGAN_PENGELOLA: ["Pengelola Kunjungan", ["visits.dashboard.read", "visits.guides.read", "visits.guides.manage", "visits.records.read", "visits.forms.read", "visits.forms.manage", "visits.reports.read", "visits.reports.export", "visits.settings.manage"]],
+  KUNJUNGAN_PIMPINAN: ["Pimpinan Kunjungan", ["visits.dashboard.read", "visits.guides.read", "visits.records.read", "visits.reports.read", "visits.reports.export"]]
+};
+var visitRoles = Object.entries(visitRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
+async function grants(db, user) {
+  const key = `grants:${user.id}`, cache = db.authorizationCache;
+  if (cache?.has(key)) return cache.get(key);
+  const rows = await all(db, `SELECT ur.id,ur.scope_kind,p.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.is_active=1 JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=?`, user.id);
+  cache?.set(key, rows);
+  return rows;
+}
+async function authorizationScopeRows(db, kind, id, target) {
+  const key = JSON.stringify(["scope", kind, id, target]), cache = db.authorizationCache;
+  if (cache?.has(key)) return cache.get(key);
+  const sql = kind === "units" ? "SELECT * FROM user_role_units WHERE user_role_id=?" : kind === "post" ? "SELECT 1 FROM user_role_posts WHERE user_role_id=? AND post_id=?" : "WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE parent_id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree WHERE id=?";
+  const rows = await all(db, sql, ...kind === "units" ? [id] : [id, target]);
+  cache?.set(key, rows);
+  return rows;
+}
+async function can(db, user, permission, context = {}) {
+  const matches = (await grants(db, user)).filter((g) => g.code === permission);
+  return await asyncSome(matches, async (g) => {
+    if (g.scope_kind === "ALL") return true;
+    if (g.scope_kind === "SELF") return Boolean(user.employee_id && [context.employee_id, context.reporter_employee_id, ...context.related_employees || []].includes(user.employee_id));
+    if (g.scope_kind === "ASSIGNED_POSTS") return permission.startsWith("security.") && Boolean(context.post_id && (await authorizationScopeRows(db, "post", g.id, context.post_id)).length);
+    if (!context.org_unit_id) return false;
+    return await asyncSome(await authorizationScopeRows(db, "units", g.id), async (u) => {
+      if (u.org_unit_id === context.org_unit_id) return true;
+      return u.include_descendants && Boolean((await authorizationScopeRows(db, "descendants", u.org_unit_id, context.org_unit_id)).length);
+    });
+  });
+}
+async function has(db, user, permission) {
+  return (await grants(db, user)).some((g) => g.code === permission);
+}
+
+// supabase/functions/_shared/portal/attendance-rules.mjs
+var attendanceRules = Object.freeze({
+  sessionHours: 16,
+  radiusDefault: 100,
+  radiusMin: 20,
+  radiusMax: 1e3,
+  accuracyLimit: 100,
+  crowdedPeople: 4,
+  crowdedMinutes: 10,
+  jumpKmh: 120,
+  jumpMinMeters: 1e3,
+  jumpWindowHours: 12,
+  photoMaxBytes: 300 * 1024,
+  photoMaxAgeMinutes: 5,
+  locationMaxAgeMinutes: 2,
+  photoRetentionDays: 90,
+  referenceRetentionDays: 90,
+  correctionDays: 7,
+  signatureSkewMinutes: 10,
+  registrationDays: 7,
+  sessionMinutesMax: 30,
+  recapMaxDays: 62,
+  reviewDays: 31
+});
+var attendanceFlags = Object.freeze({
+  DI_LUAR_TITIK: "Di luar titik",
+  GPS_KURANG_AKURAT: "GPS kurang akurat",
+  LOKASI_MELOMPAT: "Lokasi melompat",
+  HP_PRIBADI_RAMAI: "Banyak pegawai di satu HP pribadi",
+  TANPA_FOTO_ACUAN: "Belum ada foto acuan",
+  TANPA_MASUK: "Tanpa absen masuk",
+  TANPA_PULANG: "Tanpa absen pulang",
+  SAAT_CUTI: "Absen saat cuti",
+  TITIK_BELUM_ADA: "Titik absen belum diatur"
+});
+var outsideReasons = Object.freeze({
+  DINAS_LUAR: "Dinas luar",
+  TUGAS_LAPANGAN: "Tugas lapangan",
+  LAINNYA: "Lainnya"
+});
+var dayNoteKinds = Object.freeze({
+  IZIN: "Izin",
+  SAKIT: "Sakit",
+  DINAS_LUAR: "Dinas luar"
+});
+var dayStatuses = Object.freeze({
+  HADIR: "Hadir",
+  BELUM_PULANG: "Masuk, belum pulang",
+  TANPA_PULANG: "Hadir, tanpa absen pulang",
+  TANPA_MASUK: "Pulang tanpa absen masuk",
+  CUTI: "Cuti",
+  IZIN: "Izin",
+  SAKIT: "Sakit",
+  DINAS_LUAR: "Dinas luar",
+  TIDAK_ADA_CATATAN: "Tidak ada catatan"
+});
+var presentStatuses = Object.freeze(["HADIR", "BELUM_PULANG", "TANPA_PULANG", "TANPA_MASUK"]);
+var DAY = 864e5;
+var witaDate = (ms) => new Date(ms + 8 * 36e5).toISOString().slice(0, 10);
+var shiftDay = (day, days) => new Date(Date.parse(day + "T00:00:00Z") + days * DAY).toISOString().slice(0, 10);
+function daysBetween(from, to) {
+  const out = [];
+  for (let d = from; d <= to; d = shiftDay(d, 1)) out.push(d);
+  return out;
+}
+var parseFlags = (value) => {
+  if (Array.isArray(value)) return value.filter((f) => typeof f === "string" && Object.hasOwn(attendanceFlags, f));
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.filter((f) => typeof f === "string" && Object.hasOwn(attendanceFlags, f)) : [];
+  } catch {
+    return [];
+  }
+};
+function dayStatus({ events = [], corrections = [], note = null, leave = null, nowMs = Date.now() }) {
+  const voided = new Set(corrections.filter((c) => c.void_event_id).map((c) => c.void_event_id));
+  const live = events.filter((e) => !voided.has(e.id)).sort((a, b) => String(a.recorded_at).localeCompare(String(b.recorded_at)));
+  const ins = live.filter((e) => e.kind === "IN"), outs = live.filter((e) => e.kind === "OUT");
+  let correctedIn = null, correctedOut = null;
+  for (const c of [...corrections].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))) {
+    if (c.in_at) correctedIn = c.in_at;
+    if (c.out_at) correctedOut = c.out_at;
+  }
+  const inAt = correctedIn || ins[0]?.recorded_at || null;
+  let outAt = correctedOut || outs.at(-1)?.recorded_at || null;
+  if (inAt && outAt && outAt <= inAt) outAt = null;
+  const flags = /* @__PURE__ */ new Set();
+  for (const e of live) for (const f of parseFlags(e.flags)) flags.add(f);
+  let status;
+  if (inAt && outAt) status = "HADIR";
+  else if (inAt) status = nowMs - Date.parse(inAt) <= attendanceRules.sessionHours * 36e5 ? "BELUM_PULANG" : "TANPA_PULANG";
+  else if (outAt) status = "TANPA_MASUK";
+  else if (leave) status = "CUTI";
+  else if (note) status = note.kind;
+  else status = "TIDAK_ADA_CATATAN";
+  if (inAt) flags.delete("TANPA_MASUK");
+  else if (outAt) flags.add("TANPA_MASUK");
+  if (status === "TANPA_PULANG") flags.add("TANPA_PULANG");
+  if (leave && (inAt || outAt)) flags.add("SAAT_CUTI");
+  return {
+    status,
+    in_at: inAt,
+    out_at: outAt,
+    minutes: inAt && outAt ? Math.round((Date.parse(outAt) - Date.parse(inAt)) / 6e4) : null,
+    flags: [...flags],
+    corrected: Boolean(correctedIn || correctedOut || voided.size),
+    event_ids: live.map((e) => e.id),
+    note: note ? {
+      id: note.id,
+      kind: note.kind,
+      note: note.note || ""
+    } : null,
+    leave_type: leave?.leave_type || null
+  };
+}
+function buildRecap({ employees, events = [], corrections = [], notes = [], leaveDays: leaveDays2 = [], from, to, nowMs = Date.now() }) {
+  const key = (employeeId, day) => `${employeeId}\0${day}`;
+  const group = (rows, field = "work_date") => {
+    const map = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      const k = key(r.employee_id, r[field]);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(r);
+    }
+    return map;
+  };
+  const byEvents = group(events), byCorrections = group(corrections), byLeave = group(leaveDays2);
+  const byNotes = new Map(notes.map((n) => [key(n.employee_id, n.work_date), n]));
+  const dates = daysBetween(from, to);
+  return employees.map((e) => {
+    const days = [];
+    const summary = {
+      hadir: 0,
+      tanpa_pulang: 0,
+      tanpa_masuk: 0,
+      belum_pulang: 0,
+      cuti: 0,
+      izin: 0,
+      sakit: 0,
+      dinas_luar: 0,
+      tanpa_catatan: 0,
+      ditandai: 0,
+      menit: 0
+    };
+    for (const day of dates) {
+      const k = key(e.id, day);
+      const result = dayStatus({
+        events: byEvents.get(k) || [],
+        corrections: byCorrections.get(k) || [],
+        note: byNotes.get(k) || null,
+        leave: byLeave.get(k)?.[0] || null,
+        nowMs
+      });
+      if (presentStatuses.includes(result.status)) summary.hadir++;
+      if (result.status === "TANPA_PULANG") summary.tanpa_pulang++;
+      if (result.status === "TANPA_MASUK") summary.tanpa_masuk++;
+      if (result.status === "BELUM_PULANG") summary.belum_pulang++;
+      if (result.status === "CUTI") summary.cuti++;
+      if (result.status === "IZIN") summary.izin++;
+      if (result.status === "SAKIT") summary.sakit++;
+      if (result.status === "DINAS_LUAR") summary.dinas_luar++;
+      if (result.status === "TIDAK_ADA_CATATAN") summary.tanpa_catatan++;
+      if (result.flags.length) summary.ditandai++;
+      if (result.minutes) summary.menit += result.minutes;
+      if (result.status !== "TIDAK_ADA_CATATAN" || result.flags.length) days.push({
+        date: day,
+        ...result
+      });
+    }
+    return {
+      employee_id: e.id,
+      days,
+      summary
+    };
+  });
+}
+
+// supabase/functions/_shared/portal/attendance-form.mjs
+var attendanceFormActions = Object.freeze(["registration", "register", "session", "session-register", "context", "search", "person", "submit"]);
+var attendanceFormLimits = Object.freeze({
+  windowMinutes: 10,
+  ip: {
+    registration: 60,
+    register: 30,
+    session: 300,
+    "session-register": 120,
+    context: 1500,
+    search: 800,
+    person: 2e3,
+    submit: 800
+  },
+  device: {
+    context: 120,
+    search: 120,
+    person: 300,
+    submit: 60
+  },
+  sharedDevice: {
+    context: 300,
+    search: 300,
+    person: 900,
+    submit: 150
+  }
+});
+var peopleSql = `SELECT e.id,e.full_name,e.is_active,ep.supervisor_employee_id,p.org_unit_id,p.name position_name,u.name unit_name
+ FROM employees e
+ LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)
+ LEFT JOIN positions p ON p.id=ep.position_id LEFT JOIN org_units u ON u.id=p.org_unit_id`;
+function groupPeople(rows) {
+  const map = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const list = map.get(r.id) || [];
+    list.push(r);
+    map.set(r.id, list);
+  }
+  return [...map.values()].map((list) => ({
+    ...list[0],
+    ambiguous: list.length !== 1
+  }));
+}
+async function attendancePeople(db, where = "", ...args) {
+  const day = witaDate(Date.now());
+  return groupPeople(await all(db, `${peopleSql} WHERE e.is_active=1${where ? ` AND ${where}` : ""} ORDER BY e.full_name,e.id`, day, day, ...args));
+}
+var personView = (p) => p && {
+  id: p.id,
+  name: p.full_name,
+  position: p.position_name || "",
+  unit: p.unit_name || ""
+};
+async function unitTree(db, unitId) {
+  return (await all(db, "WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree", unitId)).map((r) => r.id);
+}
+var unitName = async (db, id) => id ? (await one(db, "SELECT name FROM org_units WHERE id=?", id))?.name || "" : "";
+async function deviceView(db, d) {
+  const owner = d.owner_employee_id ? (await attendancePeople(db, "e.id=?", d.owner_employee_id))[0] || null : null;
+  const ownerName = owner ? owner.full_name : d.owner_employee_id ? (await one(db, "SELECT full_name FROM employees WHERE id=?", d.owner_employee_id))?.full_name || "" : "";
+  return {
+    id: d.id,
+    kind: d.kind,
+    status: d.status,
+    label: d.kind === "SHARED" ? d.label : `HP pribadi ${ownerName}`.trim(),
+    owner: owner ? personView(owner) : d.owner_employee_id ? {
+      id: d.owner_employee_id,
+      name: ownerName,
+      position: "",
+      unit: ""
+    } : null,
+    unit: d.kind === "SHARED" ? {
+      id: d.org_unit_id,
+      name: await unitName(db, d.org_unit_id)
+    } : owner?.org_unit_id ? {
+      id: owner.org_unit_id,
+      name: owner.unit_name
+    } : null
+  };
+}
+
+// supabase/functions/_shared/portal/attendance.mjs
+var localDeps = {
+  has,
+  can,
+  audit,
+  readPhoto: null
+};
+var DAY2 = 864e5;
+var peopleSql2 = `SELECT e.id,e.employee_no,e.full_name,e.is_active,e.employment_status,ep.supervisor_employee_id,p.org_unit_id,p.name position_name,u.name unit_name
+ FROM employees e
+ LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)
+ LEFT JOIN positions p ON p.id=ep.position_id LEFT JOIN org_units u ON u.id=p.org_unit_id`;
+async function directory(db, employeeId = null) {
+  const day = today(), map = /* @__PURE__ */ new Map();
+  const rows = employeeId ? await all(db, `${peopleSql2} WHERE e.id=?`, day, day, employeeId) : await all(db, `${peopleSql2} ORDER BY e.full_name,e.id`, day, day);
+  for (const r of rows) {
+    const list = map.get(r.id) || [];
+    list.push(r);
+    map.set(r.id, list);
+  }
+  return [...map.values()].map((list) => ({
+    ...list[0],
+    is_active: Number(list[0].is_active) === 1,
+    ambiguous: list.length !== 1
+  }));
+}
+var view = (p) => ({
+  id: p.id,
+  name: p.full_name,
+  employee_no: p.employee_no || "",
+  position: p.position_name || "",
+  unit: p.unit_name || "",
+  unit_id: p.org_unit_id || null,
+  active: p.is_active,
+  ambiguous: p.ambiguous
+});
+async function scopeOf(db, user, deps) {
+  const { has: has2, can: can2 } = deps;
+  const people = await directory(db), byId = new Map(people.map((p) => [p.id, p]));
+  const subordinates = /* @__PURE__ */ new Set(), direct = /* @__PURE__ */ new Set(), queue = user.employee_id ? [user.employee_id] : [];
+  while (queue.length) {
+    const parent = queue.shift();
+    for (const e of people) if (!e.ambiguous && e.supervisor_employee_id === parent && !subordinates.has(e.id) && e.id !== user.employee_id) {
+      subordinates.add(e.id);
+      queue.push(e.id);
+      if (parent === user.employee_id) direct.add(e.id);
+    }
+  }
+  const hasRead = await has2(db, user, "hr.attendance.read"), hasManage = await has2(db, user, "hr.attendance.manage");
+  const allRead = hasRead && await can2(db, user, "hr.attendance.read", {}), allManage = hasManage && await can2(db, user, "hr.attendance.manage", {});
+  const readable = /* @__PURE__ */ new Set(), managed = /* @__PURE__ */ new Set();
+  for (const e of people) {
+    const context = {
+      employee_id: e.id,
+      org_unit_id: e.org_unit_id
+    };
+    const manage = allManage || hasManage && await can2(db, user, "hr.attendance.manage", context);
+    if (manage) managed.add(e.id);
+    if (e.id === user.employee_id || subordinates.has(e.id) || manage || allRead || hasRead && await can2(db, user, "hr.attendance.read", context)) readable.add(e.id);
+  }
+  return {
+    people,
+    byId,
+    subordinates,
+    direct,
+    readable,
+    managed,
+    hasRead,
+    hasManage,
+    allRead
+  };
+}
+function writeAccess(scope, employeeId) {
+  if (scope.managed.has(employeeId)) return {
+    allowed: true,
+    manager: true
+  };
+  if (scope.direct.has(employeeId)) return {
+    allowed: true,
+    manager: false
+  };
+  return {
+    allowed: false,
+    manager: false
+  };
+}
+async function targetAccess(db, user, deps, employeeId, message = "Hanya atasan langsung atau Pengelola Absensi yang dapat mengubah data absen pegawai ini.") {
+  const { has: has2, can: can2 } = deps;
+  assert(typeof employeeId === "string" && employeeId.length <= 100, "Pegawai tidak ditemukan.", 404);
+  const [person] = await directory(db, employeeId);
+  assert(person, "Pegawai tidak ditemukan.", 404);
+  const direct = Boolean(user.employee_id) && !person.ambiguous && person.supervisor_employee_id === user.employee_id && person.id !== user.employee_id;
+  const manager = await has2(db, user, "hr.attendance.manage") && await can2(db, user, "hr.attendance.manage", {
+    employee_id: person.id,
+    org_unit_id: person.org_unit_id
+  });
+  assert(manager || direct, message, 403);
+  return {
+    person,
+    allowed: true,
+    manager
+  };
+}
+function range(url, { maxDays = attendanceRules.recapMaxDays, defaultFrom } = {}) {
+  const end = today(), from = date(url?.searchParams.get("from") || defaultFrom || end.slice(0, 8) + "01", "Tanggal mulai"), to = date(url?.searchParams.get("to") || end, "Tanggal akhir");
+  assert(from <= to, "Tanggal mulai harus sebelum tanggal akhir.");
+  assert((Date.parse(to) - Date.parse(from)) / DAY2 < maxDays, `Rentang maksimal ${maxDays} hari.`);
+  return {
+    from,
+    to
+  };
+}
+var eventSql = `SELECT e.id,e.employee_id,e.kind,e.recorded_at,e.work_date,e.pair_event_id,e.flags,e.within_point,e.point_name,e.distance_m,e.outside_reason,e.outside_note,
+ e.accuracy_m,e.latitude,e.longitude,e.device_id,e.photo_storage_key,e.photo_deleted_at,e.confirmed_order,d.kind device_kind,d.label device_label,d.owner_employee_id device_owner
+ FROM attendance_events e JOIN attendance_devices d ON d.id=e.device_id`;
+async function leaveDays(db, from, to) {
+  if (typeof db.query !== "function" && !await one(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='leave_request_days'")) return [];
+  return await all(db, "SELECT employee_id,CAST(work_date AS TEXT) work_date,leave_type FROM leave_request_days WHERE state='APPROVED' AND work_date>=? AND work_date<=?", from, to);
+}
+async function loadRange(db, from, to, ids) {
+  const keep = (r) => ids.has(r.employee_id);
+  return {
+    events: (await all(db, `${eventSql} WHERE e.work_date>=? AND e.work_date<=? ORDER BY e.recorded_at`, from, to)).filter(keep),
+    corrections: (await all(db, "SELECT * FROM attendance_corrections WHERE revoked_at IS NULL AND work_date>=? AND work_date<=? ORDER BY created_at", from, to)).filter(keep),
+    notes: (await all(db, "SELECT * FROM attendance_day_notes WHERE revoked_at IS NULL AND work_date>=? AND work_date<=?", from, to)).filter(keep),
+    leaveDays: (await leaveDays(db, from, to)).filter(keep)
+  };
+}
+async function ownerNames(db, events) {
+  const ids = [...new Set(events.map((e) => e.device_owner).filter(Boolean))], names = /* @__PURE__ */ new Map();
+  for (const id of ids) names.set(id, (await one(db, "SELECT full_name FROM employees WHERE id=?", id))?.full_name || "");
+  return names;
+}
+function eventView(e, owners) {
+  return {
+    id: e.id,
+    employee_id: e.employee_id,
+    kind: e.kind,
+    recorded_at: e.recorded_at,
+    work_date: e.work_date,
+    paired: Boolean(e.pair_event_id),
+    flags: parseFlags(e.flags),
+    within_point: Number(e.within_point) === 1,
+    point_name: e.point_name || null,
+    distance_m: e.distance_m == null ? null : Number(e.distance_m),
+    outside_reason: e.outside_reason || null,
+    outside_note: e.outside_note || "",
+    accuracy_m: Math.round(Number(e.accuracy_m)),
+    latitude: Number(e.latitude),
+    longitude: Number(e.longitude),
+    has_photo: Boolean(e.photo_storage_key),
+    photo_deleted: Boolean(e.photo_deleted_at),
+    device: {
+      id: e.device_id,
+      kind: e.device_kind,
+      label: e.device_kind === "SHARED" ? e.device_label : `HP pribadi ${owners.get(e.device_owner) || ""}`.trim(),
+      borrowed: e.device_kind === "PERSONAL" && e.device_owner !== e.employee_id
+    }
+  };
+}
+async function filterUnit(db, scope, url) {
+  const unit = url?.searchParams.get("unit") || "";
+  const ids = new Set(scope.readable);
+  if (unit) {
+    const units2 = new Set(await unitTree(db, unit));
+    for (const id of [...ids]) if (!units2.has(scope.byId.get(id)?.org_unit_id)) ids.delete(id);
+  }
+  return ids;
+}
+async function photoOf(db, user, deps, event, scope, kind) {
+  const { audit: audit2, readPhoto } = deps;
+  assert(event && scope.readable.has(event.employee_id), "Akses foto ditolak.", 403);
+  assert(event.photo_storage_key, "Selfie ini sudah dihapus sesuai masa simpan 90 hari.", 404);
+  assert(typeof readPhoto === "function", "Penyimpanan selfie belum tersedia.", 503);
+  const data = await readPhoto(event.photo_storage_key);
+  assert(data && data.length === Number(event.photo_size), "Selfie belum dapat dibaca. Coba lagi.", 503);
+  await audit2(db, user, kind === "reference" ? "VIEW_REFERENCE_PHOTO" : "VIEW_PHOTO", "attendance_events", event.id, {
+    employee_id: event.employee_id
+  });
+  return {
+    event_id: event.id,
+    mime_type: "image/jpeg",
+    data: Buffer3.from(data).toString("base64")
+  };
+}
+function tokenPair() {
+  const token = randomBytes(32).toString("hex");
+  return {
+    token,
+    hash: digest(token)
+  };
+}
+var units = async (db) => await all(db, "SELECT id,name FROM org_units WHERE is_active=1 ORDER BY name,id");
+async function deviceScope(db, user, deps, device, byId = null) {
+  const { can: can2 } = deps;
+  if (device.kind === "SHARED") return await can2(db, user, "hr.attendance.devices", {
+    org_unit_id: device.org_unit_id
+  });
+  const owner = byId ? byId.get(device.owner_employee_id) : (await directory(db, device.owner_employee_id))[0];
+  return await can2(db, user, "hr.attendance.devices", {
+    employee_id: device.owner_employee_id,
+    org_unit_id: owner?.org_unit_id || null
+  });
+}
+async function sessionView(db, s) {
+  const devices = await asyncMap(await all(db, "SELECT * FROM attendance_devices WHERE session_id=? ORDER BY created_at", s.id), async (d) => ({
+    ...await deviceView(db, d),
+    row_version: d.row_version,
+    created_at: d.created_at
+  }));
+  const counts = /* @__PURE__ */ new Map();
+  for (const d of devices) if (d.status !== "REJECTED" && d.owner) counts.set(d.owner.id, (counts.get(d.owner.id) || 0) + 1);
+  return {
+    id: s.id,
+    unit: {
+      id: s.org_unit_id,
+      name: (await one(db, "SELECT name FROM org_units WHERE id=?", s.org_unit_id))?.name || ""
+    },
+    expires_at: s.expires_at,
+    closed_at: s.closed_at,
+    open: !s.closed_at && s.expires_at > now(),
+    row_version: s.row_version,
+    devices: devices.map((d) => ({
+      ...d,
+      duplicate_name: Boolean(d.owner && counts.get(d.owner.id) > 1)
+    }))
+  };
+}
+async function deviceRow(db, d, stats) {
+  const v = await deviceView(db, d), usage = stats.get(d.id) || {
+    events: 0,
+    people: 0,
+    last: null
+  };
+  const ownerActive = d.kind !== "PERSONAL" || Boolean(await one(db, "SELECT id FROM employees WHERE id=? AND is_active=1", d.owner_employee_id));
+  return {
+    ...v,
+    row_version: d.row_version,
+    registered: Boolean(d.public_key),
+    activated_at: d.activated_at || d.approved_at || null,
+    expires_at: d.registration_expires_at || null,
+    session_id: d.session_id || null,
+    revoked_at: d.revoked_at || null,
+    revoke_reason: d.revoke_reason || "",
+    last_seen_at: d.last_seen_at || null,
+    created_at: d.created_at,
+    owner_active: ownerActive,
+    events_7d: usage.events,
+    people_7d: usage.people
+  };
+}
+async function ownerPhone(db, d) {
+  if (d.kind !== "PERSONAL") return "";
+  const digits = String((await one(db, "SELECT phone FROM employees WHERE id=?", d.owner_employee_id))?.phone || "").replace(/\D/g, "");
+  const phone = digits.startsWith("0") ? "62" + digits.slice(1) : digits.startsWith("8") ? "62" + digits : digits;
+  return /^62\d{8,13}$/.test(phone) ? phone : "";
+}
+function validatePoint(b, old = {}) {
+  const name = typeof b.name === "string" ? b.name.trim().replace(/\s+/g, " ") : old.name;
+  assert(typeof name === "string" && name.length >= 1 && name.length <= 80, "Nama titik wajib diisi (maksimal 80 karakter).");
+  const lat = b.latitude === void 0 ? old.latitude : Number(b.latitude), lon = b.longitude === void 0 ? old.longitude : Number(b.longitude);
+  assert(Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lon) && lon >= -180 && lon <= 180, "Koordinat titik tidak valid.");
+  const radius = b.radius_m === void 0 ? old.radius_m ?? attendanceRules.radiusDefault : Number(b.radius_m);
+  assert(Number.isInteger(radius) && radius >= attendanceRules.radiusMin && radius <= attendanceRules.radiusMax, `Radius harus ${attendanceRules.radiusMin}\u2013${attendanceRules.radiusMax} meter.`);
+  const active = b.is_active === void 0 ? old.is_active ?? 1 : b.is_active === true || b.is_active === 1 || b.is_active === "1" ? 1 : 0;
+  return {
+    name,
+    latitude: Math.round(lat * 1e7) / 1e7,
+    longitude: Math.round(lon * 1e7) / 1e7,
+    radius_m: radius,
+    is_active: active
+  };
+}
+var pointView = (p) => ({
+  id: p.id,
+  name: p.name,
+  latitude: Number(p.latitude),
+  longitude: Number(p.longitude),
+  radius_m: Number(p.radius_m),
+  is_active: Number(p.is_active) === 1,
+  row_version: p.row_version,
+  updated_at: p.updated_at
+});
+function workDate(value, label = "Tanggal kerja") {
+  return date(value, label);
+}
+async function reviewItems(db, scope, from, to, nowMs) {
+  const ids = new Set(scope.readable), data = await loadRange(db, from, to, ids), owners = await ownerNames(db, data.events);
+  const voided = new Set(data.corrections.filter((c) => c.void_event_id).map((c) => c.void_event_id));
+  const paired = new Set(data.events.filter((e) => e.pair_event_id).map((e) => e.pair_event_id));
+  const leave = new Set(data.leaveDays.map((l) => `${l.employee_id}\0${l.work_date}`));
+  const reviews = new Map((await all(db, "SELECT r.*,u.username reviewer FROM attendance_reviews r JOIN attendance_events e ON e.id=r.event_id LEFT JOIN users u ON u.id=r.reviewed_by WHERE e.work_date>=? AND e.work_date<=?", from, to)).map((r) => [r.event_id, r]));
+  const references = new Set((await all(db, "SELECT employee_id FROM attendance_reference_photos")).map((r) => r.employee_id));
+  const items = [];
+  for (const e of data.events) {
+    if (voided.has(e.id)) continue;
+    const flags = new Set(parseFlags(e.flags));
+    if (e.kind === "IN" && !paired.has(e.id) && nowMs - Date.parse(e.recorded_at) > attendanceRules.sessionHours * 36e5) flags.add("TANPA_PULANG");
+    if (leave.has(`${e.employee_id}\0${e.work_date}`)) flags.add("SAAT_CUTI");
+    if (references.has(e.employee_id)) flags.delete("TANPA_FOTO_ACUAN");
+    if (!flags.size) continue;
+    const review = reviews.get(e.id), person = scope.byId.get(e.employee_id);
+    items.push({
+      ...eventView(e, owners),
+      flags: [...flags],
+      employee: view(person),
+      has_reference: references.has(e.employee_id),
+      can_review: writeAccess(scope, e.employee_id).allowed,
+      review: review ? {
+        decision: review.decision,
+        note: review.note || "",
+        reviewed_at: review.reviewed_at,
+        reviewer: review.reviewer || ""
+      } : null
+    });
+  }
+  items.sort((a, b) => b.recorded_at.localeCompare(a.recorded_at));
+  const latest = /* @__PURE__ */ new Map();
+  for (const e of data.events) if (e.photo_storage_key && !voided.has(e.id) && !references.has(e.employee_id)) latest.set(e.employee_id, e);
+  const missing = [...latest.values()].map((e) => ({
+    employee: view(scope.byId.get(e.employee_id)),
+    event_id: e.id,
+    recorded_at: e.recorded_at,
+    can_set: writeAccess(scope, e.employee_id).allowed
+  })).sort((a, b) => a.employee.name.localeCompare(b.employee.name, "id"));
+  return {
+    items,
+    missing_reference: missing
+  };
+}
+async function attendanceRoutes({ db, user, p, method, body: b = {}, url }, deps = localDeps) {
+  if (p[0] !== "attendance") return void 0;
+  const { has: has2, can: can2, audit: audit2 } = deps;
+  assert(!user.must_change_password, "Anda wajib mengganti password sementara terlebih dahulu.", 428);
+  const nowMs = Date.now();
+  if (p[1] === "overview" && p.length === 2 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    const canDevices = await has2(db, user, "hr.attendance.devices"), canSettings = await can2(db, user, "hr.attendance.settings", {});
+    const state = await one(db, "SELECT last_retention_at,last_error,deleted_photos FROM attendance_state WHERE id=1");
+    const due = canSettings ? Number((await one(db, `SELECT count(*) n FROM attendance_events e WHERE e.photo_storage_key IS NOT NULL AND e.recorded_at<?
+   AND NOT EXISTS(SELECT 1 FROM attendance_reference_photos r WHERE r.event_id=e.id)`, new Date(nowMs - attendanceRules.photoRetentionDays * DAY2).toISOString()))?.n || 0) : 0;
+    return {
+      today: today(),
+      self: Boolean(user.employee_id && scope.byId.has(user.employee_id)),
+      employee_id: user.employee_id || null,
+      subordinates: scope.subordinates.size,
+      readable: scope.readable.size,
+      read_scope: scope.hasRead,
+      manage: scope.hasManage || scope.direct.size > 0,
+      devices: canDevices,
+      settings: canSettings,
+      points_ready: Number((await one(db, "SELECT count(*) n FROM attendance_points WHERE is_active=1"))?.n || 0) > 0,
+      units: await units(db),
+      retention: canSettings ? {
+        last_run_at: state?.last_retention_at || null,
+        last_error: state?.last_error || null,
+        deleted_photos: Number(state?.deleted_photos || 0),
+        due_photos: due
+      } : null
+    };
+  }
+  if (p[1] === "today" && p.length === 2 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    const day = today(), ids = await filterUnit(db, scope, url), data = await loadRange(db, day, day, ids), owners = await ownerNames(db, data.events);
+    const rows = [];
+    for (const id of ids) {
+      const person = scope.byId.get(id);
+      if (!person?.is_active) continue;
+      const events = data.events.filter((e) => e.employee_id === id), result = dayStatus({
+        events,
+        corrections: data.corrections.filter((c) => c.employee_id === id),
+        note: data.notes.find((n) => n.employee_id === id) || null,
+        leave: data.leaveDays.find((l) => l.employee_id === id) || null,
+        nowMs
+      });
+      const last = events.at(-1);
+      rows.push({
+        employee: view(person),
+        ...result,
+        last_event: last ? eventView(last, owners) : null,
+        can_manage: writeAccess(scope, id).allowed,
+        self: id === user.employee_id
+      });
+    }
+    rows.sort((a, b2) => a.employee.name.localeCompare(b2.employee.name, "id"));
+    return {
+      date: day,
+      rows
+    };
+  }
+  if (p[1] === "recap" && p.length === 2 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    const r = range(url), ids = await filterUnit(db, scope, url), data = await loadRange(db, r.from, r.to, ids);
+    const withEvents = new Set(data.events.map((x) => x.employee_id));
+    const people = [...ids].map((id) => scope.byId.get(id)).filter((e) => e && (e.is_active || withEvents.has(e.id)));
+    const recap = buildRecap({
+      employees: people,
+      ...data,
+      from: r.from,
+      to: r.to,
+      nowMs
+    });
+    const detail = url?.searchParams.get("detail") === "1";
+    return {
+      from: r.from,
+      to: r.to,
+      employees: recap.map((x) => ({
+        employee: view(scope.byId.get(x.employee_id)),
+        summary: x.summary,
+        can_manage: writeAccess(scope, x.employee_id).allowed,
+        ...detail ? {
+          days: x.days
+        } : {}
+      })).sort((a, b2) => a.employee.name.localeCompare(b2.employee.name, "id"))
+    };
+  }
+  if (p[1] === "recap" && p.length === 3 && method === "GET") {
+    const scope = await scopeOf(db, user, deps), id = p[2];
+    assert(scope.readable.has(id), "Akses data absen pegawai ini ditolak.", 403);
+    const r = range(url), person = scope.byId.get(id), data = await loadRange(db, r.from, r.to, /* @__PURE__ */ new Set([id])), owners = await ownerNames(db, data.events);
+    const [recap] = buildRecap({
+      employees: [person],
+      ...data,
+      from: r.from,
+      to: r.to,
+      nowMs
+    });
+    const access = writeAccess(scope, id), names = /* @__PURE__ */ new Map();
+    for (const uid2 of new Set([...data.corrections, ...data.notes].map((x) => x.created_by))) names.set(uid2, (await one(db, "SELECT username FROM users WHERE id=?", uid2))?.username || "");
+    const reference = await one(db, "SELECT event_id,set_at FROM attendance_reference_photos WHERE employee_id=?", id);
+    return {
+      employee: view(person),
+      from: r.from,
+      to: r.to,
+      days: recap.days,
+      summary: recap.summary,
+      events: data.events.map((e) => eventView(e, owners)),
+      corrections: data.corrections.map((c) => ({
+        id: c.id,
+        work_date: c.work_date,
+        in_at: c.in_at,
+        out_at: c.out_at,
+        void_event_id: c.void_event_id,
+        reason: c.reason,
+        created_at: c.created_at,
+        created_by: names.get(c.created_by) || "",
+        row_version: c.row_version
+      })),
+      notes: data.notes.map((n) => ({
+        id: n.id,
+        work_date: n.work_date,
+        kind: n.kind,
+        note: n.note || "",
+        created_at: n.created_at,
+        created_by: names.get(n.created_by) || "",
+        row_version: n.row_version
+      })),
+      reference: reference ? {
+        event_id: reference.event_id,
+        set_at: reference.set_at
+      } : null,
+      can_manage: access.allowed,
+      manager: access.manager,
+      correction_from: access.manager ? null : shiftDay(today(), -attendanceRules.correctionDays)
+    };
+  }
+  if (p[1] === "review" && p.length === 2 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    const r = range(url, {
+      maxDays: attendanceRules.reviewDays,
+      defaultFrom: shiftDay(today(), -13)
+    });
+    const status = url?.searchParams.get("status") || "open";
+    assert(["open", "all"].includes(status), "Saringan tidak valid.");
+    const result = await reviewItems(db, scope, r.from, r.to, nowMs);
+    return {
+      from: r.from,
+      to: r.to,
+      items: status === "open" ? result.items.filter((i) => !i.review) : result.items,
+      missing_reference: result.missing_reference
+    };
+  }
+  if (p[1] === "photos" && p.length === 3 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    return await photoOf(db, user, deps, await one(db, "SELECT * FROM attendance_events WHERE id=?", p[2]), scope, "event");
+  }
+  if (p[1] === "references" && p.length === 3 && method === "GET") {
+    const scope = await scopeOf(db, user, deps);
+    assert(scope.readable.has(p[2]), "Akses foto ditolak.", 403);
+    const ref = await one(db, "SELECT event_id FROM attendance_reference_photos WHERE employee_id=?", p[2]);
+    assert(ref, "Pegawai ini belum punya foto acuan.", 404);
+    return await photoOf(db, user, deps, await one(db, "SELECT * FROM attendance_events WHERE id=?", ref.event_id), scope, "reference");
+  }
+  if (p[1] === "references" && p.length === 2 && method === "POST") {
+    const event = await one(db, "SELECT * FROM attendance_events WHERE id=?", typeof b.event_id === "string" ? b.event_id : "");
+    assert(event && event.employee_id === b.employee_id, "Selfie tidak sesuai dengan pegawai.", 422);
+    await targetAccess(db, user, deps, event.employee_id);
+    assert(event.photo_storage_key, "Selfie ini sudah dihapus. Pilih selfie lain.", 409);
+    return await tx(db, async () => {
+      const old = await one(db, "SELECT * FROM attendance_reference_photos WHERE employee_id=?", event.employee_id);
+      const row = old ? await update(db, "attendance_reference_photos", old.id, old.row_version, {
+        event_id: event.id,
+        set_by: user.id,
+        set_at: now()
+      }) : await insert(db, "attendance_reference_photos", {
+        employee_id: event.employee_id,
+        event_id: event.id,
+        set_by: user.id,
+        set_at: now()
+      });
+      await audit2(db, user, old ? "REPLACE_REFERENCE" : "SET_REFERENCE", "attendance_reference_photos", row.id, {
+        employee_id: event.employee_id,
+        event_id: event.id
+      });
+      return {
+        employee_id: row.employee_id,
+        event_id: row.event_id,
+        set_at: row.set_at
+      };
+    });
+  }
+  if (p[1] === "reviews" && p.length === 2 && method === "POST") {
+    const event = await one(db, "SELECT * FROM attendance_events WHERE id=?", typeof b.event_id === "string" ? b.event_id : "");
+    assert(event, "Absen tidak ditemukan.", 404);
+    await targetAccess(db, user, deps, event.employee_id, "Hanya atasan langsung atau Pengelola Absensi yang dapat menilai absen ini.");
+    assert(["SESUAI", "KLARIFIKASI"].includes(b.decision), "Pilih Sesuai atau Perlu klarifikasi.");
+    const note = typeof b.note === "string" ? b.note.trim().slice(0, 500) : "";
+    assert(b.decision !== "KLARIFIKASI" || note.length >= 3, "Tuliskan hal yang perlu diklarifikasi.");
+    return await tx(db, async () => {
+      const old = await one(db, "SELECT * FROM attendance_reviews WHERE event_id=?", event.id);
+      const values = {
+        decision: b.decision,
+        note: note || null,
+        reviewed_by: user.id,
+        reviewed_at: now()
+      };
+      const row = old ? await update(db, "attendance_reviews", old.id, old.row_version, values) : await insert(db, "attendance_reviews", {
+        event_id: event.id,
+        ...values
+      });
+      await audit2(db, user, "REVIEW", "attendance_events", event.id, {
+        decision: b.decision
+      });
+      return {
+        event_id: event.id,
+        decision: row.decision,
+        note: row.note || "",
+        reviewed_at: row.reviewed_at
+      };
+    });
+  }
+  if (p[1] === "notes" && p.length === 2 && method === "POST") {
+    await targetAccess(db, user, deps, b.employee_id);
+    const day = workDate(b.work_date);
+    assert(day <= shiftDay(today(), 31), "Keterangan paling jauh 31 hari ke depan.");
+    assert(["IZIN", "SAKIT", "DINAS_LUAR"].includes(b.kind), "Pilih Izin, Sakit, atau Dinas luar.");
+    const note = typeof b.note === "string" ? b.note.trim().slice(0, 500) : "";
+    return await tx(db, async () => {
+      assert(!await one(db, "SELECT id FROM attendance_day_notes WHERE employee_id=? AND work_date=? AND revoked_at IS NULL", b.employee_id, day), "Tanggal ini sudah punya keterangan. Cabut dulu bila ingin mengganti.", 409);
+      const row = await insert(db, "attendance_day_notes", {
+        employee_id: b.employee_id,
+        work_date: day,
+        kind: b.kind,
+        note: note || null,
+        created_by: user.id
+      });
+      await audit2(db, user, "CREATE", "attendance_day_notes", row.id, {
+        employee_id: b.employee_id,
+        work_date: day,
+        kind: b.kind
+      });
+      return {
+        id: row.id,
+        work_date: row.work_date,
+        kind: row.kind,
+        note: row.note || "",
+        row_version: row.row_version
+      };
+    });
+  }
+  if (p[1] === "notes" && p.length === 4 && p[3] === "revoke" && method === "POST") {
+    const row = await one(db, "SELECT * FROM attendance_day_notes WHERE id=?", p[2]);
+    assert(row && !row.revoked_at, "Keterangan tidak ditemukan.", 404);
+    await targetAccess(db, user, deps, row.employee_id);
+    return await tx(db, async () => {
+      const next = await update(db, "attendance_day_notes", row.id, b.row_version, {
+        revoked_at: now(),
+        revoked_by: user.id
+      });
+      await audit2(db, user, "REVOKE", "attendance_day_notes", row.id, {
+        employee_id: row.employee_id,
+        work_date: row.work_date
+      });
+      return {
+        id: next.id,
+        revoked: true
+      };
+    });
+  }
+  if (p[1] === "corrections" && p.length === 2 && method === "POST") {
+    const access = await targetAccess(db, user, deps, b.employee_id);
+    const day = workDate(b.work_date);
+    assert(day <= today(), "Koreksi hanya untuk tanggal yang sudah lewat atau hari ini.");
+    if (!access.manager) assert(day >= shiftDay(today(), -attendanceRules.correctionDays), `Atasan dapat mengoreksi paling lambat ${attendanceRules.correctionDays} hari setelah tanggal kerja. Setelah itu hubungi Pengelola Absensi.`, 403);
+    const reason = typeof b.reason === "string" ? b.reason.trim() : "";
+    assert(reason.length >= 3 && reason.length <= 500, "Alasan koreksi wajib diisi (3\u2013500 karakter).");
+    const inAt = b.in_at ? instant(b.in_at) : null, outAt = b.out_at ? instant(b.out_at) : null;
+    if (inAt) assert(witaDate(Date.parse(inAt)) === day, "Jam masuk harus pada tanggal kerja yang sama.");
+    if (outAt) assert([day, shiftDay(day, 1)].includes(witaDate(Date.parse(outAt))), "Jam pulang harus pada tanggal kerja atau sehari sesudahnya.");
+    assert(!inAt || !outAt || inAt < outAt, "Jam pulang harus sesudah jam masuk.");
+    assert(!inAt || Date.parse(inAt) <= nowMs + 5 * 6e4, "Jam masuk belum terjadi.");
+    assert(!outAt || Date.parse(outAt) <= nowMs + 5 * 6e4, "Jam pulang belum terjadi.");
+    let voidId = null;
+    if (b.void_event_id) {
+      const event = await one(db, "SELECT * FROM attendance_events WHERE id=?", String(b.void_event_id));
+      assert(event && event.employee_id === b.employee_id && event.work_date === day, "Absen yang disisihkan harus milik pegawai ini pada tanggal yang sama.", 422);
+      voidId = event.id;
+    }
+    assert(inAt || outAt || voidId, "Isi jam masuk, jam pulang, atau pilih absen yang disisihkan.");
+    return await tx(db, async () => {
+      if (voidId) assert(!await one(db, "SELECT id FROM attendance_corrections WHERE void_event_id=? AND revoked_at IS NULL", voidId), "Absen ini sudah disisihkan.", 409);
+      const row = await insert(db, "attendance_corrections", {
+        employee_id: b.employee_id,
+        work_date: day,
+        in_at: inAt,
+        out_at: outAt,
+        void_event_id: voidId,
+        reason,
+        created_by: user.id
+      });
+      await audit2(db, user, "CREATE", "attendance_corrections", row.id, {
+        employee_id: b.employee_id,
+        work_date: day,
+        in_at: inAt,
+        out_at: outAt,
+        void_event_id: voidId
+      }, reason);
+      return {
+        id: row.id,
+        work_date: row.work_date,
+        row_version: row.row_version
+      };
+    });
+  }
+  if (p[1] === "corrections" && p.length === 4 && p[3] === "revoke" && method === "POST") {
+    const row = await one(db, "SELECT * FROM attendance_corrections WHERE id=?", p[2]);
+    assert(row && !row.revoked_at, "Koreksi tidak ditemukan.", 404);
+    const access = await targetAccess(db, user, deps, row.employee_id);
+    if (!access.manager) assert(row.work_date >= shiftDay(today(), -attendanceRules.correctionDays), "Koreksi lama hanya dapat dicabut Pengelola Absensi.", 403);
+    return await tx(db, async () => {
+      const next = await update(db, "attendance_corrections", row.id, b.row_version, {
+        revoked_at: now(),
+        revoked_by: user.id
+      });
+      await audit2(db, user, "REVOKE", "attendance_corrections", row.id, {
+        employee_id: row.employee_id,
+        work_date: row.work_date
+      });
+      return {
+        id: next.id,
+        revoked: true
+      };
+    });
+  }
+  if (p[1] === "exports" && p.length === 2 && method === "POST") {
+    assert(["recap", "detail"].includes(b.kind), "Jenis ekspor tidak valid.");
+    const from = date(b.from, "Tanggal mulai"), to = date(b.to, "Tanggal akhir");
+    assert(from <= to, "Rentang tanggal tidak valid.");
+    const rows = Number(b.rows);
+    assert(Number.isInteger(rows) && rows >= 0 && rows <= 2e5, "Jumlah baris tidak valid.");
+    const allowed = Boolean(user.employee_id) || await has2(db, user, "hr.attendance.read") || await has2(db, user, "hr.attendance.manage");
+    assert(allowed, "Akses ekspor absensi ditolak.", 403);
+    return await tx(db, async () => {
+      await audit2(db, user, "EXPORT", "attendance_" + b.kind, `${from}..${to}`, {
+        row_count: rows
+      });
+      return {
+        ok: true
+      };
+    });
+  }
+  if (p[1] === "points") {
+    const manage = await can2(db, user, "hr.attendance.settings", {});
+    if (p.length === 2 && method === "GET") {
+      assert(manage || await has2(db, user, "hr.attendance.devices") || await has2(db, user, "hr.attendance.read") || await has2(db, user, "hr.attendance.manage"), "Akses titik absen ditolak.", 403);
+      return {
+        points: (await all(db, "SELECT * FROM attendance_points ORDER BY is_active DESC,name,id")).map(pointView),
+        can_manage: manage
+      };
+    }
+    assert(manage, "Hanya Pengelola Absensi (cakupan seluruh organisasi) yang dapat mengubah titik absen.", 403);
+    if (p.length === 2 && method === "POST") return await tx(db, async () => {
+      const row = await insert(db, "attendance_points", {
+        ...validatePoint(b),
+        created_by: user.id
+      });
+      await audit2(db, user, "CREATE", "attendance_points", row.id, {
+        name: row.name,
+        radius_m: row.radius_m
+      });
+      return pointView(row);
+    });
+    if (p.length === 3 && method === "PATCH") {
+      const old = await one(db, "SELECT * FROM attendance_points WHERE id=?", p[2]);
+      assert(old, "Titik tidak ditemukan.", 404);
+      return await tx(db, async () => {
+        const row = await update(db, "attendance_points", old.id, b.row_version, validatePoint(b, old));
+        await audit2(db, user, "UPDATE", "attendance_points", row.id, {
+          name: row.name,
+          radius_m: row.radius_m,
+          is_active: row.is_active
+        });
+        return pointView(row);
+      });
+    }
+  }
+  if (["devices", "sessions", "people"].includes(p[1])) {
+    assert(await has2(db, user, "hr.attendance.devices"), "Akses pendaftaran HP absen ditolak.", 403);
+    if (p[1] === "people" && p.length === 2 && method === "GET") {
+      const list = [], everyone = await can2(db, user, "hr.attendance.devices", {});
+      for (const e of await directory(db)) if (e.is_active && (everyone || await can2(db, user, "hr.attendance.devices", {
+        employee_id: e.id,
+        org_unit_id: e.org_unit_id
+      }))) list.push(view(e));
+      return {
+        people: list
+      };
+    }
+    if (p[1] === "devices" && p.length === 2 && method === "GET") {
+      const since = new Date(nowMs - 7 * DAY2).toISOString(), byId = new Map((await directory(db)).map((e) => [e.id, e]));
+      const stats = new Map((await all(db, "SELECT device_id,count(*) events,count(DISTINCT employee_id) people,max(recorded_at) last FROM attendance_events WHERE recorded_at>=? GROUP BY device_id", since)).map((r) => [r.device_id, {
+        events: Number(r.events),
+        people: Number(r.people),
+        last: r.last
+      }]));
+      const devices = [];
+      for (const d of await all(db, "SELECT * FROM attendance_devices WHERE session_id IS NULL OR status<>'PENDING' ORDER BY created_at DESC")) if (await deviceScope(db, user, deps, d, byId)) devices.push(await deviceRow(db, d, stats));
+      const sessions = [];
+      for (const s of await all(db, "SELECT * FROM attendance_registration_sessions WHERE closed_at IS NULL AND expires_at>? ORDER BY created_at DESC", now())) if (await can2(db, user, "hr.attendance.devices", {
+        org_unit_id: s.org_unit_id
+      })) sessions.push(await sessionView(db, s));
+      return {
+        devices,
+        sessions,
+        units: await units(db)
+      };
+    }
+    if (p[1] === "devices" && p.length === 2 && method === "POST") {
+      assert(["PERSONAL", "SHARED"].includes(b.kind), "Pilih HP pribadi atau HP bersama.");
+      let values;
+      if (b.kind === "PERSONAL") {
+        const [owner] = typeof b.owner_employee_id === "string" ? await directory(db, b.owner_employee_id) : [];
+        assert(owner && owner.is_active, "Pilih pemilik HP dari pegawai aktif.", 422);
+        assert(await can2(db, user, "hr.attendance.devices", {
+          employee_id: owner.id,
+          org_unit_id: owner.org_unit_id
+        }), "Pegawai ini di luar cakupan unit Anda.", 403);
+        values = {
+          kind: "PERSONAL",
+          owner_employee_id: owner.id,
+          org_unit_id: null,
+          label: null
+        };
+      } else {
+        const unit = await one(db, "SELECT id FROM org_units WHERE id=? AND is_active=1", typeof b.org_unit_id === "string" ? b.org_unit_id : "");
+        assert(unit, "Pilih unit HP bersama.", 422);
+        assert(await can2(db, user, "hr.attendance.devices", {
+          org_unit_id: unit.id
+        }), "Unit ini di luar cakupan Anda.", 403);
+        const label = typeof b.label === "string" ? b.label.trim().replace(/\s+/g, " ") : "";
+        assert(label.length >= 3 && label.length <= 80, 'Beri label HP bersama, misalnya "HP Koordinator Pos 3".');
+        values = {
+          kind: "SHARED",
+          owner_employee_id: null,
+          org_unit_id: unit.id,
+          label
+        };
+      }
+      const { token, hash } = tokenPair(), expires = new Date(nowMs + attendanceRules.registrationDays * DAY2).toISOString();
+      return await tx(db, async () => {
+        const row = await insert(db, "attendance_devices", {
+          ...values,
+          status: "PENDING",
+          registration_token_hash: hash,
+          registration_expires_at: expires,
+          created_by: user.id
+        });
+        await audit2(db, user, "CREATE", "attendance_devices", row.id, {
+          kind: row.kind,
+          owner_employee_id: row.owner_employee_id,
+          org_unit_id: row.org_unit_id
+        });
+        return {
+          device: await deviceRow(db, row, /* @__PURE__ */ new Map()),
+          token,
+          expires_at: expires,
+          phone: await ownerPhone(db, row)
+        };
+      });
+    }
+    if (p[1] === "devices" && p.length === 4 && method === "POST") {
+      const d = await one(db, "SELECT * FROM attendance_devices WHERE id=?", p[2]);
+      assert(d, "HP tidak ditemukan.", 404);
+      assert(await deviceScope(db, user, deps, d), "HP ini di luar cakupan unit Anda.", 403);
+      assert(b.row_version === d.row_version, "Data HP sudah berubah. Muat ulang halaman HP Absen.", 409);
+      if (p[3] === "link") {
+        assert(d.status === "PENDING" && !d.public_key && !d.session_id, "Tautan baru hanya untuk HP yang belum mendaftar.", 409);
+        const { token, hash } = tokenPair(), expires = new Date(nowMs + attendanceRules.registrationDays * DAY2).toISOString();
+        return await tx(db, async () => {
+          const row = await update(db, "attendance_devices", d.id, d.row_version, {
+            registration_token_hash: hash,
+            registration_expires_at: expires
+          });
+          await audit2(db, user, "ROTATE_LINK", "attendance_devices", d.id);
+          return {
+            device: await deviceRow(db, row, /* @__PURE__ */ new Map()),
+            token,
+            expires_at: expires,
+            phone: await ownerPhone(db, row)
+          };
+        });
+      }
+      if (p[3] === "approve" || p[3] === "reject") {
+        assert(d.status === "PENDING" && d.session_id && d.public_key, "HP ini tidak sedang menunggu persetujuan.", 409);
+        const session = await one(db, "SELECT * FROM attendance_registration_sessions WHERE id=?", d.session_id);
+        if (p[3] === "approve") assert(session && !session.closed_at && session.expires_at > now(), "Sesi pendaftaran sudah berakhir. Buka sesi baru.", 409);
+        return await tx(db, async () => {
+          const row = await update(db, "attendance_devices", d.id, d.row_version, p[3] === "approve" ? {
+            status: "ACTIVE",
+            approved_by: user.id,
+            approved_at: now()
+          } : {
+            status: "REJECTED",
+            revoked_by: user.id,
+            revoked_at: now(),
+            revoke_reason: "Ditolak saat sesi pendaftaran"
+          });
+          await audit2(db, user, p[3] === "approve" ? "APPROVE" : "REJECT", "attendance_devices", d.id, {
+            session_id: d.session_id
+          });
+          return {
+            device: await deviceRow(db, row, /* @__PURE__ */ new Map())
+          };
+        });
+      }
+      if (p[3] === "revoke") {
+        assert(["PENDING", "ACTIVE"].includes(d.status), "HP ini sudah tidak aktif.", 409);
+        const reason = typeof b.reason === "string" ? b.reason.trim() : "";
+        assert(reason.length >= 3 && reason.length <= 300, "Tuliskan alasan menonaktifkan HP (misalnya HP hilang).");
+        return await tx(db, async () => {
+          const row = await update(db, "attendance_devices", d.id, d.row_version, {
+            status: "REVOKED",
+            revoked_by: user.id,
+            revoked_at: now(),
+            revoke_reason: reason,
+            registration_token_hash: null
+          });
+          await audit2(db, user, "REVOKE", "attendance_devices", d.id, {}, reason);
+          return {
+            device: await deviceRow(db, row, /* @__PURE__ */ new Map())
+          };
+        });
+      }
+    }
+    if (p[1] === "sessions" && p.length === 2 && method === "POST") {
+      const unit = await one(db, "SELECT id FROM org_units WHERE id=? AND is_active=1", typeof b.org_unit_id === "string" ? b.org_unit_id : "");
+      assert(unit, "Pilih unit untuk sesi pendaftaran.", 422);
+      assert(await can2(db, user, "hr.attendance.devices", {
+        org_unit_id: unit.id
+      }), "Unit ini di luar cakupan Anda.", 403);
+      const minutes = b.minutes === void 0 ? attendanceRules.sessionMinutesMax : Number(b.minutes);
+      assert(Number.isInteger(minutes) && minutes >= 5 && minutes <= attendanceRules.sessionMinutesMax, `Lama sesi 5\u2013${attendanceRules.sessionMinutesMax} menit.`);
+      const { token, hash } = tokenPair();
+      return await tx(db, async () => {
+        const row = await insert(db, "attendance_registration_sessions", {
+          org_unit_id: unit.id,
+          token_hash: hash,
+          expires_at: new Date(nowMs + minutes * 6e4).toISOString(),
+          created_by: user.id
+        });
+        await audit2(db, user, "OPEN_SESSION", "attendance_registration_sessions", row.id, {
+          org_unit_id: unit.id,
+          minutes
+        });
+        return {
+          session: await sessionView(db, row),
+          token
+        };
+      });
+    }
+    if (p[1] === "sessions" && p.length >= 3) {
+      const s = await one(db, "SELECT * FROM attendance_registration_sessions WHERE id=?", p[2]);
+      assert(s, "Sesi tidak ditemukan.", 404);
+      assert(await can2(db, user, "hr.attendance.devices", {
+        org_unit_id: s.org_unit_id
+      }), "Sesi ini di luar cakupan Anda.", 403);
+      if (p.length === 3 && method === "GET") return {
+        session: await sessionView(db, s)
+      };
+      if (p.length === 4 && p[3] === "close" && method === "POST") {
+        assert(!s.closed_at, "Sesi sudah ditutup.", 409);
+        return await tx(db, async () => {
+          const row = await update(db, "attendance_registration_sessions", s.id, b.row_version, {
+            closed_at: now(),
+            closed_by: user.id
+          });
+          const rejected = (await run(db, "UPDATE attendance_devices SET status='REJECTED',revoked_by=?,revoked_at=?,revoke_reason=?,updated_at=?,row_version=row_version+1 WHERE session_id=? AND status='PENDING'", user.id, now(), "Sesi ditutup sebelum disetujui", now(), s.id)).changes;
+          await audit2(db, user, "CLOSE_SESSION", "attendance_registration_sessions", s.id, {
+            rejected
+          });
+          return {
+            session: await sessionView(db, row)
+          };
+        });
+      }
+    }
+  }
+  assert(false, "Alamat API tidak ditemukan.", 404);
+}
+  return { attendanceRoutes: attendanceRoutes };
+})();
+// Galat dari modul Absensi memakai kelas AppError salinannya sendiri; diubah ke
+// AppError snapshot supaya status 403/404/409/422 tidak berubah menjadi 503.
+function adoptAttendanceError(error) {
+  if (!(error instanceof AppError) && error instanceof Error && Number.isInteger(error.status) && error.status >= 400 && error.status < 600) throw new AppError(error.status, error.message, error.details);
+  throw error;
+}
 async function routeOperation({ db, user, path, method, body = {}, query = "" }) {
   assert(typeof path === "string" && /^[a-z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path) && path.length <= 512, "Alamat API tidak valid.", 404);
   assert(["GET", "POST", "PATCH", "DELETE"].includes(method), "Metode tidak diizinkan.", 405);
@@ -7846,6 +9267,7 @@ async function routeOperation({ db, user, path, method, body = {}, query = "" })
   await guardLeaveRoleChanges({ db, user, p, method, body }, assert);
   if (p[0] === "leaves") return leaveRoutes({ db, user, p, method, body, url }, { assert, can, has, audit, today });
   if (p[0] === "visits") return __visits.visitRoutes({ db, user, p, method, body, url }, { has, audit }).catch(adoptVisitError);
+  if (p[0] === "attendance") return __attendance.attendanceRoutes({ db, user, p, method, body, url }, { has, can, audit, readPhoto: (key) => db.storage.get(key) }).catch(adoptAttendanceError);
   if (path === "dashboard" && method === "GET") return dashboard(db, user, url.searchParams.get("module") || "hr", url.searchParams.get("as_of") || void 0);
   if (path === "lookups" && method === "GET") return lookups(db, user, url.searchParams.get("purpose") || "employees", url.searchParams.get("session_id"));
   if (p[0] === "exports" && method === "GET") {
