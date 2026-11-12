@@ -1,25 +1,25 @@
 # E-Arsip Humas — Tahap 1
 
-Status 12 November 2026: **perbaikan review PR #32 tersedia di cabang `33`, belum di-merge, belum dirilis.** Supabase, Google Drive, dan bpbesakih.com tidak diubah. Dasar kebutuhan: *PRD Final Modul Humas E-Arsip SPH Portal Tahap 1* (40 keputusan Q01–Q40, kriteria AC01–AC45).
+Status 13 November 2026: **kode di `master`** (PR #32 + perbaikan review PR #33, di-merge 12 November 17.45 WITA); tampilan sudah tayang di bpbesakih.com. **Migrasi dan `portal-api` belum dipasang**, jadi ruang kerja Humas belum tampil bagi pengguna. Navigasi dipindah dari menu bersama ke ruang kerja **Humas** di cabang `claude/humas-modul-e-arsip`. Dasar kebutuhan: *PRD Final Modul Humas E-Arsip SPH Portal Tahap 1* (40 keputusan Q01–Q40, kriteria AC01–AC45).
 
 PRD menyebut dirinya "bukan izin implementasi atau deployment". Cabang ini dibuat atas permintaan pemilik untuk ditinjau dan dicoba lokal; merilisnya tetap memerlukan keputusan pemilik dan langkah di bagian [Rilis](#rilis-oleh-pemilik-repo).
 
 ## Yang dibangun
 
-Menu bersama **E-Arsip** di `/app/` (seperti Cuti dan Absensi), dengan isi mengikuti hak akun:
+Ruang kerja **Humas** di pemilih modul `/app/` (sejajar SDM, Keamanan, Pengadaan, Bisnis, dan Kunjungan), sesuai PRD 10.1 *Humas → E-Arsip*. Sidebar ruang kerja ini berjudul **HUMAS · E-ARSIP**; isinya mengikuti hak akun:
 
 | Bagian | Untuk siapa | Isi |
 |---|---|---|
-| Ringkasan | Semua | Total arsip aktif, jumlah per jenis (hanya yang dapat dibaca penuh), arsip terbaru, notifikasi portal |
-| Daftar Arsip | Semua | Cari nomor agenda/nomor surat/perihal; saringan tanggal arsip, bagian, jenis, arah, klasifikasi, tanggal surat, "dibagikan kepada saya"; tabel di desktop, kartu di HP |
-| Tambah Arsip | Petugas arsip yang ditunjuk | Form Informasi Surat + Dokumen; satu dokumen utama wajib, banyak lampiran; status unggah per berkas; peringatan dugaan duplikat |
-| Detail arsip | Pembaca | Informasi surat, pratinjau (PDF di kanvas, gambar), dokumen dan versi, Riwayat, dan untuk Humas: Pengaturan Akses |
-| Laporan | Semua | Rekap periode/bagian/jenis, buku agenda masuk/keluar; XLSX dan PDF |
-| Pengajuan Hapus | Petugas dan Humas | Petugas mengajukan dan membatalkan; Humas menyetujui atau menolak |
-| Jenis Dokumen, Arsip Dihapus | Humas | Master jenis; daftar arsip yang disembunyikan dan pemulihannya |
-| Petugas Arsip | Administrator | Menunjuk/mencabut petugas per bagian dan menetapkan kode agenda bagian |
+| Ringkasan (`#archives`) | Semua | Total arsip aktif, jumlah per jenis (hanya yang dapat dibaca penuh), arsip terbaru, notifikasi portal |
+| Daftar Arsip (`#archive-list`) | Semua | Cari nomor agenda/nomor surat/perihal; saringan tanggal arsip, bagian, jenis, arah, klasifikasi, tanggal surat, "dibagikan kepada saya"; tabel di desktop, kartu di HP |
+| Tambah Arsip (`#archive-new`) | Petugas arsip yang ditunjuk | Form Informasi Surat + Dokumen; satu dokumen utama wajib, banyak lampiran; status unggah per berkas; peringatan dugaan duplikat |
+| Detail arsip (`#archive-list?id=…`) | Pembaca | Informasi surat, pratinjau (PDF di kanvas, gambar), dokumen dan versi, Riwayat, dan untuk Humas: Pengaturan Akses |
+| Laporan (`#archive-reports`) | Semua | Rekap periode/bagian/jenis, buku agenda masuk/keluar; XLSX dan PDF |
+| Pengajuan Hapus (`#archive-requests`) | Petugas dan Humas | Petugas mengajukan dan membatalkan; Humas menyetujui atau menolak |
+| Jenis Dokumen (`#archive-types`), Arsip Dihapus (`#archive-deleted`) | Humas | Master jenis; daftar arsip yang disembunyikan dan pemulihannya |
+| Petugas Arsip (`#archive-officers`) | Administrator | Di kelompok **Pengaturan Akses** (bersama Akun Pengguna dan Role & Izin), sesuai PRD 10.1. Menunjuk/mencabut petugas per bagian dan menetapkan kode agenda bagian |
 
-Lonceng portal menampilkan notifikasi E-Arsip yang belum dibaca dan, untuk Humas, pengajuan hapus yang menunggu.
+Ruang kerja Humas tampil bagi setiap akun yang dapat memakai E-Arsip (akun yang tertaut pegawai, atau pemegang izin `archives.*`), karena petugas dan pegawai semua bagian membaca dan mengarsipkan lewat sana; menu di dalamnya mengikuti hak akun. Lonceng portal menampilkan notifikasi E-Arsip yang belum dibaca dan, untuk Humas, pengajuan hapus yang menunggu (juga sebagai angka di menu Pengajuan Hapus).
 
 ### Aturan inti
 
@@ -45,7 +45,7 @@ Lonceng portal menampilkan notifikasi E-Arsip yang belum dibaca dan, untuk Humas
 | Administrator | Izin `archives.officers.assign` (Super Admin dan IT Admin). Tidak memberi hak baca |
 | schema `arsip`/`arsip_private`, RPC | Schema privat `portal` (RLS aktif, tanpa grant ke klien) + rute `archives/*` di Edge Function `portal-api`, sama seperti modul lain |
 | `file_objects` | Tabel `files` yang sudah ada; berkas di Drive privat, folder modul **SPH-Portal-Arsip** |
-| `notification_outbox` | `archive_notifications` (dibaca lewat menu E-Arsip dan lonceng) |
+| `notification_outbox` | `archive_notifications` (dibaca lewat Ringkasan E-Arsip dan lonceng) |
 
 Catatan: di produksi, gateway memberi Super Admin semua kode izin. Karena itu modul ini **tidak** memakai `has/can` gateway; ia membaca langsung role yang memegang izin arsip, sehingga Super Admin tidak otomatis menjadi Humas.
 
@@ -111,16 +111,16 @@ Validasi perbaikan: Node 24.22.1 dan PGlite 0.5.16, seluruh data fiktif. Paket P
 
 ## Rilis (oleh pemilik repo)
 
-Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat urutan aman bila tertukar: menu E-Arsip baru tampil setelah `portal-api` menjawab `archives/overview`; sebelum itu rute menjawab 404 dan menu tersembunyi.
+Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat urutan aman bila tertukar: ruang kerja Humas baru tampil setelah `portal-api` menjawab `archives/overview`; sebelum itu rute menjawab 404 dan menu tersembunyi.
 
 1. **Migrasi** di SQL Editor: `supabase/migrations/20261112100000_archive_module.sql`. Aditif, satu transaksi: 14 tabel, tiga izin `archives.*`, role Humas dan Pengawas Arsip, serta izin menunjuk petugas untuk Super Admin dan IT Admin. Tidak mengubah tabel modul lain.
 2. **`portal-api`**: unduh versi yang sedang aktif, simpan sebagai titik kembali, dan hitung SHA-256-nya.
-   - Bila sama dengan `d3c7448447f92bafc0e93b107c93d9d657166e947fefde32f8755876a50f98b1` (isi di master `b739829`, sesudah Absensi), deploy `supabase/deploy/portal-api/index.ts` dari cabang ini (SHA-256 `5ba37bf316156a0d354d2dcf15a5bf0fa19d7baa723ae16010291c1d3fa69367`). Hash mengacu pada isi LF yang tersimpan di Git.
-   - Bila berbeda, jalankan `node scripts/build-archive-deploy.mjs <berkas-aktif.ts> <sha256>` lalu deploy hasilnya. Jangan deploy berkas dari cabang ini apa adanya.
-3. **Merge** cabang ke `master`: Pages menayangkan bundel `portal-fd4003193113.js` + `portal-2f27fca3acb5.css` dan berkas pdf.js di `/app/assets/vendor/pdfjs/`.
-4. **Uji asap**: muat ulang `/app/`; buka Cuti, Kunjungan, Merchandise, Pengadaan, Absensi (karena `portal-api` berganti); lalu di E-Arsip:
+   - Bila sama dengan `d3c7448447f92bafc0e93b107c93d9d657166e947fefde32f8755876a50f98b1` (isi di master `b739829`, sesudah Absensi), deploy `supabase/deploy/portal-api/index.ts` dari `master` (SHA-256 `5ba37bf316156a0d354d2dcf15a5bf0fa19d7baa723ae16010291c1d3fa69367`). Hash mengacu pada isi LF yang tersimpan di Git.
+   - Bila berbeda, jalankan `node scripts/build-archive-deploy.mjs <berkas-aktif.ts> <sha256>` lalu deploy hasilnya. Jangan deploy berkas dari `master` apa adanya.
+3. **Merge** ke `master`: sudah dilakukan 12 November (PR #32 + #33, bundel `portal-fd4003193113.js`). Pemindahan ke ruang kerja Humas menyusul lewat cabang `claude/humas-modul-e-arsip` (bundel `portal-038806cabe3c.js`, hanya tampilan).
+4. **Uji asap**: muat ulang `/app/`; buka Cuti, Kunjungan, Merchandise, Pengadaan, Absensi (karena `portal-api` berganti); lalu pilih ruang kerja **Humas**:
    - Role & Izin: beri role **Humas** kepada akun Humas;
-   - Petugas Arsip: tunjuk satu petugas dan tetapkan kode agenda bagiannya;
+   - Pengaturan Akses → Petugas Arsip: tunjuk satu petugas dan tetapkan kode agenda bagiannya;
    - sebagai petugas: tambah satu arsip uji (PDF + lampiran foto dari HP), buka pratinjau;
    - sebagai Humas: ubah klasifikasi, bagikan, beri izin unduh, hapus dan pulihkan;
    - pastikan folder Drive **SPH-Portal-Arsip** terbentuk dan log `portal-api` tanpa galat.
@@ -128,7 +128,7 @@ Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat uruta
 
 ## Rollback
 
-- **Hanya E-Arsip bermasalah**: deploy ulang `portal-api` versi sebelumnya (salinan dari langkah 2). Rute arsip kembali 404 dan menu hilang saat pengguna memuat ulang. Pages tidak perlu diubah.
+- **Hanya E-Arsip bermasalah**: deploy ulang `portal-api` versi sebelumnya (salinan dari langkah 2). Rute arsip kembali 404 dan ruang kerja Humas hilang saat pengguna memuat ulang. Pages tidak perlu diubah.
 - **Tampilan bermasalah**: revert merge di `master`, atau Rollback di Cloudflare ke deployment sebelumnya.
 - **Data**: jangan `DROP TABLE` dan jangan menghapus folder Drive. Tabel arsip tidak dipakai versi tanpa E-Arsip, jadi boleh dibiarkan. Arsip yang sudah tersimpan tetap utuh untuk dipasang kembali.
 

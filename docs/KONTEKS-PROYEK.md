@@ -8,6 +8,8 @@ Tambahan 5 November 2026 (diperbarui 10 November): modul **Absensi** tahap 1 **b
 
 Tambahan 12 November 2026: modul **E-Arsip Humas** tahap 1 dibangun di cabang `claude/humas-e-arsip-tahap-1` dari PRD Final (Q01–Q40) dan **belum dirilis**. Arsip dokumen administrasi per bagian dengan pengawasan Humas: role baru Humas dan Pengawas Arsip, petugas arsip ditunjuk administrator, klasifikasi Biasa/Rahasia dengan penyamaran di server, izin unduh terpisah. Super Admin dan IT Admin hanya menunjuk petugas dan tidak otomatis membaca arsip Rahasia. Parameter RT pada PRD dipakai sebagai bawaan dan perlu disahkan sebelum rilis. Rincian, penyimpangan, urutan rilis, dan rollback: `docs/E-ARSIP.md`.
 
+Tambahan 13 November 2026: E-Arsip di-merge ke master lewat PR #32 dan #33 (12 November); migrasi dan `portal-api` belum dipasang. Sesuai PRD 10.1, navigasinya dipindah dari menu bersama ke ruang kerja **Humas** (Humas → E-Arsip) di pemilih modul, dan Petugas Arsip ke kelompok Pengaturan Akses.
+
 ## 1. Ringkasan terkini
 
 Pembaruan Kontrol Cuti: label kelompok izin `hr.leaves` menjadi **Kontrol Cuti**, dan tersedia role sistem Kontrol Cuti dengan izin Lihat/Ekspor/Kelola. Akses pengelolaan dibatasi ke akun yang ditetapkan secara privat dan role Super Admin; keanggotaan SDM/Pimpinan Bisnis saja tidak cukup. Pemberian role ke akun lain dan penyebaran izin cuti melalui role umum ditolak server. Hak pengajuan pribadi dan persetujuan operasional terpisah dari pengelolaan. Persetujuan mengikuti atasan langsung lalu atasan satu tingkat di atasnya; kepala bidang langsung ke Pimpinan, dan jalur berhenti setelah mencapai Pimpinan. Riwayat/notifikasi mengikuti tahap aktif; saldo dipotong atau dikembalikan sesudah tahap terakhir, termasuk pembatalan. Pengajuan lama yang masih menunggu diadopsi pada keputusan pertama tanpa mengulang pemotongan pengajuan yang sudah selesai. Identitas akun yang ditetapkan tidak dipublikasikan di source atau dokumentasi ini.
@@ -285,7 +287,7 @@ Dokumen ini sengaja mandiri. Nama berikut membantu mencari rincian saat reposito
 | Pengadaan / audit | `docs/PENGADAAN.md`, `docs/SETUP-PENGADAAN-2026-10-19.md`, `docs/PENINJAUAN-2026-10-18.md`. |
 | Formulir | `docs/LAPORAN-CEPAT-2026-10-23.md`, `docs/coaching-native.md`, arsip `integrations/coaching-google/README.md`. |
 | Absensi | `docs/ABSENSI.md` (tahap 1, belum dirilis). |
-| E-Arsip Humas | `docs/E-ARSIP.md` (tahap 1, di cabang `claude/humas-e-arsip-tahap-1`, belum dirilis). |
+| E-Arsip Humas | `docs/E-ARSIP.md` (tahap 1; kode di master, migrasi dan `portal-api` belum dipasang). Ruang kerja **Humas → E-Arsip**. |
 | Performa | `docs/PERFORMA-PORTAL-2026-10-19.md`, `docs/PERFORMA-PORTAL-2026-10-23.md`, `docs/PERFORMA-UNGGAHAN-2026-10-23.md`. |
 | Website lokal | `docs/BESAKIH-WEBSITE-LOCAL.md`, `docs/RISET-BESAKIH-ORG-2026-10-18.md`, `docs/BESAKIH-PHOTO-SOURCES.md`. |
 | Validasi / alternatif lokal | `docs/VERIFICATION.md`, `docs/DEPLOYMENT.md`; bukti rinci di `test-results/` yang tidak dipublikasikan ke Git. |
