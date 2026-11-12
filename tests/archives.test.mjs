@@ -6,7 +6,8 @@ import {tmpdir} from 'node:os';
 import {resolve,sep} from 'node:path';
 import {openDb,insert,one,all,run,now} from '../lib/db.mjs';
 import {seedPermissions,hashPasswordSync} from '../lib/auth.mjs';
-import {claimFile} from '../lib/files.mjs';
+import {claimFile,fileAllowed} from '../lib/files.mjs';
+import {announcementRoutes} from '../lib/announcements.mjs';
 import {archiveRoutes,archiveUploadAllowed,archiveEnsureDailySummaries} from '../lib/archives.mjs';
 import {archiveRules,archiveAgendaNumber,archiveWitaYear,archiveWitaDate,archiveDecide,archiveGrantActive,archiveNormalNumber,archiveNormalSubject,archiveDuplicateReasons,archiveDayStart,archiveDayEnd,archiveShiftDay} from '../lib/archive-rules.mjs';
 import {createApp} from '../server.mjs';
@@ -56,6 +57,83 @@ function fixture(t){
 async function ready(t){const f=fixture(t);await f.assign(f.u.officerA,f.units.keu,'KEU');await f.assign(f.u.officerB,f.units.ops,'OPS');await f.assign(f.u.humasOfficer,f.units.hms,'HMS');return f;}
 const status=(promise,code,pattern)=>assert.rejects(promise,error=>{assert.equal(error.status,code,error.message);if(pattern)assert.match(error.message,pattern);return true;});
 const listed=async(f,user,query='')=>(await f.call(user,'GET','archives',{},query)).items;
+
+test('berkas arsip tidak dapat ditautkan atau dibaca melalui pengumuman, termasuk versi lama',async t=>{
+ const f=await ready(t),{db,u,units}=f;
+ insert(db,'user_roles',{user_id:u.officerA.id,role_id:one(db,"SELECT id FROM roles WHERE code='SDM'").id,scope_kind:'ALL'});
+ const payload=f.payload(u.officerA,units.keu),a=(await f.call(u.officerA,'POST','archives',payload)).archive;
+ let detail=await f.call(u.officerA,'GET',`archives/${a.id}`),main=detail.documents[0];
+ const replacement=f.file(u.officerA),attachment=f.file(u.officerA);
+ detail=await f.call(u.officerA,'POST',`archives/${a.id}/documents/${main.id}/versions`,{file_id:replacement.id,idempotency_key:randomUUID(),expected_row_version:1,change_reason:'Scan baru'});
+ detail=await f.call(u.officerA,'POST',`archives/${a.id}/documents`,{file_id:attachment.id,idempotency_key:randomUUID(),expected_row_version:detail.archive.row_version});
+ const attached=detail.documents.find(d=>d.role==='ATTACHMENT');
+ await f.call(u.officerA,'POST',`archives/${a.id}/documents/${attached.id}/remove`,{reason:'Keliru',expected_row_version:detail.archive.row_version});
+ await f.classify(a.id);
+ const announce=fileId=>announcementRoutes({db,user:u.officerA,p:['announcements'],method:'POST',body:{title:'Pengumuman fiktif',category:'UMUM',blocks:[{type:'text',text:'Isi fiktif'}],attachments:[{file_id:fileId}]}});
+ const fileIds=[payload.main_file_id,replacement.id,attachment.id];
+ for(const id of fileIds){await status(announce(id),422,/terhubung ke arsip/);assert.equal(fileAllowed(db,u.officerA,id),false);}
+ // Arah sebaliknya juga ditolak: lampiran pengumuman tidak boleh dipakai arsip.
+ const ordinary=f.file(u.officerA),announcement=await announce(ordinary.id);
+ await status(f.call(u.officerA,'POST','archives',f.payload(u.officerA,units.keu,{main_file_id:ordinary.id})),422,/sudah terhubung/i);
+ run(db,"UPDATE announcements SET status='PUBLISHED',published_at=? WHERE id=?",now(),announcement.id);
+ assert.equal(fileAllowed(db,u.staffB,ordinary.id),true);
+ // Data ikatan ganda yang mungkin sudah ada tetap tidak membuka rute umum.
+ insert(db,'announcement_files',{announcement_id:announcement.id,file_id:payload.main_file_id,usage_kind:'ATTACHMENT',caption:'',created_by:u.officerA.id});
+ assert.equal(fileAllowed(db,u.staffB,payload.main_file_id),false);
+ await f.call(u.humas,'POST',`archives/${a.id}/delete`,{reason:'Keliru',reference:'Pesan fiktif'});
+ for(const id of fileIds)assert.throws(()=>claimFile(db,u.officerA,id),/terhubung ke arsip/);
+});
+
+test('kirim ulang pembuatan mengikuti hak baca dan penghapusan terkini',async t=>{
+ const f=await ready(t),{db,u,units}=f,payload=f.payload(u.officerA,units.keu);
+ const a=(await f.call(u.officerA,'POST','archives',payload)).archive;
+ await f.classify(a.id);
+ await f.grant(a.id,{purpose:'RAHASIA_READ',target_user_id:u.officerA.id,reason:'Koreksi'});
+ await f.call(u.officerA,'PATCH',`archives/${a.id}`,{...payload,subject:'Perihal rahasia baru',official_number:'RAHASIA-BARU',expected_row_version:2});
+ const grant=one(db,"SELECT id FROM archive_access_grants WHERE archive_id=? AND purpose='RAHASIA_READ' AND revoked_at IS NULL",a.id);
+ await f.call(u.humas,'POST',`archives/${a.id}/grants/${grant.id}/revoke`,{reason:'Selesai'});
+ const replay=await f.call(u.officerA,'POST','archives',payload);
+ assert.equal(replay.repeated,true);assert.equal(replay.archive.restricted,true);
+ assert.deepEqual(Object.keys(replay.archive).sort(),['agenda_number','archived_at','classification','id','restricted']);
+ assert(!JSON.stringify(replay).includes('RAHASIA-BARU'));
+ await f.call(u.humas,'POST',`archives/${a.id}/delete`,{reason:'Keliru',reference:'Pesan fiktif'});
+ await status(f.call(u.officerA,'POST','archives',payload),404);
+ await f.call(u.humas,'POST',`archives/deleted/${a.id}/restore`,{reason:'Diperlukan'});
+ await f.grant(a.id,{purpose:'RAHASIA_READ',target_user_id:u.officerA.id,reason:'Lanjut'});
+ assert.equal((await f.call(u.officerA,'POST','archives',payload)).archive.subject,'Perihal rahasia baru');
+ assert.equal(one(db,'SELECT count(*) n FROM archive_records').n,1);
+});
+
+test('riwayat perubahan tetap terlihat setelah lebih dari 300 pembukaan detail',async t=>{
+ const f=await ready(t),{u,units}=f,a=await f.create(u.officerA,units.keu);
+ await f.grant(a.id,{purpose:'DOWNLOAD',target_user_id:u.staffA.id,reason:'Cetak'});
+ for(let i=0;i<310;i++)await f.call(u.officerA,'GET',`archives/${a.id}`);
+ const humas=await f.call(u.humas,'GET',`archives/${a.id}/history`),officer=await f.call(u.officerA,'GET',`archives/${a.id}/history`);
+ assert(humas.items.some(i=>i.action==='ARCHIVE_CREATED'));assert(humas.items.some(i=>i.action==='DOWNLOAD_GRANTED'));
+ assert(!humas.items.some(i=>i.action==='DETAIL_OPENED'));
+ assert.deepEqual(officer.items.map(i=>i.action),['ARCHIVE_CREATED']);
+});
+
+test('tanpa migrasi arsip, pemeriksaan unggah dan lampiran lama tetap berjalan',async t=>{
+ const f=fixture(t),{db,u}=f,file=f.file(u.admin);
+ db.exec('ALTER TABLE archive_officers RENAME TO archive_officers_not_installed');
+ assert.equal(archiveUploadAllowed(db,u.admin),false);
+ assert.equal(await f.call(u.admin,'GET','archives/overview'),undefined);
+ assert.equal(claimFile(db,u.admin,file.id).id,file.id);
+ assert.equal(fileAllowed(db,u.admin,file.id),false);
+});
+
+test('penunjukan tetap aktif bila penyimpanan terjadi setelah waktu awal permintaan',async t=>{
+ const f=fixture(t),{db,u,units}=f;
+ t.mock.timers.enable({apis:['Date'],now:Date.now()});
+ const prepare=db.prepare.bind(db);
+ t.mock.method(db,'prepare',sql=>{
+  if(sql.startsWith('SELECT u.id,u.username,u.employee_id,e.full_name'))t.mock.timers.tick(20);
+  return prepare(sql);
+ });
+ const result=await f.assign(u.officerA,units.keu,'KEU');
+ assert.equal(result.officers[0].status,'AKTIF');assert.equal(result.officers[0].expires_at,null);
+});
 
 /* ---------- Aturan murni ---------- */
 test('E-Arsip aturan: nomor agenda, tahun WITA, normalisasi, dan predikat kanonis',()=>{

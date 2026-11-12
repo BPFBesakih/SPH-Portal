@@ -28,11 +28,45 @@ const pdf=text=>Buffer.concat([Buffer.from('%PDF-1.4\n'),Buffer.from(text)]);
 try{
   await pg.exec(`CREATE ROLE anon NOLOGIN;CREATE ROLE authenticated NOLOGIN;CREATE ROLE service_role NOLOGIN BYPASSRLS;CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,email_confirmed_at timestamptz,encrypted_password text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid REFERENCES auth.users(id));CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;GRANT USAGE ON SCHEMA auth TO authenticated;`);
   const directory=new URL('../supabase/migrations/',import.meta.url);
-  for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')).sort())await pg.exec(pgliteSql(readFileSync(new URL(name,directory),'utf8')));
+  const archiveMigration=readFileSync(new URL('20261112100000_archive_module.sql',directory),'utf8');
+  for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n!=='20261112100000_archive_module.sql').sort())await pg.exec(pgliteSql(readFileSync(new URL(name,directory),'utf8')));
   await pg.exec('SET search_path=portal,pg_catalog');
   let inTx=false;
   const db={inTransaction:true,query:async(statement,args=[])=>{const result=await pg.query(statement,args);return Object.assign(result.rows,{count:result.affectedRows??result.rows.length});}};
   const atomic=async work=>{assert(!inTx,'nested transaction');await pg.exec('BEGIN');inTx=true;try{const result=await work();await pg.exec('COMMIT');return result;}catch(error){await pg.exec('ROLLBACK');throw error;}finally{inTx=false;}};
+
+  // Snapshot portal-api hasil build-archive-deploy.mjs, dengan Drive tiruan.
+  const drive=driveFixture(),driveCalls=[];
+  globalThis.fetch=async(url,init)=>{const host=new URL(url).hostname;if(/googleapis\.com$/.test(host)){driveCalls.push(`${init?.method||'GET'} ${new URL(url).pathname}`);return drive.fetch(url,{...init,redirect:'manual'});}throw new Error('Unexpected network call '+url);};
+  const env={SUPABASE_DB_URL:'postgresql://fixture:fixture@localhost/fixture',...drive.env};
+  globalThis.Deno={env:{toObject:()=>({...env})}};
+  const shim=source=>source.replace('import { withSupabase } from "npm:@supabase/server@1";','const withSupabase=(mode,handler)=>handler;').replace('import postgres from "npm:postgres@3.4.7";','const postgres=()=>{throw new Error("no database in fixture")};');
+  const gateway=shim(readFileSync(new URL('../supabase/deploy/portal-api/index.ts',import.meta.url),'utf8'));
+  assert(gateway.includes('p[0] === "archives"')&&gateway.includes('arsip: "SPH-Portal-Arsip"')&&gateway.includes('p[0] === "attendance"'),'Jalankan scripts/build-archive-deploy.mjs di atas snapshot yang sudah memuat Absensi.');
+  const api=await import(`data:text/javascript;base64,${Buffer.from(gateway+'\nexport {routeOperation,AppError,createDriveStorage,driveModuleForOperation};').toString('base64')}`);
+  // Seperti penangan sungguhan: penyimpanan dibuat per permintaan menurut modul rute, dan
+  // berkas yang diikat dipindahkan ke folder modul setelah transaksi selesai.
+  const portal=async(user,path,method='GET',body={},query='')=>{
+    const storage=api.createDriveStorage(env,undefined,{module:api.driveModuleForOperation(path,body)});
+    const result=await atomic(()=>api.routeOperation({db:{...db,storage},user:{...user,request_id:randomUUID()},path,method,body,query}));
+    await storage.finalize();return result;
+  };
+  const denied=(promise,status)=>assert.rejects(promise,error=>{assert(error instanceof api.AppError,String(error?.stack||error));assert.equal(error.status,status,error.message);return true;});
+  const upload=(user,name,bytes)=>portal(user,'uploads','POST',{name,mime_type:'application/pdf',data:bytes.toString('base64')});
+  const bytes=pdf('surat fiktif '+randomUUID());let archive,main,creationPayload;
+
+  await check('before archive migration, legacy uploads, attachments and downloads still work; archives answer 404',async()=>{
+    const id=randomUUID();await pg.query('INSERT INTO auth.users(id) VALUES($1)',[id]);
+    const legacy=await insert(db,'users',{id,username:'legacy-admin',status:'ACTIVE',must_change_password:0});
+    await insert(db,'user_roles',{user_id:id,role_id:(await one(db,"SELECT id FROM roles WHERE code='SUPER_ADMIN'")).id,scope_kind:'ALL'});
+    const uploaded=await upload(legacy,'legacy.pdf',pdf('legacy'));
+    const announcement=await portal(legacy,'announcements','POST',{title:'Legacy fixture',category:'UMUM',blocks:[{type:'text',text:'Legacy fixture'}],attachments:[{file_id:uploaded.id}]});
+    assert(announcement.id);
+    assert(await portal(legacy,'files/'+uploaded.id));
+    await denied(portal(legacy,'archives/overview'),404);
+    await denied(portal(legacy,'archives','POST',{}),404);
+  });
+  await pg.exec(archiveMigration);
 
   await check('migration creates the archive tables with RLS, no client grants, roles and permissions',async()=>{
     const rls=await all(db,"SELECT tablename,rowsecurity FROM pg_catalog.pg_tables WHERE schemaname='portal' AND tablename LIKE 'archive_%' ORDER BY tablename");
@@ -63,33 +97,16 @@ try{
   const officer=await account('petugas-arsip',(await person('o','Petugas Fiktif',keu)).id),staff=await account('pegawai-arsip',(await person('s','Pegawai Fiktif',keu)).id);
   const outsider=await account('pegawai-ops',(await person('x','Pegawai Operasional Fiktif',ops)).id),boss=await account('pimpinan-arsip',(await person('b','Pimpinan Fiktif',sek)).id,'ARSIP_PENGAWAS','ASSIGNED_UNITS',[sek.id]);
 
-  // Snapshot portal-api hasil build-archive-deploy.mjs, dengan Drive tiruan.
-  const drive=driveFixture(),driveCalls=[];
-  globalThis.fetch=async(url,init)=>{const host=new URL(url).hostname;if(/googleapis\.com$/.test(host)){driveCalls.push(`${init?.method||'GET'} ${new URL(url).pathname}`);return drive.fetch(url,{...init,redirect:'manual'});}throw new Error('Unexpected network call '+url);};
-  const env={SUPABASE_DB_URL:'postgresql://fixture:fixture@localhost/fixture',...drive.env};
-  globalThis.Deno={env:{toObject:()=>({...env})}};
-  const shim=source=>source.replace('import { withSupabase } from "npm:@supabase/server@1";','const withSupabase=(mode,handler)=>handler;').replace('import postgres from "npm:postgres@3.4.7";','const postgres=()=>{throw new Error("no database in fixture")};');
-  const gateway=shim(readFileSync(new URL('../supabase/deploy/portal-api/index.ts',import.meta.url),'utf8'));
-  assert(gateway.includes('p[0] === "archives"')&&gateway.includes('arsip: "SPH-Portal-Arsip"')&&gateway.includes('p[0] === "attendance"'),'Jalankan scripts/build-archive-deploy.mjs di atas snapshot yang sudah memuat Absensi.');
-  const api=await import(`data:text/javascript;base64,${Buffer.from(gateway+'\nexport {routeOperation,AppError,createDriveStorage,driveModuleForOperation};').toString('base64')}`);
-  // Seperti penangan sungguhan: penyimpanan dibuat per permintaan menurut modul rute, dan
-  // berkas yang diikat dipindahkan ke folder modul setelah transaksi selesai.
-  const portal=async(user,path,method='GET',body={},query='')=>{
-    const storage=api.createDriveStorage(env,undefined,{module:api.driveModuleForOperation(path,body)});
-    const result=await atomic(()=>api.routeOperation({db:{...db,storage},user:{...user,request_id:randomUUID()},path,method,body,query}));
-    await storage.finalize();return result;
-  };
-  const denied=(promise,status)=>assert.rejects(promise,error=>{assert(error instanceof api.AppError,String(error?.stack||error));assert.equal(error.status,status,error.message);return true;});
-  const upload=(user,name,bytes)=>portal(user,'uploads','POST',{name,mime_type:'application/pdf',data:bytes.toString('base64')});
-  const bytes=pdf('surat fiktif '+randomUUID());let archive,main;
 
   await check('only an appointed officer uploads and files an archive; the agenda number follows unit and archival year',async()=>{
     await denied(upload(officer,'surat.pdf',bytes),403);
     await denied(portal(humas,'archives/officers','POST',{user_id:officer.id,org_unit_id:keu.id,reason:'SK fiktif',agenda_code:'KEU'}),403);
-    await portal(admin,'archives/officers','POST',{user_id:officer.id,org_unit_id:keu.id,reason:'SK fiktif',agenda_code:'KEU'});
+    const assigned=await portal(admin,'archives/officers','POST',{user_id:officer.id,org_unit_id:keu.id,reason:'SK fiktif',agenda_code:'KEU'});
+    assert.equal(assigned.officers.find(o=>o.user.id===officer.id).status,'AKTIF');
     await denied(upload(staff,'surat.pdf',bytes),403);
     const file=await upload(officer,'surat masuk.pdf',bytes);
     const body={idempotency_key:randomUUID(),owner_unit_id:keu.id,direction:'MASUK',document_type_id:'arsip-jenis-surat',official_number:'01/FX/2026',letter_date:'2024-03-01',subject:'Perihal fiktif PostgreSQL',main_file_id:file.id,attachment_file_ids:[],classification:'RAHASIA'};
+    creationPayload=body;
     await denied(portal(staff,'archives','POST',body),403);
     archive=(await portal(officer,'archives','POST',body)).archive;
     const year=new Date(Date.now()+8*3600000).getUTCFullYear();
@@ -133,6 +150,9 @@ try{
     }
     await denied(portal(admin,`archives/${archive.id}`),404);
     assert.equal((await portal(humas,`archives/${archive.id}`)).archive.subject,'Perihal fiktif PostgreSQL');
+    const repeated=await portal(officer,'archives','POST',creationPayload);
+    assert.equal(repeated.repeated,true);assert.equal(repeated.archive.restricted,true);
+    assert(!JSON.stringify(repeated).includes('Perihal fiktif PostgreSQL'));
     // Izin unduh dari epoch lama berakhir bersama perubahan klasifikasi.
     assert.equal(Number((await one(db,"SELECT count(*) n FROM archive_access_grants WHERE archive_id=? AND purpose='DOWNLOAD' AND revoked_at IS NULL",archive.id)).n),0);
     await portal(humas,`archives/${archive.id}/grants`,'POST',{purpose:'RAHASIA_READ',target_user_id:staff.id,reason:'Tindak lanjut',expires_at:new Date(Date.now()+3600000).toISOString()});
@@ -146,6 +166,7 @@ try{
     await denied(portal(officer,`archives/${archive.id}/delete`,'POST',{reason:'x',reference:'y'}),403);
     await portal(humas,`archives/${archive.id}/delete`,'POST',{reason:'Salah unggah',reference:'Pesan WA petugas'});
     await denied(portal(humas,`archives/${archive.id}`),404);
+    await denied(portal(officer,'archives','POST',creationPayload),404);
     assert.equal((await portal(humas,'archives/deleted')).items.some(i=>i.id===archive.id),true);await denied(portal(officer,'archives/deleted'),403);
     assert.equal(drive.files.size,filesBefore,'berkas Drive tidak dihapus');
     const restored=await portal(humas,`archives/deleted/${archive.id}/restore`,'POST',{reason:'Ternyata benar'});
@@ -167,6 +188,26 @@ try{
     assert(notes.length===runs.length&&notes.every(n=>n.recipient_user_id===humas.id),'satu ringkasan per tanggal untuk tiap Humas aktif');
     const report=await portal(staff,'archives/reports','POST',{type:'recap_period',format:'xlsx',from:'2020-01-01',to:'2099-12-31'});
     assert(report.rows.some(r=>r.restricted&&Object.keys(r).sort().join()==='agenda_number,archived_on,classification,restricted'));
+  });
+  await check('archive files cannot be reused in announcements; old double links do not bypass archive access',async()=>{
+    await insert(db,'user_roles',{user_id:officer.id,role_id:(await one(db,"SELECT id FROM roles WHERE code='SDM'")).id,scope_kind:'ALL'});
+    const announce=fileId=>portal(officer,'announcements','POST',{title:'Pengumuman fiktif',category:'UMUM',blocks:[{type:'text',text:'Isi fiktif'}],attachments:[{file_id:fileId}]});
+    await denied(announce(creationPayload.main_file_id),422);
+    const ordinary=await upload(officer,'ordinary.pdf',pdf('ordinary')),announcement=await announce(ordinary.id);
+    await denied(portal(officer,'archives','POST',{...creationPayload,idempotency_key:randomUUID(),main_file_id:ordinary.id}),422);
+    await portal(officer,`announcements/${announcement.id}/publish`,'POST',{row_version:announcement.row_version});
+    assert(await portal(outsider,`files/${ordinary.id}`));
+    await insert(db,'announcement_files',{announcement_id:announcement.id,file_id:creationPayload.main_file_id,usage_kind:'ATTACHMENT',caption:'',created_by:officer.id});
+    await denied(portal(outsider,`files/${creationPayload.main_file_id}`),403);
+    await denied(portal(officer,`files/${creationPayload.main_file_id}`),403);
+  });
+
+  await check('history keeps content and access changes after hundreds of detail openings',async()=>{
+    for(let i=0;i<305;i++)await portal(humas,`archives/${archive.id}`);
+    const history=await portal(humas,`archives/${archive.id}/history`);
+    assert(history.items.some(i=>i.action==='ARCHIVE_CREATED'));
+    assert(history.items.some(i=>i.action==='CLASSIFICATION_CHANGED'));
+    assert(!history.items.some(i=>i.action==='DETAIL_OPENED'));
   });
   console.log(`${checks} archive PostgreSQL checks passed.`);
 }finally{globalThis.fetch=realFetch;globalThis.Deno=priorDeno;await pg.close();}

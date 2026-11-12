@@ -11,8 +11,8 @@
 // Lima tambalan:
 //  1. folder Drive `arsip` (SPH-Portal-Arsip) dikenali penyimpanan snapshot;
 //  2. rute `archives/*` memakai folder itu saat berkas diikat ke arsip;
-//  3. petugas arsip yang ditunjuk boleh mengunggah lewat `uploads` (pemeriksaan isi,
-//     ukuran, dan checksum milik snapshot tetap berlaku);
+//  3. petugas arsip yang ditunjuk boleh mengunggah lewat `uploads`; berkas arsip
+//     dilindungi juga dari pengikatan dan unduh umum. Sebelum migrasi, jalur lama tetap aktif;
 //  4. modul E-Arsip (lib/archive*.mjs) dibundel dalam satu lingkup (__archives);
 //  5. rute `archives/*` di routeOperation. Modul memeriksa izin sendiri langsung dari
 //     tabel role (bukan `has/can` snapshot), karena Super Admin tidak otomatis Humas.
@@ -42,6 +42,10 @@ patched=swap(patched,'  if (path === "uploads" && method === "POST") return uplo
  '  if (path === "uploads" && method === "POST") return await __archives.archiveUploadAllowed(db, user) ? storeUpload(db, user, body) : upload(db, user, body);','uploads route');
 once(patched,'async function storeUpload(db, user, b, dataDir) {','storeUpload');
 once(patched,'async function claimFile(db, user, id) {','claimFile');
+const ownerCheck='  assert(f.status === "AVAILABLE" && f.uploaded_by === user.id, "Berkas tidak tersedia untuk dilampirkan.", 403);';
+patched=swap(patched,ownerCheck,ownerCheck+'\n  assert(!await __archives.archiveFileLinked(db, id), "Berkas sudah terhubung ke arsip. Unggah berkas baru untuk objek ini.", 422);','archive claim guard');
+patched=swap(patched,'async function fileAllowed(db, user, id) {',
+ 'async function fileAllowed(db, user, id) {\n  if (await __archives.archiveFileLinked(db, id)) return false;','archive download guard');
 
 // 5. Rute di routeOperation, sebelum rute dashboard.
 const dashboardRoute='  if (path === "dashboard" && method === "GET") return dashboard(';
@@ -52,7 +56,7 @@ patched=swap(patched,dashboardRoute,'  if (p[0] === "archives") return __archive
 // 4. Modul E-Arsip dibundel terpisah lalu dibungkus satu lingkup, supaya nama di
 // snapshot (assert, audit, AppError, …) tidak diganti esbuild.
 const shared=resolve('supabase/functions/_shared/portal');
-const bundled=await build({stdin:{contents:`export {archiveRoutes,archiveUploadAllowed} from './archives.mjs';\n`,resolveDir:shared,sourcefile:'archives-entry.mjs',loader:'js'},
+const bundled=await build({stdin:{contents:`export {archiveRoutes,archiveUploadAllowed} from './archives.mjs';\nexport {archiveFileLinked} from './archive-files.mjs';\n`,resolveDir:shared,sourcefile:'archives-entry.mjs',loader:'js'},
  write:false,bundle:true,format:'esm',platform:'neutral',target:'es2022',packages:'external',external:['node:*','npm:*'],legalComments:'none'});
 let moduleText=bundled.outputFiles[0].text;
 const imports=[],aliases=[];
@@ -66,7 +70,7 @@ if(/^import /m.test(moduleText))throw new Error('Unexpected non-node import in a
 const exportMatch=moduleText.match(/\nexport \{\n([\s\S]*?)\n\};\n?$/);
 if(!exportMatch)throw new Error('Archive bundle export block not found.');
 const exported=exportMatch[1].split(',').map(x=>x.trim()).filter(Boolean);
-for(const name of ['archiveRoutes','archiveUploadAllowed'])if(!exported.some(e=>e===name||e.endsWith(` as ${name}`)))throw new Error(`Archive export missing: ${name}`);
+for(const name of ['archiveRoutes','archiveUploadAllowed','archiveFileLinked'])if(!exported.some(e=>e===name||e.endsWith(` as ${name}`)))throw new Error(`Archive export missing: ${name}`);
 const body=moduleText.slice(0,exportMatch.index);
 const namespace=`// --- Modul E-Arsip, dibangkitkan dari lib/archive*.mjs (build-archive-deploy.mjs) ---
 const __archives = (() => {
@@ -95,4 +99,4 @@ parse(patched,{ecmaVersion:'latest',sourceType:'module'});
 const out=resolve('supabase/deploy/portal-api/index.ts');mkdirSync(dirname(out),{recursive:true});
 writeFileSync(out,patched);
 console.log(JSON.stringify({source_sha256:sha,output:out,output_sha256:createHash('sha256').update(readFileSync(out)).digest('hex'),
- patches:['arsip Drive folder','archives Drive module','archive officer uploads','archive module imports','archive routes in routeOperation']}));
+ patches:['arsip Drive folder','archives Drive module','archive officer uploads','archive claim/download guards','archive module imports','archive routes in routeOperation']}));

@@ -1,6 +1,6 @@
 # E-Arsip Humas — Tahap 1
 
-Status 12 November 2026: **dibangun di cabang `claude/humas-e-arsip-tahap-1`, belum di-merge, belum dirilis.** Supabase, Google Drive, dan bpbesakih.com tidak diubah. Dasar kebutuhan: *PRD Final Modul Humas E-Arsip SPH Portal Tahap 1* (40 keputusan Q01–Q40, kriteria AC01–AC45).
+Status 12 November 2026: **perbaikan review PR #32 tersedia di cabang `33`, belum di-merge, belum dirilis.** Supabase, Google Drive, dan bpbesakih.com tidak diubah. Dasar kebutuhan: *PRD Final Modul Humas E-Arsip SPH Portal Tahap 1* (40 keputusan Q01–Q40, kriteria AC01–AC45).
 
 PRD menyebut dirinya "bukan izin implementasi atau deployment". Cabang ini dibuat atas permintaan pemilik untuk ditinjau dan dicoba lokal; merilisnya tetap memerlukan keputusan pemilik dan langkah di bagian [Rilis](#rilis-oleh-pemilik-repo).
 
@@ -90,12 +90,22 @@ Membuka portal lokal (SQLite) di `http://127.0.0.1:4626/#archives` dengan data f
 
 ## Pemeriksaan otomatis
 
+Perbaikan review pada cabang `33`:
+
+- Berkas arsip ditolak oleh pengikatan dan unduh umum, termasuk versi lama, lampiran dilepas, dan arsip dihapus. Ikatan ganda yang sudah terlanjur ada juga tidak membuka unduh umum.
+- Kirim ulang pembuatan memakai hak baca dan status hapus terkini: Rahasia tetap disamarkan, arsip dihapus menjawab 404, dan nomor agenda tidak dibuat ulang.
+- Riwayat menyaring jenis tindakan sebelum mengambil 300 hasil, sehingga pembukaan detail/pratinjau tidak menyingkirkan perubahan yang perlu ditampilkan.
+- Kesiapan tabel diperiksa lewat katalog sebelum rute arsip dipakai. Bila migrasi belum dipasang, rute arsip menjawab 404 dan unggahan/lampiran/unduh modul lama tetap berjalan.
+- Status penunjukan dievaluasi dengan waktu setelah penyimpanan, sehingga penunjukan baru tidak keliru dianggap kedaluwarsa.
+
+Validasi perbaikan: Node 24.22.1 dan PGlite 0.5.16, seluruh data fiktif. Paket PGlite perlu tersedia untuk menjalankan suite penuh; contoh persiapan lokal: `npm install --no-save @electric-sql/pglite@0.5.16`. Pada checkout Windows, pertahankan LF untuk `site-info/dist/_headers` karena tes Kunjungan lama memisah blok berdasarkan LF.
+
 | Pemeriksaan | Hasil di cabang ini |
 |---|---|
-| `npm test` | 342 tes; 19 di antaranya `tests/archives.test.mjs` (AC01–AC45 yang dapat diuji tanpa layanan luar). `tests/leave-special.test.mjs` memerlukan paket PGlite terpasang |
-| `node scripts/verify-archives-postgres.mjs <pglite>` | 6 pemeriksaan: migrasi (RLS, tanpa grant, role, pemicu, tepat satu dokumen utama), lalu `portal-api` yang sudah ditambal dengan Drive tiruan |
-| `PLAYWRIGHT_MODULE=… node scripts/verify-archives-ui.mjs` | 8 alur di browser (desktop dan layar HP), tanpa pelanggaran CSP |
-| `verify-attendance-postgres`, `verify-visits-postgres`, `verify-attendance-ui` | Tetap lulus dengan `portal-api` hasil tambalan |
+| `npm test` | 359/359 lulus dengan PGlite terpasang; 24 di antaranya `tests/archives.test.mjs`, termasuk lima regresi review |
+| `node scripts/verify-archives-postgres.mjs <pglite>` | 9/9 lulus: gateway sebelum migrasi, migrasi (RLS, tanpa grant, role, pemicu, tepat satu dokumen utama), gateway sesudah migrasi dengan Drive tiruan, pengikatan antarmodul, kirim ulang, dan riwayat |
+| `PLAYWRIGHT_MODULE=… node scripts/verify-archives-ui.mjs` | 8/8 alur lulus di browser (desktop dan layar HP), tanpa pelanggaran CSP |
+| `verify-attendance-postgres`, `verify-visits-postgres`, `verify-attendance-ui` | Masing-masing 12/12, 10/10, dan 12/12 lulus setelah perbaikan |
 
 **Belum diuji** dan perlu staging atau perangkat nyata: Drive dan Supabase sungguhan, HP Android/iPhone dan sinyal lemah (AC42), berkas mendekati 10 MB lewat gateway, beban (RT21), latihan pemulihan (AC38), dan pemeriksaan izin folder Drive (AC24 bagian Drive).
 
@@ -105,7 +115,7 @@ Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat uruta
 
 1. **Migrasi** di SQL Editor: `supabase/migrations/20261112100000_archive_module.sql`. Aditif, satu transaksi: 14 tabel, tiga izin `archives.*`, role Humas dan Pengawas Arsip, serta izin menunjuk petugas untuk Super Admin dan IT Admin. Tidak mengubah tabel modul lain.
 2. **`portal-api`**: unduh versi yang sedang aktif, simpan sebagai titik kembali, dan hitung SHA-256-nya.
-   - Bila sama dengan `d3c7448447f92bafc0e93b107c93d9d657166e947fefde32f8755876a50f98b1` (isi di master `b739829`, sesudah Absensi), deploy `supabase/deploy/portal-api/index.ts` dari cabang ini (SHA-256 `bc75677fa309bb97304df727b155d869acb243ed0e64719f8b7ca1dd4ac90b2b`).
+   - Bila sama dengan `d3c7448447f92bafc0e93b107c93d9d657166e947fefde32f8755876a50f98b1` (isi di master `b739829`, sesudah Absensi), deploy `supabase/deploy/portal-api/index.ts` dari cabang ini (SHA-256 `5ba37bf316156a0d354d2dcf15a5bf0fa19d7baa723ae16010291c1d3fa69367`). Hash mengacu pada isi LF yang tersimpan di Git.
    - Bila berbeda, jalankan `node scripts/build-archive-deploy.mjs <berkas-aktif.ts> <sha256>` lalu deploy hasilnya. Jangan deploy berkas dari cabang ini apa adanya.
 3. **Merge** cabang ke `master`: Pages menayangkan bundel `portal-fd4003193113.js` + `portal-2f27fca3acb5.css` dan berkas pdf.js di `/app/assets/vendor/pdfjs/`.
 4. **Uji asap**: muat ulang `/app/`; buka Cuti, Kunjungan, Merchandise, Pengadaan, Absensi (karena `portal-api` berganti); lalu di E-Arsip:

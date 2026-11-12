@@ -7,7 +7,7 @@ import {generate} from './cloud-tools/node_modules/astring/dist/astring.mjs';
 // Generated output is committed and checked on PostgreSQL before deployment.
 const destination=new URL('../supabase/functions/_shared/portal/',import.meta.url);
 mkdirSync(destination,{recursive:true});
-const names=['auth','files','hr','security','field-reports','quick-reports','coaching-links','briefings','roster','announcements','read-models','admin','purchasing-rules','purchasing','merchandise','visit-data','visit-sheets','guide-form','visits','attendance-rules','attendance-form','attendance','archive-rules','archives'];
+const names=['auth','files','hr','security','field-reports','quick-reports','coaching-links','briefings','roster','announcements','read-models','admin','purchasing-rules','purchasing','merchandise','visit-data','visit-sheets','guide-form','visits','attendance-rules','attendance-form','attendance','archive-files','archive-rules','archives'];
 // --only=a,b menulis modul tertentu saja (semua modul tetap dibaca supaya penentuan
 // fungsi asinkron lintas modul sama). Dipakai rilis bertahap, mis. modul Absensi:
 //   node scripts/generate-cloud-modules.mjs --only=attendance-rules,attendance-form,attendance
@@ -18,6 +18,7 @@ if(only)for(const name of only)if(!names.includes(name))throw new Error(`Unknown
 const modules=[];
 for(const name of names){
  let source=readFileSync(new URL(`../lib/${name}.mjs`,import.meta.url),'utf8');
+ if(name==='archive-files')source=source.replace("FROM sqlite_master WHERE type='table' AND name IN", "FROM pg_catalog.pg_tables WHERE schemaname='portal' AND tablename IN");
  if(name==='auth'){
   source=`import {createHash} from 'node:crypto';\nimport {all,one,assert,today} from './db.mjs';\nexport const digest=value=>createHash('sha256').update(value).digest('hex');\n`+
    source.slice(source.indexOf('export const resourceActions'),source.indexOf('export function seedPermissions'))+

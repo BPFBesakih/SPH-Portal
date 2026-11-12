@@ -3143,6 +3143,7 @@ var attachments = [["briefing_files", "briefing_id", "briefing"], ["employee_fil
 async function claimFile(db, user, id) {
   const f = await get(db, "files", id);
   assert(f.status === "AVAILABLE" && f.uploaded_by === user.id, "Berkas tidak tersedia untuk dilampirkan.", 403);
+  assert(!await __archives.archiveFileLinked(db, id), "Berkas sudah terhubung ke arsip. Unggah berkas baru untuk objek ini.", 422);
   assert(!await one(db, attachments.map(([table]) => `SELECT 1 AS linked FROM ${table} WHERE file_id=?`).join(" UNION ALL ") + " LIMIT 1", ...attachments.map(() => id)), "Berkas sudah terhubung. Unggah berkas baru untuk objek ini.");
   return f;
 }
@@ -3170,6 +3171,7 @@ async function linkedFiles(db, type, id) {
   return await all(db, `SELECT f.id,f.original_name,f.mime_type,f.size_bytes,l.id link_id${metadata} FROM ${entry[0]} l JOIN files f ON f.id=l.file_id WHERE l.${entry[1]}=? AND f.status='AVAILABLE'`, id);
 }
 async function fileAllowed(db, user, id) {
+  if (await __archives.archiveFileLinked(db, id)) return false;
   for (const material of await all(db, "SELECT tm.training_event_id,v.document_id FROM training_materials tm JOIN document_versions v ON v.id=tm.document_version_id WHERE v.file_id=?", id)) if (await trainingAllowed(db, user, "download", await get(db, "training_events", material.training_event_id)) && await documentAllowed(db, user, "download", await get(db, "documents", material.document_id))) return true;
   for (const [table, key, type] of attachments) for (const link of await all(db, `SELECT * FROM ${table} WHERE file_id=?`, id)) {
     if (type === "briefing" && await briefingAllowed(db, user, "read", await get(db, "morning_briefings", link.briefing_id))) return true;
@@ -9004,6 +9006,14 @@ async function audit(db, actor, action, type, key, summary = {}, reason = "") {
   await insert(db, "audit_events", { actor_user_id: actor?.id || null, action, object_type: type, object_key: String(key), occurred_at: now(), outcome: "SUCCESS", request_id: actor?.request_id || uid(), reason, change_summary: JSON.stringify(summary) });
 }
 
+// supabase/functions/_shared/portal/archive-files.mjs
+async function archiveSchemaReady(db) {
+  return Number((await one(db, "SELECT count(*) AS n FROM pg_catalog.pg_tables WHERE schemaname='portal' AND tablename IN ('archive_records','archive_officers','archive_document_versions')")).n) === 3;
+}
+async function archiveFileLinked(db, fileId) {
+  return await archiveSchemaReady(db) && Boolean(await one(db, "SELECT 1 AS linked FROM archive_document_versions WHERE file_id=?", fileId));
+}
+
 // supabase/functions/_shared/portal/archive-rules.mjs
 var archiveRules = Object.freeze({
   maxFileBytes: 1e7,
@@ -9185,7 +9195,7 @@ async function arcActor(db, user) {
   return ctx;
 }
 async function archiveUploadAllowed(db, user) {
-  return (await arcActor(db, user)).officerUnits.size > 0;
+  return await archiveSchemaReady(db) && (await arcActor(db, user)).officerUnits.size > 0;
 }
 async function arcAudit(db, ctx, action, detail = {}) {
   await insert(db, "archive_audit_events", {
@@ -9658,12 +9668,9 @@ async function arcCreate(db, ctx, deps, b) {
     const fingerprint = archiveFingerprint([unitId, arcMetaView(meta), fileIds]);
     const done = await arcOperation(db, ctx, "CREATE_ARCHIVE", b.idempotency_key, fingerprint);
     if (done) {
-      const a2 = await one(db, "SELECT a.*,u.name AS unit_name FROM archive_records a JOIN org_units u ON u.id=a.owner_unit_id WHERE a.id=?", done.result_archive_id);
+      const { a: a2, access } = await arcLoad(db, ctx, done.result_archive_id);
       return {
-        archive: arcFull({
-          ...a2,
-          is_full: 1
-        }),
+        archive: access.read ? arcFull(a2) : arcRestricted(a2),
         repeated: true
       };
     }
@@ -10299,7 +10306,9 @@ async function arcRestore(db, ctx, id, b) {
 async function arcHistory(db, ctx, id) {
   const { a, access } = await arcLoadFull(db, ctx, id, "HISTORY");
   if (!ctx.humas && !access.edit) throw denied(db, ctx.user, "HISTORY", a.id, "Riwayat arsip hanya untuk petugas arsip bagian pemilik dan Humas.");
-  const rows = (await all(db, "SELECT * FROM archive_audit_events WHERE archive_id=? AND outcome='SUCCESS' ORDER BY occurred_at DESC,id LIMIT 300", a.id)).filter((r) => ctx.humas ? !["DETAIL_OPENED", "PREVIEW_OPENED"].includes(r.action) : archiveContentActions.includes(r.action));
+  const actions = ctx.humas ? ["DETAIL_OPENED", "PREVIEW_OPENED"] : archiveContentActions, params = [a.id];
+  const visible = `action ${ctx.humas ? "NOT IN" : "IN"} ${placeholders(actions, params)}`;
+  const rows = await all(db, `SELECT * FROM archive_audit_events WHERE archive_id=? AND outcome='SUCCESS' AND ${visible} ORDER BY occurred_at DESC,id LIMIT 300`, ...params);
   const names = await arcUserNames(db, rows.map((r) => r.actor_user_id));
   return {
     items: rows.map((r) => ({
@@ -10381,12 +10390,13 @@ function arcAdmin(db, ctx, action) {
 }
 async function arcOfficers(db, ctx) {
   arcAdmin(db, ctx, "OFFICER_LIST");
+  const evaluatedAt = now();
   const rows = await all(db, "SELECT * FROM archive_officers ORDER BY revoked_at IS NOT NULL,assigned_at DESC,id LIMIT 500"), names = await arcUserNames(db, rows.flatMap((r) => [r.user_id, r.assigned_by, r.revoked_by])), codes = await arcUnitCodes(db);
   const used = new Set((await all(db, "SELECT DISTINCT owner_unit_id FROM archive_records")).map((r) => r.owner_unit_id));
   return {
     officers: await asyncMap(rows, async (r) => {
       const user = await one(db, "SELECT id,employee_id,status FROM users WHERE id=?", r.user_id), member = user ? (await arcMemberUnits(db, ctx.tree, user.employee_id)).has(r.org_unit_id) : false;
-      const timeOk = r.valid_from <= ctx.nowIso && (!r.expires_at || r.expires_at > ctx.nowIso);
+      const timeOk = r.valid_from <= evaluatedAt && (!r.expires_at || r.expires_at > evaluatedAt);
       return {
         id: r.id,
         user: {
@@ -10747,6 +10757,7 @@ async function arcReadNotifications(db, ctx, b) {
 }
 async function archiveRoutes({ db, user, p, method, body, url }, deps = {}) {
   if (p[0] !== "archives") return void 0;
+  if (!await archiveSchemaReady(db)) return void 0;
   const ctx = await arcActor(db, user), b = body || {}, query = url.searchParams;
   const GET = method === "GET", POST = method === "POST", PATCH = method === "PATCH";
   if (p.length === 1 && GET) return await arcList(db, ctx, query);
@@ -10828,7 +10839,7 @@ async function archiveRoutes({ db, user, p, method, body, url }, deps = {}) {
   }
   return void 0;
 }
-  return { archiveRoutes: archiveRoutes, archiveUploadAllowed: archiveUploadAllowed };
+  return { archiveFileLinked: archiveFileLinked, archiveRoutes: archiveRoutes, archiveUploadAllowed: archiveUploadAllowed };
 })();
 // Rute arsip yang tidak dikenal dijawab 404, sama seperti alamat API lain.
 function archiveFound(result) {
