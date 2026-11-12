@@ -433,3 +433,155 @@ CREATE TABLE IF NOT EXISTS attendance_state (
  last_error TEXT CHECK(last_error IS NULL OR length(last_error)<=300), deleted_photos INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
  CHECK((lease_owner IS NULL)=(lease_until IS NULL)));
 INSERT OR IGNORE INTO attendance_state(id,updated_at) VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+-- E-Arsip Humas (Tahap 1): arsip dokumen administrasi per bagian dengan pengawasan Humas.
+-- Padanan PostgreSQL: supabase/migrations/20261112100000_archive_module.sql.
+-- Berkas tetap di tabel files (Drive privat); tabel di bawah hanya metadata, izin, dan audit.
+CREATE TABLE IF NOT EXISTS archive_document_types (
+ id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE CHECK(length(code) BETWEEN 1 AND 20 AND code=upper(code)),
+ name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80), name_normalized TEXT NOT NULL UNIQUE,
+ is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), updated_by TEXT REFERENCES users(id));
+INSERT OR IGNORE INTO archive_document_types(id,code,name,name_normalized,is_active,created_at,updated_at,row_version) VALUES
+ ('arsip-jenis-surat','SURAT','Surat','surat',1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('arsip-jenis-sk','SK','Surat Keputusan','surat keputusan',1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('arsip-jenis-st','ST','Surat Tugas','surat tugas',1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('arsip-jenis-und','UND','Undangan','undangan',1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('arsip-jenis-nd','ND','Nota Dinas','nota dinas',1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('arsip-jenis-ba','BA','Berita Acara','berita acara',1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1);
+-- Kode agenda per bagian (mis. HMS). Tidak berubah setelah dipakai nomor agenda.
+CREATE TABLE IF NOT EXISTS archive_units (
+ id TEXT PRIMARY KEY, org_unit_id TEXT NOT NULL UNIQUE REFERENCES org_units(id),
+ agenda_code TEXT NOT NULL UNIQUE CHECK(length(agenda_code) BETWEEN 2 AND 12 AND agenda_code=upper(agenda_code)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id));
+-- Petugas arsip yang ditunjuk administrator, per bagian.
+CREATE TABLE IF NOT EXISTS archive_officers (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), org_unit_id TEXT NOT NULL REFERENCES org_units(id),
+ valid_from TEXT NOT NULL, expires_at TEXT, assigned_by TEXT NOT NULL REFERENCES users(id), assigned_at TEXT NOT NULL,
+ revoked_by TEXT REFERENCES users(id), revoked_at TEXT, reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 300),
+ revoke_reason TEXT CHECK(revoke_reason IS NULL OR length(revoke_reason) BETWEEN 1 AND 300),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ CHECK(expires_at IS NULL OR expires_at>valid_from), CHECK((revoked_by IS NULL)=(revoked_at IS NULL)));
+CREATE UNIQUE INDEX IF NOT EXISTS archive_officers_open ON archive_officers(user_id,org_unit_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS archive_officers_unit ON archive_officers(org_unit_id);
+-- Pencacah nomor agenda per bagian dan tahun pengarsipan (WITA).
+CREATE TABLE IF NOT EXISTS archive_agenda_counters (
+ id TEXT PRIMARY KEY, org_unit_id TEXT NOT NULL REFERENCES org_units(id), archival_year INTEGER NOT NULL CHECK(archival_year BETWEEN 2000 AND 9999),
+ last_value INTEGER NOT NULL DEFAULT 0 CHECK(last_value>=0), updated_at TEXT NOT NULL, UNIQUE(org_unit_id,archival_year));
+CREATE TABLE IF NOT EXISTS archive_records (
+ id TEXT PRIMARY KEY, owner_unit_id TEXT NOT NULL REFERENCES org_units(id), unit_code_snapshot TEXT NOT NULL,
+ archival_year INTEGER NOT NULL, agenda_sequence INTEGER NOT NULL CHECK(agenda_sequence>0), agenda_number TEXT NOT NULL UNIQUE, archived_at TEXT NOT NULL,
+ direction TEXT NOT NULL CHECK(direction IN('MASUK','KELUAR','INTERNAL')),
+ document_type_id TEXT NOT NULL REFERENCES archive_document_types(id), document_type_name_snapshot TEXT NOT NULL,
+ official_number TEXT CHECK(official_number IS NULL OR length(official_number) BETWEEN 1 AND 120), official_number_normalized TEXT,
+ letter_date TEXT NOT NULL CHECK(length(letter_date)=10), subject TEXT NOT NULL CHECK(length(subject) BETWEEN 1 AND 500), subject_normalized TEXT NOT NULL,
+ classification TEXT NOT NULL DEFAULT 'BIASA' CHECK(classification IN('BIASA','RAHASIA')),
+ security_epoch INTEGER NOT NULL DEFAULT 1 CHECK(security_epoch>0), row_version INTEGER NOT NULL DEFAULT 1 CHECK(row_version>0),
+ source_kind TEXT NOT NULL DEFAULT 'MANUAL' CHECK(source_kind IN('MANUAL','PERSURATAN_TAHAP2')), source_system TEXT, source_reference TEXT,
+ created_by TEXT NOT NULL REFERENCES users(id), updated_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ deleted_at TEXT, deleted_by TEXT REFERENCES users(id), delete_reason TEXT,
+ UNIQUE(owner_unit_id,archival_year,agenda_sequence),
+ CHECK((official_number IS NULL)=(official_number_normalized IS NULL)),
+ CHECK((source_system IS NULL)=(source_reference IS NULL)), CHECK(source_kind<>'MANUAL' OR source_system IS NULL),
+ CHECK((deleted_at IS NULL AND deleted_by IS NULL AND delete_reason IS NULL) OR (deleted_at IS NOT NULL AND deleted_by IS NOT NULL AND length(delete_reason)>0)));
+CREATE UNIQUE INDEX IF NOT EXISTS archive_records_source ON archive_records(source_system,source_reference) WHERE source_system IS NOT NULL;
+CREATE INDEX IF NOT EXISTS archive_records_unit_time ON archive_records(owner_unit_id,archived_at DESC,id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS archive_records_time ON archive_records(archived_at DESC,id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS archive_records_direction ON archive_records(direction,archived_at) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS archive_records_type ON archive_records(document_type_id,archived_at);
+CREATE INDEX IF NOT EXISTS archive_records_class ON archive_records(classification,archived_at) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS archive_records_number ON archive_records(official_number_normalized) WHERE official_number_normalized IS NOT NULL;
+CREATE INDEX IF NOT EXISTS archive_records_subject ON archive_records(letter_date,subject_normalized);
+CREATE TRIGGER IF NOT EXISTS archive_records_immutable BEFORE UPDATE ON archive_records
+ WHEN NEW.id<>OLD.id OR NEW.owner_unit_id<>OLD.owner_unit_id OR NEW.unit_code_snapshot<>OLD.unit_code_snapshot OR NEW.archival_year<>OLD.archival_year
+  OR NEW.agenda_sequence<>OLD.agenda_sequence OR NEW.agenda_number<>OLD.agenda_number OR NEW.archived_at<>OLD.archived_at OR NEW.created_by<>OLD.created_by OR NEW.created_at<>OLD.created_at
+ BEGIN SELECT RAISE(ABORT,'Identitas arsip tidak boleh diubah.'); END;
+CREATE TRIGGER IF NOT EXISTS archive_records_no_delete BEFORE DELETE ON archive_records BEGIN SELECT RAISE(ABORT,'Arsip tidak boleh dihapus permanen.'); END;
+-- Dokumen utama dan lampiran. Versi aktif ditunjuk current_version_id (diperiksa saat commit).
+CREATE TABLE IF NOT EXISTS archive_documents (
+ id TEXT PRIMARY KEY, archive_id TEXT NOT NULL REFERENCES archive_records(id), role TEXT NOT NULL CHECK(role IN('MAIN','ATTACHMENT')),
+ display_order INTEGER NOT NULL DEFAULT 0 CHECK(display_order>=0), current_version_id TEXT NOT NULL,
+ created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ removed_at TEXT, removed_by TEXT REFERENCES users(id), remove_reason TEXT,
+ UNIQUE(archive_id,id), CHECK(role<>'MAIN' OR removed_at IS NULL),
+ CHECK((removed_at IS NULL AND removed_by IS NULL AND remove_reason IS NULL) OR (removed_at IS NOT NULL AND removed_by IS NOT NULL AND length(remove_reason)>0)),
+ FOREIGN KEY(id,current_version_id) REFERENCES archive_document_versions(document_id,id) DEFERRABLE INITIALLY DEFERRED);
+CREATE UNIQUE INDEX IF NOT EXISTS archive_documents_one_main ON archive_documents(archive_id) WHERE role='MAIN' AND removed_at IS NULL;
+CREATE INDEX IF NOT EXISTS archive_documents_archive ON archive_documents(archive_id,display_order);
+CREATE TRIGGER IF NOT EXISTS archive_documents_no_delete BEFORE DELETE ON archive_documents BEGIN SELECT RAISE(ABORT,'Dokumen arsip tidak boleh dihapus permanen.'); END;
+CREATE TABLE IF NOT EXISTS archive_document_versions (
+ id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES archive_documents(id) DEFERRABLE INITIALLY DEFERRED, version_number INTEGER NOT NULL CHECK(version_number>0),
+ file_id TEXT NOT NULL UNIQUE REFERENCES files(id), original_filename TEXT NOT NULL CHECK(length(original_filename) BETWEEN 1 AND 180),
+ detected_mime TEXT NOT NULL CHECK(detected_mime IN('application/pdf','image/jpeg','image/png')),
+ byte_size INTEGER NOT NULL CHECK(byte_size>0 AND byte_size<=10000000), sha256 TEXT NOT NULL CHECK(length(sha256)=64),
+ change_reason TEXT CHECK(change_reason IS NULL OR length(change_reason) BETWEEN 1 AND 300),
+ created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ UNIQUE(document_id,version_number), UNIQUE(document_id,id), CHECK(version_number=1 OR change_reason IS NOT NULL));
+CREATE INDEX IF NOT EXISTS archive_document_versions_hash ON archive_document_versions(sha256);
+CREATE TRIGGER IF NOT EXISTS archive_document_versions_no_update BEFORE UPDATE ON archive_document_versions BEGIN SELECT RAISE(ABORT,'Versi berkas arsip tidak boleh diubah.'); END;
+CREATE TRIGGER IF NOT EXISTS archive_document_versions_no_delete BEFORE DELETE ON archive_document_versions BEGIN SELECT RAISE(ABORT,'Versi berkas arsip tidak boleh dihapus.'); END;
+-- Izin per arsip: berbagi Biasa (pengguna/bagian), baca Rahasia dan unduh (pengguna, terikat epoch).
+CREATE TABLE IF NOT EXISTS archive_access_grants (
+ id TEXT PRIMARY KEY, archive_id TEXT NOT NULL REFERENCES archive_records(id), purpose TEXT NOT NULL CHECK(purpose IN('BIASA_SHARE','RAHASIA_READ','DOWNLOAD')),
+ target_user_id TEXT REFERENCES users(id), target_unit_id TEXT REFERENCES org_units(id), security_epoch INTEGER,
+ valid_from TEXT NOT NULL, expires_at TEXT, granted_by TEXT NOT NULL REFERENCES users(id), granted_at TEXT NOT NULL,
+ revoked_by TEXT REFERENCES users(id), revoked_at TEXT, reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 300),
+ revoked_reason TEXT CHECK(revoked_reason IS NULL OR length(revoked_reason) BETWEEN 1 AND 300),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ CHECK((target_user_id IS NULL)<>(target_unit_id IS NULL)), CHECK(purpose='BIASA_SHARE' OR target_user_id IS NOT NULL),
+ CHECK((purpose='BIASA_SHARE')=(security_epoch IS NULL)), CHECK(purpose='RAHASIA_READ' OR expires_at IS NULL),
+ CHECK(expires_at IS NULL OR expires_at>valid_from), CHECK((revoked_by IS NULL)=(revoked_at IS NULL)));
+CREATE UNIQUE INDEX IF NOT EXISTS archive_access_grants_user_open ON archive_access_grants(archive_id,purpose,target_user_id) WHERE revoked_at IS NULL AND target_user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS archive_access_grants_unit_open ON archive_access_grants(archive_id,purpose,target_unit_id) WHERE revoked_at IS NULL AND target_unit_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS archive_access_grants_user ON archive_access_grants(target_user_id,purpose) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS archive_access_grants_unit ON archive_access_grants(target_unit_id,purpose) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS archive_delete_requests (
+ id TEXT PRIMARY KEY, archive_id TEXT NOT NULL REFERENCES archive_records(id), requested_by TEXT NOT NULL REFERENCES users(id), requested_at TEXT NOT NULL,
+ reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 500), status TEXT NOT NULL CHECK(status IN('PENDING','APPROVED','REJECTED','CANCELLED')),
+ decided_by TEXT REFERENCES users(id), decided_at TEXT, decision_reason TEXT CHECK(decision_reason IS NULL OR length(decision_reason) BETWEEN 1 AND 500),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ CHECK(status NOT IN('APPROVED','REJECTED') OR (decided_by IS NOT NULL AND decided_at IS NOT NULL AND decision_reason IS NOT NULL)));
+CREATE UNIQUE INDEX IF NOT EXISTS archive_delete_requests_pending ON archive_delete_requests(archive_id) WHERE status='PENDING';
+-- Operasi idempoten (buat arsip, tambah lampiran, ganti berkas): kunci sama + isi sama = hasil sama.
+CREATE TABLE IF NOT EXISTS archive_upload_operations (
+ id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES users(id), owner_unit_id TEXT NOT NULL REFERENCES org_units(id),
+ operation_type TEXT NOT NULL CHECK(operation_type IN('CREATE_ARCHIVE','ADD_ATTACHMENT','REPLACE_FILE')),
+ idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 16 AND 64), payload_fingerprint TEXT NOT NULL CHECK(length(payload_fingerprint)=64),
+ status TEXT NOT NULL CHECK(status IN('COMMITTED')), result_archive_id TEXT NOT NULL REFERENCES archive_records(id),
+ result_document_id TEXT REFERENCES archive_documents(id), result_version_id TEXT REFERENCES archive_document_versions(id), request_id TEXT NOT NULL,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, UNIQUE(actor_id,operation_type,idempotency_key));
+-- Alasan tetap menyimpan dugaan duplikat. internal_match_ids tidak pernah dikirim ke pemohon.
+CREATE TABLE IF NOT EXISTS archive_duplicate_overrides (
+ id TEXT PRIMARY KEY, archive_id TEXT NOT NULL REFERENCES archive_records(id), operation_id TEXT NOT NULL UNIQUE REFERENCES archive_upload_operations(id),
+ actor_id TEXT NOT NULL REFERENCES users(id), reason TEXT CHECK(reason IS NULL OR length(reason) BETWEEN 1 AND 500), rule_version TEXT NOT NULL,
+ visible_match_ids TEXT NOT NULL DEFAULT '[]', internal_match_ids TEXT NOT NULL DEFAULT '[]',
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, CHECK(reason IS NOT NULL OR visible_match_ids='[]'));
+-- Audit modul, hanya bertambah. Terpisah dari audit_events supaya ringkasan perubahan
+-- arsip Rahasia tidak terbaca lewat Riwayat Aktivitas administrator.
+CREATE TABLE IF NOT EXISTS archive_audit_events (
+ id TEXT PRIMARY KEY, occurred_at TEXT NOT NULL, actor_user_id TEXT REFERENCES users(id), actor_snapshot TEXT NOT NULL DEFAULT '{}',
+ actor_type TEXT NOT NULL CHECK(actor_type IN('USER','SYSTEM')), action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 60),
+ archive_id TEXT REFERENCES archive_records(id), document_id TEXT REFERENCES archive_documents(id), version_id TEXT REFERENCES archive_document_versions(id),
+ request_id TEXT NOT NULL, operation_id TEXT, outcome TEXT NOT NULL CHECK(outcome IN('SUCCESS','DENIED','FAILED')), reason TEXT,
+ before_data TEXT, after_data TEXT, safe_context TEXT NOT NULL DEFAULT '{}',
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, CHECK(actor_type<>'USER' OR actor_user_id IS NOT NULL));
+CREATE INDEX IF NOT EXISTS archive_audit_events_archive ON archive_audit_events(archive_id,occurred_at DESC);
+CREATE INDEX IF NOT EXISTS archive_audit_events_actor ON archive_audit_events(actor_user_id,occurred_at DESC);
+CREATE INDEX IF NOT EXISTS archive_audit_events_request ON archive_audit_events(request_id);
+CREATE UNIQUE INDEX IF NOT EXISTS archive_audit_events_operation ON archive_audit_events(operation_id,action) WHERE operation_id IS NOT NULL AND outcome='SUCCESS';
+CREATE TRIGGER IF NOT EXISTS archive_audit_events_no_update BEFORE UPDATE ON archive_audit_events BEGIN SELECT RAISE(ABORT,'Audit arsip tidak boleh diubah.'); END;
+CREATE TRIGGER IF NOT EXISTS archive_audit_events_no_delete BEFORE DELETE ON archive_audit_events BEGIN SELECT RAISE(ABORT,'Audit arsip tidak boleh dihapus.'); END;
+-- Notifikasi portal: berbagi (hanya pegawai yang dituju) dan ringkasan harian Humas.
+CREATE TABLE IF NOT EXISTS archive_notifications (
+ id TEXT PRIMARY KEY, event_id TEXT NOT NULL, notification_type TEXT NOT NULL CHECK(notification_type IN('ARCHIVE_SHARED','HUMAS_DAILY_SUMMARY')),
+ recipient_user_id TEXT NOT NULL REFERENCES users(id), archive_id TEXT REFERENCES archive_records(id), summary_date TEXT CHECK(summary_date IS NULL OR length(summary_date)=10),
+ payload_minimal TEXT NOT NULL DEFAULT '{}', read_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ UNIQUE(event_id,recipient_user_id,notification_type),
+ CHECK((notification_type='ARCHIVE_SHARED')=(archive_id IS NOT NULL)), CHECK((notification_type='HUMAS_DAILY_SUMMARY')=(summary_date IS NOT NULL)));
+CREATE UNIQUE INDEX IF NOT EXISTS archive_notifications_summary ON archive_notifications(recipient_user_id,notification_type,summary_date) WHERE summary_date IS NOT NULL;
+CREATE INDEX IF NOT EXISTS archive_notifications_recipient ON archive_notifications(recipient_user_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS archive_daily_summary_runs (
+ id TEXT PRIMARY KEY, summary_date TEXT NOT NULL UNIQUE CHECK(length(summary_date)=10), timezone TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL,
+ counts_by_unit TEXT NOT NULL, total INTEGER NOT NULL CHECK(total>=0), status TEXT NOT NULL CHECK(status IN('PREPARED','COMPLETED')), prepared_at TEXT NOT NULL, completed_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, CHECK(period_end>period_start));

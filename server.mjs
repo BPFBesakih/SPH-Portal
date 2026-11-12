@@ -9,6 +9,7 @@ import {runVisitSheetSync,checkVisitSheetConnection,syncVisitSheetAfterSubmit,vi
 import {attendanceRoutes} from './lib/attendance.mjs';
 import {attendanceFormRequest,attendanceRetentionDue,runAttendanceRetention} from './lib/attendance-form.mjs';
 import {localAttendancePhotos} from './lib/attendance-photos.mjs';
+import {archiveRoutes,archiveUploadAllowed} from './lib/archives.mjs';
 import {createServer} from 'node:http';
 import {readFileSync,existsSync,statSync} from 'node:fs';
 import {resolve,extname} from 'node:path';
@@ -21,7 +22,7 @@ import {rosterRoutes} from './lib/roster.mjs';
 import {adminRoutes} from './lib/admin.mjs';
 import {announcementRoutes} from './lib/announcements.mjs';
 import {dashboard,lookups} from './lib/read-models.mjs';
-import {upload,download,attach} from './lib/files.mjs';
+import {upload,storeUpload,download,attach,claimFile} from './lib/files.mjs';
 import {purchasingRoutes,purchasingPendingCount} from './lib/purchasing.mjs';
 import {merchandiseRoutes} from './lib/merchandise.mjs';
 
@@ -46,6 +47,8 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
   // Absensi: selfie lokal di <dataDir>/attendance; retensi berjalan sesudah balasan dikirim.
   const attendancePhotos=localAttendancePhotos(dataDir);
   const attendanceDeps={has,can,audit,readPhoto:key=>attendancePhotos.get(key)};
+  // E-Arsip: berkas di <dataDir>/files seperti lampiran lain; hanya rute arsip yang boleh membacanya.
+  const archiveDeps={claimFile,readFile:key=>readFileSync(resolve(dataDir,'files',key)),claimStorage:()=>{}};
   function rateLimit(req,key){const ip=req.socket.remoteAddress||'unknown',k=ip+key,entry=attempts.get(k)||{count:0,until:Date.now()+15*60000};if(entry.until<Date.now()){entry.count=0;entry.until=Date.now()+15*60000;}entry.count++;attempts.set(k,entry);if(attempts.size>5000)for(const [key,v]of attempts)if(v.until<Date.now())attempts.delete(key);assert(entry.count<=30,'Terlalu banyak percobaan. Coba lagi 15 menit kemudian.',429);}
   const server=createServer(async(req,res)=> {
     const requestId=uid();res.setHeader('X-Request-Id',requestId);
@@ -59,7 +62,7 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
       if(p[0]!=='api'){
         assert(['GET','HEAD'].includes(method),'Metode tidak diizinkan.',405);
         const pathname=url.pathname==='/'?'/index.html':['/laporan-cepat','/laporan-cepat/'].includes(url.pathname)?'/quick-report.html':['/coaching','/coaching/'].includes(url.pathname)?'/coaching-link.html':['/briefing-pagi','/briefing-pagi/'].includes(url.pathname)?'/briefing-link.html':['/penilaian-guide','/penilaian-guide/'].includes(url.pathname)?'/penilaian-guide/index.html':['/absen','/absen/'].includes(url.pathname)?'/absen/index.html':url.pathname;
-        assert(/^\/[a-zA-Z0-9/_-]+\.(html|js|css|svg|png|webp|ico|woff2|webmanifest)$/.test(pathname),'Halaman tidak ditemukan.',404);
+        assert(/^\/[a-zA-Z0-9/_-]+\.(html|js|css|svg|png|webp|ico|woff2|webmanifest|pfb|ttf)$/.test(pathname),'Halaman tidak ditemukan.',404);
         if(pathname==='/briefing-link.html'||pathname.startsWith('/penilaian-guide/')||pathname.startsWith('/absen/')){res.setHeader('X-Robots-Tag','noindex, nofollow');res.setHeader('Referrer-Policy','no-referrer');}
         const path=resolve(root,'public',`.${pathname}`);assert(path.startsWith(resolve(root,'public')+String.fromCharCode(process.platform==='win32'?92:47))&&existsSync(path)&&statSync(path).isFile(),'Halaman tidak ditemukan.',404);
         const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.woff2':'font/woff2','.webmanifest':'application/manifest+json'};res.writeHead(200,{'Content-Type':types[extname(path)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(method==='HEAD'?undefined:readFileSync(path));return;
@@ -144,11 +147,12 @@ export function createApp({db=openDb(),dataDir=resolve(process.env.DATA_DIR||'da
         else throw new AppError(404,'Jenis ekspor tidak ditemukan.');
         audit(db,user,'EXPORT',p[1],p[2]||'list',{row_count:rows.length-1});send({filename,csv:rows.map(row=>row.map(cell).join(',')).join('\r\n')});return;
       }
-      if(p[0]==='uploads'&&method==='POST'){send(upload(db,user,body,dataDir),201);return;}
+      // Petugas arsip yang ditunjuk boleh mengunggah berkas untuk E-Arsip tanpa izin unggah modul lain.
+      if(p[0]==='uploads'&&method==='POST'){send((archiveUploadAllowed(db,user)?storeUpload:upload)(db,user,body,dataDir),201);return;}
       if(p[0]==='attachments'&&method==='POST'){send(attach(db,user,body.type,body.owner_id,body),201);return;}
       if(p[0]==='files'&&p[1]&&method==='GET') {const {file,data}=download(db,user,p[1],dataDir);res.writeHead(200,{'Content-Type':file.mime_type,'Content-Disposition':`${url.searchParams.get('inline')==='1'&&['image/png','image/jpeg'].includes(file.mime_type)?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.original_name)}`,'Content-Length':data.length,'Cache-Control':'private, no-store'});res.end(data);return;}
       const ctx={db,user,p,method,body,url};
-      for(const handler of [briefingRoutes,quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes,visitRoutes,c=>attendanceRoutes(c,attendanceDeps)]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
+      for(const handler of [briefingRoutes,quickReportManagement,announcementRoutes,hrRoutes,securityRoutes,rosterRoutes,adminRoutes,purchasingRoutes,visitRoutes,c=>attendanceRoutes(c,attendanceDeps),c=>archiveRoutes(c,archiveDeps)]){const result=await handler(ctx);if(result!==undefined){send(result,method==='POST'?201:200);return;}}
       throw new AppError(404,'Alamat API tidak ditemukan.');
     } catch(error) {
       const conflict=/UNIQUE constraint/.test(error.message),invalid=/FOREIGN KEY constraint|CHECK constraint|NOT NULL constraint/.test(error.message);
