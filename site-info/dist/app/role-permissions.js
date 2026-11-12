@@ -24,7 +24,10 @@ const resourceNames={
   'visits.records':'Kunjungan: daftar penilaian',
   'visits.forms':'Kunjungan: tautan pos',
   'visits.reports':'Kunjungan: laporan dan ekspor',
-  'visits.settings':'Kunjungan: pengaturan modul'
+  'visits.settings':'Kunjungan: pengaturan modul',
+  'archives.humas':'E-Arsip: kewenangan Humas (baca semua arsip, klasifikasi, berbagi, izin, hapus/pulihkan, jenis dokumen)',
+  'archives.records':'E-Arsip: pengawasan arsip Biasa pada unit cakupan',
+  'archives.officers':'E-Arsip: penunjukan petugas arsip'
 };
 const actionNames={
   read:'Lihat',create:'Tambah',update:'Ubah',manage:'Kelola',
@@ -33,7 +36,8 @@ const actionNames={
   acknowledge:'Akui kekurangan',reopen:'Buka kembali',reset:'Reset password',
   verify:'Verifikasi',sensitive:'Lihat data sensitif',
   costs:'Lihat harga modal',record:'Catat stok',adjust:'Koreksi stok',
-  void:'Batalkan transaksi',devices:'Daftarkan HP absen',settings:'Atur titik absen'
+  void:'Batalkan transaksi',devices:'Daftarkan HP absen',settings:'Atur titik absen',
+  oversee:'Awasi',assign:'Tunjuk petugas'
 };
 const escapeHtml=value=>String(value).replace(/[&<>"']/g,char=>({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
