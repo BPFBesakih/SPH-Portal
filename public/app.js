@@ -9,6 +9,7 @@ import {handleFormAction} from './forms.js';
 import {bindBriefings,handleBriefingAction} from './briefings.js';
 import {bindLeavesPage,handleLeaveAction,resetLeaves} from './leaves.js';
 import {bindAttendancePage,resetAttendance,attendanceEligible,probeAttendance} from './attendance.js';
+import {bindArchivesPage,resetArchives,archivesEligible,probeArchives,loadArchiveSummary,archiveNotices} from './archives.js';
 import {loadLeaveNotifications,invalidateLeaveNotifications,resetLeaveNotifications,leaveNoticeCount,leaveNoticeKeys,leaveNotices} from './leave-notifications.js';
 import {openCoachingShareLink} from './coaching-link-management.js';
 import {openReportExport} from './report-exports.js';
@@ -25,11 +26,11 @@ function applyTheme(theme){
   document.querySelector('meta[name="theme-color"]').content=getComputedStyle(document.documentElement).getPropertyValue('--besakih-theme-color').trim();
 }
 const navs={hr:[['dashboard','Dashboard','dashboard','hr.'],['employees','Data Pegawai & Organisasi','people','hr.employees.read'],['documents','Regulasi & SOP','document','hr.documents.read'],['training','Kegiatan & Pelatihan','training','training-calendar'],['coaching','Evaluasi & Coaching','coaching','hr.coaching.read']],security:[['security','Dashboard','dashboard','security.'],['roster','Jadwal & Penugasan','calendar','security.roster.read'],['logbook','Logbook & Patroli','log','security.logbook.read'],['incidents','Laporan Kejadian','incident','security.incidents.read'],['sop','SOP Keamanan','document','hr.documents.read']],purchasing:purchasingNav,merchandise:merchandiseNav,visits:visitNav};
-const commonNav=[['announcements','Informasi Internal','bell','announcements'],['briefings','Briefing Pagi','coaching','briefings'],['leaves','Cuti','calendar','leaves'],['attendance','Absensi','clock','attendance']];
+const commonNav=[['announcements','Informasi Internal','bell','announcements'],['briefings','Briefing Pagi','coaching','briefings'],['leaves','Cuti','calendar','leaves'],['attendance','Absensi','clock','attendance'],['archives','E-Arsip','folder','archives']];
 const adminNav=[['accounts','Akun Pengguna','people','admin.users.read'],['roles','Role & Izin','key','admin.roles.read'],['audit','Riwayat Aktivitas','audit','admin.audit.read']];
 const hasHrDashboard=()=>state.permissions.some(p=>p.startsWith('hr.')&&(!state.permissions.some(x=>x.startsWith('security.'))||!['hr.documents.read','hr.documents.download'].includes(p)));
 const hasModule=module=>module==='hr'?Boolean(state.me):module==='purchasing'?state.permissions.some(p=>p.startsWith('purchasing.'))||state.me?.purchasing_pending>0||state.purchasing?.counts?.approvals>0:state.permissions.some(p=>p.startsWith(module+'.'));
-const visible=([,,,permission])=>permission==='training-calendar'?Boolean(state.me):permission==='attendance'?state.attendanceReady===true&&attendanceEligible():['announcements','briefings','leaves'].includes(permission)?true:permission.startsWith('purchasing:')?purchasingAllowed(permission.slice(11)):permission.endsWith('.')?state.permissions.some(p=>p.startsWith(permission)):permitted(permission)||(permission==='hr.coaching.read'&&permitted('hr.coaching.manage'));
+const visible=([,,,permission])=>permission==='training-calendar'?Boolean(state.me):permission==='attendance'?state.attendanceReady===true&&attendanceEligible():permission==='archives'?state.archivesReady===true&&archivesEligible():['announcements','briefings','leaves'].includes(permission)?true:permission.startsWith('purchasing:')?purchasingAllowed(permission.slice(11)):permission.endsWith('.')?state.permissions.some(p=>p.startsWith(permission)):permitted(permission)||(permission==='hr.coaching.read'&&permitted('hr.coaching.manage'));
 function currentRoute(){const r=location.hash.slice(1).split('?')[0];if(r==='pr-verify')return r;const active=activeRoute(r),entry=[...navs.hr,...navs.security,...navs.purchasing,...navs.merchandise,...navs.visits,...commonNav,...adminNav].find(n=>n[0]===active),isPurchasing=purchasingRoutes.includes(r),isMerchandise=merchandiseRoutes.includes(r),isVisits=visitRoutes.includes(r),isHr=['dashboard','employees','organization','imports','documents','training','coaching'].includes(r),isSecurity=['security','roster','roster-settings','logbook','incidents','sop'].includes(r);return pageTitles[r]&&entry&&visible(entry)&&(!isHr||hasModule('hr'))&&(!isSecurity||hasModule('security'))&&(!isPurchasing||hasModule('purchasing'))&&(!isMerchandise||hasModule('merchandise'))&&(!isVisits||hasModule('visits'))?r:(hasHrDashboard()?'dashboard':hasModule('security')?'security':hasModule('purchasing')?'purchasing':hasModule('merchandise')?'merchandise':hasModule('visits')?'visits':permitted('admin.users.read')?'accounts':permitted('admin.roles.read')?'roles':'training');}
 function activeRoute(route){return ['organization','imports'].includes(route)?'employees':route==='roster-settings'?'roster':route;}
 function navLink([route,label,ico]){return `<a href="#${route}" class="nav-link ${activeRoute(state.route)===route?'active':''}" ${activeRoute(state.route)===route?'aria-current="page"':''}>${icon(ico)}<span>${esc(label)}</span>${route==='announcements'?'<span class="badge-count" data-announcement-count hidden></span>':''}${route==='leaves'?`<span class="badge-count" data-leave-count ${leaveNoticeCount()?'':'hidden'}>${leaveNoticeCount()}</span>`:''}${route==='pr-approvals'&&state.purchasing?.counts?.approvals?`<span class="badge-count">${Number(state.purchasing.counts.approvals)}</span>`:''}</a>`;}
@@ -62,6 +63,7 @@ function refreshBackgroundSummaries(route){
   if(needsPurchasingOverview())loadPurchasingOverview({background:true}).then(update).catch(()=>{});
   loadLeaveNotifications({background:true}).then(update).catch(()=>{});
   if(state.attendanceReady===undefined&&attendanceEligible())probeAttendance().then(ready=>{if(ready)update();}).catch(()=>{});
+  if(route!=='archives'&&archivesEligible())loadArchiveSummary({background:true}).then(changed=>{if(changed)update();}).catch(()=>{});
 }
 function navigate(){return navigation.run(async isCurrent=>{
   if(!state.me){await loginPage();return;}
@@ -71,6 +73,7 @@ function navigate(){return navigation.run(async isCurrent=>{
   const requested=location.hash.slice(1).split('?')[0];
   if(needsPurchasingOverview()&&(purchasingRoutes.includes(requested)||(!requested&&!hasModule('hr')&&!hasModule('security'))))try{await loadPurchasingOverview();}catch{state.purchasing=null;}
   if(requested==='attendance'&&state.attendanceReady===undefined&&attendanceEligible())await probeAttendance();
+  if(requested==='archives'&&state.archivesReady===undefined&&archivesEligible())await probeArchives();
   if(!isCurrent()||!state.me)return;
   if(!hasModule(state.module))state.module=hasModule('security')?'security':hasHrDashboard()?'hr':hasModule('purchasing')?'purchasing':hasModule('merchandise')?'merchandise':hasModule('visits')?'visits':'hr';
   const route=currentRoute();
@@ -84,6 +87,7 @@ function navigate(){return navigation.run(async isCurrent=>{
     if(merchandiseRoutes.includes(route))bindMerchandisePage();
     if(visitRoutes.includes(route))bindVisitsPage(route);
     if(route==='attendance')bindAttendancePage();
+    if(route==='archives')bindArchivesPage();
     if(!isCurrent()||!state.me)return;
     refreshSummaryUI();refreshBackgroundSummaries(route);
     if(route==='employees'&&state.pendingSearch!==undefined){state.filter=state.pendingSearch.toLowerCase();document.querySelector('#list-search').value=state.pendingSearch;delete state.pendingSearch;updateList();}
@@ -91,7 +95,7 @@ function navigate(){return navigation.run(async isCurrent=>{
 });}
 // Lonceng: jumlah informasi belum dibaca + tindakan Pengadaan yang menunggu akun ini.
 function bellItems(){
-  const items=[...(hasModule('purchasing')?purchasingNotices():[]),...leaveNotices()];const unread=unreadAnnouncementCount();
+  const items=[...(hasModule('purchasing')?purchasingNotices():[]),...leaveNotices(),...archiveNotices()];const unread=unreadAnnouncementCount();
   if(unread)items.push({route:'announcements',count:unread,title:'Informasi internal belum dibaca',note:'Pengumuman yang masih berlaku',ico:'bell'});
   return items;
 }
@@ -147,7 +151,7 @@ function passwordForm(required=false){
   form.dataset.password='true';if(required){form.querySelectorAll('[data-close]').forEach(b=>b.remove());form.addEventListener('cancel',e=>e.preventDefault());}
 }
 async function loginPage(){
-  navigation.invalidate();state.me=null;state.permissions=[];state.items=[];state.trainingCalendarItems=[];state.trainingSelectedDay=null;closeDetails();closeBell();resetPurchasingState();resetLeaves();resetAttendance();resetLeaveNotifications();resetAnnouncementSummary();state.bellShown=false;state.leaveNoticeSeen=null;document.querySelectorAll('dialog').forEach(d=>d.close());document.title='Masuk — SPH-Portal';
+  navigation.invalidate();state.me=null;state.permissions=[];state.items=[];state.trainingCalendarItems=[];state.trainingSelectedDay=null;closeDetails();closeBell();resetPurchasingState();resetLeaves();resetAttendance();resetArchives();resetLeaveNotifications();resetAnnouncementSummary();state.bellShown=false;state.leaveNoticeSeen=null;document.querySelectorAll('dialog').forEach(d=>d.close());document.title='Masuk — SPH-Portal';
   app.innerHTML=`<div class="login-page"><section class="login-brand-panel"><a class="brand" href="/"><img src="/assets/mark.svg" alt="Logo Badan Pengelola Besakih" width="42" height="42"><div><div class="brand-name">SPH-Portal</div><div class="brand-subtitle">SDM & Operasional</div></div></a><div class="login-story"><div class="eyebrow">Portal internal BP Besakih</div><h1>Bersama merawat kawasan suci.</h1><p>Satu ruang untuk mengelola tim, mengembangkan pelayanan, dan menjaga kawasan Besakih.</p></div><besakih-photo-slideshow></besakih-photo-slideshow></section><section class="login-form-panel"><div class="login-form-box"><div class="eyebrow">Selamat datang kembali</div><h2>Masuk ke portal</h2><p>Gunakan akun yang diberikan oleh administrator.</p><form id="login-form"><label class="field"><span>Username</span><input name="username" autocomplete="username" placeholder="Masukkan username" required maxlength="64"></label><label class="field"><span>Password</span><input name="password" type="password" autocomplete="current-password" placeholder="Masukkan password" required maxlength="128"></label><p class="form-error" role="alert"></p><button class="button primary" type="submit">Masuk ke portal ${icon('arrow')}</button></form><button class="button text" data-action="recover">Pulihkan password</button><p class="login-footer">Akses terbatas untuk pengguna yang diberi izin.<br>© ${new Date().getFullYear()} Badan Pengelola Besakih</p></div></section></div>`;
   document.querySelector('#login-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.target,button=form.querySelector('[type=submit]');button.disabled=true;form.querySelector('.form-error').textContent='';try{await post('auth/login',Object.fromEntries(new FormData(form)));state.me=await api('auth/me');state.permissions=state.me.permissions;await navigate();}catch(err){form.querySelector('.form-error').textContent=err.message;button.disabled=false;}});
 }
