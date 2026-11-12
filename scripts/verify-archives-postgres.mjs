@@ -30,6 +30,7 @@ try{
   const directory=new URL('../supabase/migrations/',import.meta.url);
   const archiveMigration=readFileSync(new URL('20261112100000_archive_module.sql',directory),'utf8');
   for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n!=='20261112100000_archive_module.sql').sort())await pg.exec(pgliteSql(readFileSync(new URL(name,directory),'utf8')));
+  await pg.exec("INSERT INTO public.app_roles(code,name) VALUES('IT_ADMIN','IT Admin') ON CONFLICT(code) DO NOTHING");
   await pg.exec('SET search_path=portal,pg_catalog');
   let inTx=false;
   const db={inTransaction:true,query:async(statement,args=[])=>{const result=await pg.query(statement,args);return Object.assign(result.rows,{count:result.affectedRows??result.rows.length});}};
@@ -77,7 +78,7 @@ try{
     assert.deepEqual(codes,['archives.humas.manage','archives.officers.assign','archives.records.oversee']);
     const held=async role=>(await all(db,"SELECT p.code FROM roles r JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE r.code=? AND p.code LIKE 'archives.%' ORDER BY p.code",role)).map(r=>r.code);
     assert.deepEqual(await held('HUMAS'),['archives.humas.manage']);assert.deepEqual(await held('ARSIP_PENGAWAS'),['archives.records.oversee']);
-    assert.deepEqual(await held('SUPER_ADMIN'),['archives.officers.assign'],'administrator tidak otomatis Humas');
+    assert.deepEqual(await held('SUPER_ADMIN'),['archives.officers.assign'],'template tetap; kebijakan Super Admin diperiksa langsung di modul');
     assert.equal(Number((await one(db,'SELECT count(*) n FROM archive_document_types WHERE is_active=1')).n),6);
   });
 
@@ -94,6 +95,7 @@ try{
     await insert(db,'employee_placements',{employee_id:employee.id,position_id:position.id,valid_from:'2020-01-01',is_primary:1});return employee;
   };
   const admin=await account('admin-arsip',null,'SUPER_ADMIN'),humas=await account('humas-arsip',(await person('h','Humas Fiktif',sek)).id,'HUMAS');
+  const itAdmin=await account('it-admin-arsip',null,'IT_ADMIN');
   const officer=await account('petugas-arsip',(await person('o','Petugas Fiktif',keu)).id),staff=await account('pegawai-arsip',(await person('s','Pegawai Fiktif',keu)).id);
   const outsider=await account('pegawai-ops',(await person('x','Pegawai Operasional Fiktif',ops)).id),boss=await account('pimpinan-arsip',(await person('b','Pimpinan Fiktif',sek)).id,'ARSIP_PENGAWAS','ASSIGNED_UNITS',[sek.id]);
 
@@ -136,7 +138,7 @@ try{
     assert.equal(Number((await one(db,"SELECT count(*) n FROM archive_audit_events WHERE action='DOWNLOAD_STARTED' AND archive_id=?",archive.id)).n),1);
   });
 
-  await check('Rahasia is masked on the server; grants follow the security epoch; administrators and supervisors are not a bypass',async()=>{
+  await check('Rahasia is masked; grants follow the security epoch; IT Admin and supervisors are not a bypass',async()=>{
     await denied(portal(officer,`archives/${archive.id}/classification`,'POST',{target:'RAHASIA',reason:'x',expected_row_version:1}),403);
     const before=await portal(humas,`archives/${archive.id}`);
     await denied(portal(humas,`archives/${archive.id}/classification`,'POST',{target:'RAHASIA',reason:'Sensitif',expected_row_version:before.archive.row_version+5}),409);
@@ -148,7 +150,7 @@ try{
       await denied(portal(user,`archives/${archive.id}/documents/${main.id}/versions/${main.current_version_id}/preview`),403);
       assert.equal((await portal(user,'archives','GET',{},'q=PostgreSQL')).items.some(i=>i.id===archive.id),false,'pencarian perihal tidak mengungkap arsip Rahasia terbatas');
     }
-    await denied(portal(admin,`archives/${archive.id}`),404);
+    await denied(portal(itAdmin,`archives/${archive.id}`),404);
     assert.equal((await portal(humas,`archives/${archive.id}`)).archive.subject,'Perihal fiktif PostgreSQL');
     const repeated=await portal(officer,'archives','POST',creationPayload);
     assert.equal(repeated.repeated,true);assert.equal(repeated.archive.restricted,true);
@@ -208,6 +210,33 @@ try{
     assert(history.items.some(i=>i.action==='ARCHIVE_CREATED'));
     assert(history.items.some(i=>i.action==='CLASSIFICATION_CHANGED'));
     assert(!history.items.some(i=>i.action==='DETAIL_OPENED'));
+  });
+  await check('Super Admin without employee or appointment uploads, creates, reads Rahasia, edits and downloads',async()=>{
+    const uploaded=await upload(admin,'admin.pdf',pdf('Super Admin '+randomUUID()));
+    const created=(await portal(admin,'archives','POST',{...creationPayload,idempotency_key:randomUUID(),main_file_id:uploaded.id,subject:'Arsip Super Admin fiktif',official_number:'ADMIN-001'})).archive;
+    await portal(admin,`archives/${created.id}/classification`,'POST',{target:'RAHASIA',reason:'Uji admin',expected_row_version:1});
+    await portal(admin,`archives/${created.id}`,'PATCH',{...creationPayload,subject:'Koreksi admin',expected_row_version:2});
+    const detail=await portal(admin,`archives/${created.id}`);
+    assert.equal(detail.archive.subject,'Koreksi admin');assert.equal(detail.access.edit,true);assert.equal(detail.access.download,true);
+    const doc=detail.documents[0];assert(await portal(admin,`archives/${created.id}/documents/${doc.id}/versions/${doc.current_version_id}/download`));
+    assert.equal(Number((await one(db,'SELECT count(*) n FROM archive_officers WHERE user_id=?',admin.id)).n),0);
+    await denied(portal(itAdmin,`archives/${created.id}`),404);
+  });
+  await check('Kepala Urusan revokes only subordinates; staff and IT Admin cannot revoke or replace appointments',async()=>{
+    const chief=await account('kaur-humas',(await person('chief','Kaur Humas',keu)).id,'EMPLOYEE');
+    await run(db,"UPDATE positions SET name='Kepala Urusan Hubungan Masyarakat' WHERE id=(SELECT position_id FROM employee_placements WHERE employee_id=?)",chief.employee_id);
+    const own=await account('bawahan-humas',(await person('own','Bawahan Humas',keu)).id,'HUMAS');
+    const other=await account('bawahan-lain',(await person('other','Bawahan Urusan Lain',keu)).id,'EMPLOYEE');
+    await run(db,'UPDATE employee_placements SET supervisor_employee_id=? WHERE employee_id=?',chief.employee_id,own.employee_id);
+    for(const target of [own,other])await portal(admin,'archives/officers','POST',{user_id:target.id,org_unit_id:keu.id,reason:'Uji penunjukan'});
+    const list=await portal(chief,'archives/officers');
+    assert.deepEqual(list.officers.map(o=>o.user.id),[own.id]);assert.equal(list.can_assign,false);assert.equal(list.officers[0].can_revoke,true);
+    const appointment=list.officers[0],foreign=await one(db,'SELECT id FROM archive_officers WHERE user_id=? AND revoked_at IS NULL',other.id);
+    for(const actor of [own,itAdmin])await denied(portal(actor,`archives/officers/${appointment.id}/revoke`,'POST',{reason:'Tidak berwenang'}),403);
+    await denied(portal(chief,`archives/officers/${foreign.id}/revoke`,'POST',{reason:'Di luar urusan'}),403);
+    await denied(portal(itAdmin,'archives/officers','POST',{user_id:own.id,org_unit_id:keu.id,reason:'Penunjukan ulang'}),403);
+    await portal(chief,`archives/officers/${appointment.id}/revoke`,'POST',{reason:'Rotasi tugas'});
+    assert.equal((await portal(chief,'archives/officers')).officers[0].can_revoke,false);
   });
   console.log(`${checks} archive PostgreSQL checks passed.`);
 }finally{globalThis.fetch=realFetch;globalThis.Deno=priorDeno;await pg.close();}

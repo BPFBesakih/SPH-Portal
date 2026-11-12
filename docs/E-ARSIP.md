@@ -1,8 +1,8 @@
 # E-Arsip Humas — Tahap 1
 
-Status 12 November 2026: **perbaikan review PR #32 tersedia di cabang `33`, belum di-merge, belum dirilis.** Supabase, Google Drive, dan bpbesakih.com tidak diubah. Dasar kebutuhan: *PRD Final Modul Humas E-Arsip SPH Portal Tahap 1* (40 keputusan Q01–Q40, kriteria AC01–AC45).
+Status 13 November 2026: **E-Arsip telah dirilis melalui PR #33; kewenangan diperbarui atas instruksi pemilik.** Super Admin dapat menambah dan mengelola semua arsip tanpa penunjukan petugas. Kepala Urusan dapat mencabut petugas di bawah urusannya. Dasar awal: *PRD Final Modul Humas E-Arsip SPH Portal Tahap 1* (40 keputusan Q01–Q40, kriteria AC01–AC45).
 
-PRD menyebut dirinya "bukan izin implementasi atau deployment". Cabang ini dibuat atas permintaan pemilik untuk ditinjau dan dicoba lokal; merilisnya tetap memerlukan keputusan pemilik dan langkah di bagian [Rilis](#rilis-oleh-pemilik-repo).
+Implementasi, merge, dan penerapan produksi diizinkan pemilik pada 12 November 2026. Revisi kewenangan 13 November menggantikan batasan Super Admin pada PRD awal. Role Super Admin pada lima staf Humas dilepas atas persetujuan pemilik; role Humas dan penunjukan petugas tetap tersedia. Kepala Urusan Humas dan akun pemilik tetap Super Admin.
 
 ## Yang dibangun
 
@@ -42,12 +42,14 @@ Lonceng portal menampilkan notifikasi E-Arsip yang belum dibaca dan, untuk Humas
 | Anggota bagian | Penempatan utama pegawai pada unit itu **atau unit di bawahnya** |
 | Role Humas | Role baru **Humas** (`HUMAS`): izin `archives.humas.manage` |
 | Pimpinan / pengawasan (RT08) | Role baru **Pengawas Arsip** (`ARSIP_PENGAWAS`): izin `archives.records.oversee` pada unit cakupan role. Tidak ada cakupan yang ditebak dari jabatan |
-| Administrator | Izin `archives.officers.assign` (Super Admin dan IT Admin). Tidak memberi hak baca |
+| Super Admin | Role aktif `SUPER_ADMIN`: menambah, membaca Biasa/Rahasia, mengubah, mengunduh, menghapus logis, memulihkan, dan mengelola penunjukan di semua bagian |
+| Administrator penunjukan | Izin `archives.officers.assign` (termasuk IT Admin) untuk menunjuk petugas dan mengatur kode agenda. Izin ini sendiri tidak memberi hak baca atau pencabutan |
+| Kepala Urusan | Jabatan utama aktif bernama Kepala Urusan; dapat melihat dan mencabut petugas dalam rantai bawahannya pada bagian yang berwenang, tanpa memerlukan role Super Admin |
 | schema `arsip`/`arsip_private`, RPC | Schema privat `portal` (RLS aktif, tanpa grant ke klien) + rute `archives/*` di Edge Function `portal-api`, sama seperti modul lain |
 | `file_objects` | Tabel `files` yang sudah ada; berkas di Drive privat, folder modul **SPH-Portal-Arsip** |
 | `notification_outbox` | `archive_notifications` (dibaca lewat menu E-Arsip dan lonceng) |
 
-Catatan: di produksi, gateway memberi Super Admin semua kode izin. Karena itu modul ini **tidak** memakai `has/can` gateway; ia membaca langsung role yang memegang izin arsip, sehingga Super Admin tidak otomatis menjadi Humas.
+Modul membaca role aktif dan izin langsung dari database. Super Admin dikenali dari kode role `SUPER_ADMIN`; administrator lain tidak memperoleh kewenangan itu secara otomatis. Kepala Urusan dikenali dari penempatan utama yang masih berlaku dan rantai atasan pegawai, sehingga dua Kepala Urusan dalam unit Sekretariat yang sama tidak menguasai staf satu sama lain. Pencabutan diperiksa di server; penunjukan ulang juga tidak boleh dipakai untuk melewati pembatasan ini. API mengirim `can_revoke` per baris agar tombol Cabut mengikuti hak sebenarnya.
 
 Tabel baru (14): `archive_document_types`, `archive_units`, `archive_officers`, `archive_agenda_counters`, `archive_records`, `archive_documents`, `archive_document_versions`, `archive_access_grants`, `archive_delete_requests`, `archive_upload_operations`, `archive_duplicate_overrides`, `archive_audit_events`, `archive_notifications`, `archive_daily_summary_runs`.
 
@@ -102,10 +104,10 @@ Validasi perbaikan: Node 24.22.1 dan PGlite 0.5.16, seluruh data fiktif. Paket P
 
 | Pemeriksaan | Hasil di cabang ini |
 |---|---|
-| `npm test` | 359/359 lulus dengan PGlite terpasang; 24 di antaranya `tests/archives.test.mjs`, termasuk lima regresi review |
-| `node scripts/verify-archives-postgres.mjs <pglite>` | 9/9 lulus: gateway sebelum migrasi, migrasi (RLS, tanpa grant, role, pemicu, tepat satu dokumen utama), gateway sesudah migrasi dengan Drive tiruan, pengikatan antarmodul, kirim ulang, dan riwayat |
-| `PLAYWRIGHT_MODULE=… node scripts/verify-archives-ui.mjs` | 8/8 alur lulus di browser (desktop dan layar HP), tanpa pelanggaran CSP |
-| `verify-attendance-postgres`, `verify-visits-postgres`, `verify-attendance-ui` | Masing-masing 12/12, 10/10, dan 12/12 lulus setelah perbaikan |
+| `npm test` | 361/361 lulus dengan PGlite terpasang; 26 tes E-Arsip termasuk Super Admin tanpa profil pegawai/penunjukan, perubahan hak dalam sesi aktif, dan batas pencabutan antarurusan |
+| `node scripts/verify-archives-postgres.mjs <pglite>` | 11/11 lulus pada paket API produksi: migrasi dan jalur lama, isolasi berkas, hak Rahasia, Super Admin, Kepala Urusan, serta penolakan pencabutan/penunjukan ulang oleh pihak yang tidak berwenang |
+| `PLAYWRIGHT_MODULE=… node scripts/verify-archives-ui.mjs` | 10/10 alur lulus (desktop dan layar HP), termasuk tambah arsip oleh Super Admin dan Cabut oleh Kepala Urusan, tanpa pelanggaran CSP |
+| `verify-attendance-postgres`, `verify-visits-postgres`, `verify-attendance-ui` | Rilis 12 November: 12/12, 10/10, dan 12/12. Pembaruan ini mempertahankan kode gateway di luar modul E-Arsip persis seperti versi aktif sebelumnya |
 
 **Belum diuji** dan perlu staging atau perangkat nyata: Drive dan Supabase sungguhan, HP Android/iPhone dan sinyal lemah (AC42), berkas mendekati 10 MB lewat gateway, beban (RT21), latihan pemulihan (AC38), dan pemeriksaan izin folder Drive (AC24 bagian Drive).
 
@@ -115,9 +117,10 @@ Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat uruta
 
 1. **Migrasi** di SQL Editor: `supabase/migrations/20261112100000_archive_module.sql`. Aditif, satu transaksi: 14 tabel, tiga izin `archives.*`, role Humas dan Pengawas Arsip, serta izin menunjuk petugas untuk Super Admin dan IT Admin. Tidak mengubah tabel modul lain.
 2. **`portal-api`**: unduh versi yang sedang aktif, simpan sebagai titik kembali, dan hitung SHA-256-nya.
-   - Bila sama dengan `d3c7448447f92bafc0e93b107c93d9d657166e947fefde32f8755876a50f98b1` (isi di master `b739829`, sesudah Absensi), deploy `supabase/deploy/portal-api/index.ts` dari cabang ini (SHA-256 `5ba37bf316156a0d354d2dcf15a5bf0fa19d7baa723ae16010291c1d3fa69367`). Hash mengacu pada isi LF yang tersimpan di Git.
-   - Bila berbeda, jalankan `node scripts/build-archive-deploy.mjs <berkas-aktif.ts> <sha256>` lalu deploy hasilnya. Jangan deploy berkas dari cabang ini apa adanya.
-3. **Merge** cabang ke `master`: Pages menayangkan bundel `portal-fd4003193113.js` + `portal-2f27fca3acb5.css` dan berkas pdf.js di `/app/assets/vendor/pdfjs/`.
+   - Dasar pembaruan 13 November adalah API versi 32, SHA-256 `5ba37bf316156a0d354d2dcf15a5bf0fa19d7baa723ae16010291c1d3fa69367`. Paket baru: `bf81f3229d4b21e287849f811785ebc4f9a63493327547f11dfc656fd5b9fa48`. Hash mengacu pada isi LF yang tersimpan di Git.
+   - Untuk API yang sudah memuat E-Arsip, jalankan `node scripts/build-archive-deploy.mjs <berkas-aktif.ts> <sha256> --refresh`. Hanya namespace E-Arsip yang diganti; batas integrasi dan impor diperiksa. API tanpa E-Arsip memakai perintah yang sama tanpa `--refresh`.
+   - Cocokkan dan uji hasilnya sebelum deploy. Tidak ada migrasi skema tambahan untuk revisi kewenangan 13 November.
+3. **Merge** cabang ke `master`: Pages menayangkan bundel `portal-d7862f39ce76.js` + `portal-2f27fca3acb5.css` dan berkas pdf.js di `/app/assets/vendor/pdfjs/`.
 4. **Uji asap**: muat ulang `/app/`; buka Cuti, Kunjungan, Merchandise, Pengadaan, Absensi (karena `portal-api` berganti); lalu di E-Arsip:
    - Role & Izin: beri role **Humas** kepada akun Humas;
    - Petugas Arsip: tunjuk satu petugas dan tetapkan kode agenda bagiannya;

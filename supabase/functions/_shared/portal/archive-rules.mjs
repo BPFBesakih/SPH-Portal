@@ -51,15 +51,15 @@ export function archiveGrantActive(grant, nowIso, epoch) {
   if (grant.purpose !== 'BIASA_SHARE' && Number(grant.security_epoch) !== Number(epoch)) return false;
   return true;
 }
-export function archiveDecide({deleted, classification, humas, scope, rahasia, download, officer}) {
+export function archiveDecide({deleted, classification, superAdmin = false, humas, scope, rahasia, download, officer}) {
   const active = !deleted;
-  const list = active && Boolean(humas || scope || rahasia);
-  const read = active && Boolean(humas || classification === 'BIASA' && scope || classification === 'RAHASIA' && rahasia);
+  const list = active && Boolean(superAdmin || humas || scope || rahasia);
+  const read = active && Boolean(superAdmin || humas || classification === 'BIASA' && scope || classification === 'RAHASIA' && rahasia);
   return {
     list,
     read,
-    edit: read && Boolean(officer),
-    download: read && Boolean(download)
+    edit: read && Boolean(superAdmin || officer),
+    download: read && Boolean(superAdmin || download)
   };
 }
 export function archiveDuplicateReasons(candidate, incoming) {

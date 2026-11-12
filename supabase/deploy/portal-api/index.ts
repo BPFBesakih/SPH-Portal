@@ -9058,15 +9058,15 @@ var archiveNormalSubject = (value) => String(value || "").normalize("NFKC").toLo
 var archiveNormalName = (value) => String(value || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
 var archiveLike = (value) => `%${String(value).replace(/[\\%_]/g, "\\$&")}%`;
 var archiveFingerprint = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-function archiveDecide({ deleted, classification, humas, scope, rahasia, download, officer }) {
+function archiveDecide({ deleted, classification, superAdmin = false, humas, scope, rahasia, download, officer }) {
   const active = !deleted;
-  const list = active && Boolean(humas || scope || rahasia);
-  const read = active && Boolean(humas || classification === "BIASA" && scope || classification === "RAHASIA" && rahasia);
+  const list = active && Boolean(superAdmin || humas || scope || rahasia);
+  const read = active && Boolean(superAdmin || humas || classification === "BIASA" && scope || classification === "RAHASIA" && rahasia);
   return {
     list,
     read,
-    edit: read && Boolean(officer),
-    download: read && Boolean(download)
+    edit: read && Boolean(superAdmin || officer),
+    download: read && Boolean(superAdmin || download)
   };
 }
 function archiveDuplicateReasons(candidate, incoming) {
@@ -9152,6 +9152,26 @@ async function arcTree(db) {
 async function arcHolds(db, userId, code) {
   return Boolean(await one(db, `SELECT 1 AS ok ${HOLD_SQL} WHERE ur.user_id=? AND p.code=? LIMIT 1`, userId, code));
 }
+async function arcSuperAdmin(db, userId) {
+  return Boolean(await one(db, "SELECT 1 AS ok FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=? AND r.code='SUPER_ADMIN' AND r.is_active=1 LIMIT 1", userId));
+}
+async function arcHeadStaff(db, tree, user) {
+  if (!user.employee_id) return /* @__PURE__ */ new Set();
+  const day = today(), placements = await all(db, `SELECT ep.employee_id,ep.supervisor_employee_id,p.name AS position_name,p.org_unit_id FROM employee_placements ep
+  JOIN positions p ON p.id=ep.position_id AND p.is_active=1 JOIN employees e ON e.id=ep.employee_id AND e.is_active=1
+  WHERE ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)`, day, day);
+  const heads = placements.filter((p) => p.employee_id === user.employee_id && /^kepala\s+urusan(?:\s|$)/i.test(p.position_name));
+  if (!heads.length) return /* @__PURE__ */ new Set();
+  const inside = new Set(heads.flatMap((p) => [...tree.descendants(p.org_unit_id)])), staff = /* @__PURE__ */ new Set([user.employee_id]), queue = [user.employee_id];
+  while (queue.length) {
+    const at = queue.shift();
+    for (const p of placements) if (p.supervisor_employee_id === at && inside.has(p.org_unit_id) && !staff.has(p.employee_id)) {
+      staff.add(p.employee_id);
+      queue.push(p.employee_id);
+    }
+  }
+  return staff;
+}
 async function arcPlacementUnits(db, employeeId) {
   if (!employeeId) return [];
   const day = today();
@@ -9174,20 +9194,23 @@ async function arcOversight(db, tree, userId) {
   return out;
 }
 async function arcActor(db, user) {
-  const tree = await arcTree(db), nowIso = now(), memberUnits = await arcMemberUnits(db, tree, user.employee_id);
-  const officerUnits = new Set((await all(db, "SELECT org_unit_id FROM archive_officers WHERE user_id=? AND revoked_at IS NULL AND valid_from<=? AND (expires_at IS NULL OR expires_at>?)", user.id, nowIso, nowIso)).map((r) => r.org_unit_id).filter((id) => memberUnits.has(id) && tree.byId.get(id)?.is_active !== 0));
+  const tree = await arcTree(db), nowIso = now(), memberUnits = await arcMemberUnits(db, tree, user.employee_id), superAdmin = await arcSuperAdmin(db, user.id);
+  const officerUnits = superAdmin ? new Set(tree.rows.filter((u) => u.is_active !== 0).map((u) => u.id)) : new Set((await all(db, "SELECT org_unit_id FROM archive_officers WHERE user_id=? AND revoked_at IS NULL AND valid_from<=? AND (expires_at IS NULL OR expires_at>?)", user.id, nowIso, nowIso)).map((r) => r.org_unit_id).filter((id) => memberUnits.has(id) && tree.byId.get(id)?.is_active !== 0));
   const ctx = {
     user,
     tree,
     nowIso,
-    humas: await arcHolds(db, user.id, HUMAS),
-    admin: await arcHolds(db, user.id, ASSIGN),
+    superAdmin,
+    humas: superAdmin || await arcHolds(db, user.id, HUMAS),
+    admin: superAdmin || await arcHolds(db, user.id, ASSIGN),
+    headStaff: superAdmin ? /* @__PURE__ */ new Set() : await arcHeadStaff(db, tree, user),
     memberUnits,
     officerUnits,
     oversight: await arcOversight(db, tree, user.id)
   };
   ctx.snapshot = {
     username: user.username,
+    super_admin: superAdmin,
     humas: ctx.humas,
     admin: ctx.admin,
     officer_units: [...officerUnits]
@@ -9239,6 +9262,7 @@ async function arcAccess(db, ctx, a) {
   const decision = archiveDecide({
     deleted: Boolean(a.deleted_at),
     classification: a.classification,
+    superAdmin: ctx.superAdmin,
     humas: ctx.humas,
     scope: member || oversee || shared,
     rahasia,
@@ -9246,7 +9270,8 @@ async function arcAccess(db, ctx, a) {
     officer
   });
   const sources = [];
-  if (ctx.humas) sources.push("HUMAS");
+  if (ctx.superAdmin) sources.push("SUPER_ADMIN");
+  else if (ctx.humas) sources.push("HUMAS");
   if (a.classification === "BIASA") {
     if (member) sources.push("BAGIAN");
     if (oversee) sources.push("PENGAWASAN");
@@ -9411,6 +9436,8 @@ async function arcOverview(db, ctx) {
   return {
     humas: ctx.humas,
     admin: ctx.admin,
+    super_admin: ctx.superAdmin,
+    officer_management: ctx.admin || ctx.headStaff.size > 0,
     oversight: ctx.oversight === "ALL" || ctx.oversight.size > 0,
     employee: Boolean(ctx.user.employee_id),
     officer_units: [...ctx.officerUnits].map(unit),
@@ -9968,11 +9995,12 @@ async function arcUnitMembers(db, tree, unitId) {
 async function arcCanRead(db, tree, a, userId) {
   const user = await one(db, "SELECT id,username,employee_id FROM users WHERE id=?", userId);
   if (!user) return false;
-  const nowIso = now(), ctx = {
+  const nowIso = now(), superAdmin = await arcSuperAdmin(db, userId), ctx = {
     user,
     tree,
     nowIso,
-    humas: await arcHolds(db, userId, HUMAS),
+    superAdmin,
+    humas: superAdmin || await arcHolds(db, userId, HUMAS),
     memberUnits: await arcMemberUnits(db, tree, user.employee_id),
     officerUnits: /* @__PURE__ */ new Set(),
     oversight: await arcOversight(db, tree, userId)
@@ -10388,17 +10416,24 @@ async function arcTypeSave(db, ctx, id, b) {
 function arcAdmin(db, ctx, action) {
   if (!ctx.admin) throw denied(db, ctx.user, action, null, "Tindakan ini hanya untuk administrator portal.");
 }
+function arcCanRevoke(ctx, officer, user) {
+  return !officer.revoked_at && (ctx.superAdmin || Boolean(user?.employee_id && ctx.headStaff.has(user.employee_id) && ctx.memberUnits.has(officer.org_unit_id)));
+}
 async function arcOfficers(db, ctx) {
-  arcAdmin(db, ctx, "OFFICER_LIST");
+  if (!ctx.admin && !ctx.headStaff.size) throw denied(db, ctx.user, "OFFICER_LIST", null, "Daftar petugas hanya untuk administrator dan Kepala Urusan.");
   const evaluatedAt = now();
-  const rows = await all(db, "SELECT * FROM archive_officers ORDER BY revoked_at IS NOT NULL,assigned_at DESC,id LIMIT 500"), names = await arcUserNames(db, rows.flatMap((r) => [r.user_id, r.assigned_by, r.revoked_by])), codes = await arcUnitCodes(db);
+  const params = [], visible = ctx.admin ? "1=1" : `u.employee_id IN ${placeholders([...ctx.headStaff], params)} AND o.org_unit_id IN ${placeholders([...ctx.memberUnits], params)}`;
+  const rows = await all(db, `SELECT o.* FROM archive_officers o JOIN users u ON u.id=o.user_id WHERE ${visible} ORDER BY o.revoked_at IS NOT NULL,o.assigned_at DESC,o.id LIMIT 500`, ...params), names = await arcUserNames(db, rows.flatMap((r) => [r.user_id, r.assigned_by, r.revoked_by])), codes = await arcUnitCodes(db);
   const used = new Set((await all(db, "SELECT DISTINCT owner_unit_id FROM archive_records")).map((r) => r.owner_unit_id));
   return {
+    can_assign: ctx.admin,
+    can_manage_codes: ctx.admin,
     officers: await asyncMap(rows, async (r) => {
       const user = await one(db, "SELECT id,employee_id,status FROM users WHERE id=?", r.user_id), member = user ? (await arcMemberUnits(db, ctx.tree, user.employee_id)).has(r.org_unit_id) : false;
       const timeOk = r.valid_from <= evaluatedAt && (!r.expires_at || r.expires_at > evaluatedAt);
       return {
         id: r.id,
+        can_revoke: arcCanRevoke(ctx, r, user),
         user: {
           id: r.user_id,
           name: names.get(r.user_id) || "\u2014"
@@ -10418,7 +10453,7 @@ async function arcOfficers(db, ctx) {
         status: r.revoked_at ? "DICABUT" : !timeOk ? "KEDALUWARSA" : user?.status !== "ACTIVE" || !member ? "TIDAK_BERLAKU" : "AKTIF"
       };
     }),
-    units: ctx.tree.rows.filter((u) => u.is_active !== 0).map((u) => ({
+    units: ctx.tree.rows.filter((u) => u.is_active !== 0 && (ctx.admin || ctx.memberUnits.has(u.id))).map((u) => ({
       id: u.id,
       name: u.name,
       code: u.code,
@@ -10452,7 +10487,8 @@ async function arcAssign(db, ctx, b) {
         created_by: ctx.user.id
       });
     }
-    const open = await one(db, "SELECT id FROM archive_officers WHERE user_id=? AND org_unit_id=? AND revoked_at IS NULL", target.id, unit.id);
+    const open = await one(db, "SELECT * FROM archive_officers WHERE user_id=? AND org_unit_id=? AND revoked_at IS NULL", target.id, unit.id);
+    if (open && !arcCanRevoke(ctx, open, target)) throw denied(db, ctx.user, "OFFICER_REVOKE", null, "Mengganti penunjukan hanya untuk Kepala Urusan yang berwenang atau Super Admin.");
     if (open) await run(db, "UPDATE archive_officers SET revoked_at=?,revoked_by=?,revoke_reason='Diganti penunjukan baru',updated_at=?,row_version=row_version+1 WHERE id=?", at, ctx.user.id, at, open.id);
     const officer = await insert(db, "archive_officers", {
       user_id: target.id,
@@ -10482,9 +10518,11 @@ async function arcAssign(db, ctx, b) {
 }
 async function arcUnassign(db, ctx, officerId, b) {
   return await tx(db, async () => {
-    arcAdmin(db, ctx, "OFFICER_REVOKE");
+    if (!ctx.superAdmin && !ctx.headStaff.size) throw denied(db, ctx.user, "OFFICER_REVOKE", null, "Pencabutan petugas hanya untuk Kepala Urusan yang berwenang atau Super Admin.");
     const officer = await one(db, "SELECT * FROM archive_officers WHERE id=?", idOf(officerId, "Penunjukan"));
     assert(officer && !officer.revoked_at, "Penunjukan tidak ditemukan atau sudah dicabut.", 409);
+    const target = await one(db, "SELECT employee_id FROM users WHERE id=?", officer.user_id);
+    if (!arcCanRevoke(ctx, officer, target)) throw denied(db, ctx.user, "OFFICER_REVOKE", null, "Petugas ini berada di luar kewenangan Kepala Urusan Anda.");
     const reason = str(b.reason, "Alasan pencabutan", archiveRules.reasonMax), at = now();
     await run(db, "UPDATE archive_officers SET revoked_at=?,revoked_by=?,revoke_reason=?,updated_at=?,row_version=row_version+1 WHERE id=? AND revoked_at IS NULL", at, ctx.user.id, reason, at, officer.id);
     await arcAudit(db, ctx, "OFFICER_REVOKED", {
