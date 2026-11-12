@@ -8,7 +8,7 @@ Tambahan 5 November 2026 (diperbarui 10 November): modul **Absensi** tahap 1 **b
 
 Tambahan 12 November 2026: modul **E-Arsip Humas** tahap 1 dibangun di cabang `claude/humas-e-arsip-tahap-1` dari PRD Final (Q01–Q40) dan **belum dirilis**. Arsip dokumen administrasi per bagian dengan pengawasan Humas: role baru Humas dan Pengawas Arsip, petugas arsip ditunjuk administrator, klasifikasi Biasa/Rahasia dengan penyamaran di server, izin unduh terpisah. Super Admin dan IT Admin hanya menunjuk petugas dan tidak otomatis membaca arsip Rahasia. Parameter RT pada PRD dipakai sebagai bawaan dan perlu disahkan sebelum rilis. Rincian, penyimpangan, urutan rilis, dan rollback: `docs/E-ARSIP.md`.
 
-Tambahan 13 November 2026: E-Arsip di-merge ke master lewat PR #32 dan #33 (12 November); migrasi dan `portal-api` belum dipasang. Sesuai PRD 10.1, navigasinya dipindah dari menu bersama ke ruang kerja **Humas** (Humas → E-Arsip) di pemilih modul, dan Petugas Arsip ke kelompok Pengaturan Akses.
+Tambahan 13 November 2026: E-Arsip dirilis lewat PR #32 dan #33 (12 November); PR #34 memperbarui kewenangan (Super Admin mengelola semua arsip, Kepala Urusan mencabut petugas bawahannya). Sesuai PRD 10.1, navigasinya dipindah dari menu bersama ke ruang kerja **Humas** (Humas → E-Arsip) di pemilih modul, termasuk Petugas Arsip.
 
 ## 1. Ringkasan terkini
 
@@ -287,7 +287,7 @@ Dokumen ini sengaja mandiri. Nama berikut membantu mencari rincian saat reposito
 | Pengadaan / audit | `docs/PENGADAAN.md`, `docs/SETUP-PENGADAAN-2026-10-19.md`, `docs/PENINJAUAN-2026-10-18.md`. |
 | Formulir | `docs/LAPORAN-CEPAT-2026-10-23.md`, `docs/coaching-native.md`, arsip `integrations/coaching-google/README.md`. |
 | Absensi | `docs/ABSENSI.md` (tahap 1, belum dirilis). |
-| E-Arsip Humas | `docs/E-ARSIP.md` (tahap 1; kode di master, migrasi dan `portal-api` belum dipasang). Ruang kerja **Humas → E-Arsip**. |
+| E-Arsip Humas | `docs/E-ARSIP.md` (tahap 1, dirilis 12 November 2026). Ruang kerja **Humas → E-Arsip**. |
 | Performa | `docs/PERFORMA-PORTAL-2026-10-19.md`, `docs/PERFORMA-PORTAL-2026-10-23.md`, `docs/PERFORMA-UNGGAHAN-2026-10-23.md`. |
 | Website lokal | `docs/BESAKIH-WEBSITE-LOCAL.md`, `docs/RISET-BESAKIH-ORG-2026-10-18.md`, `docs/BESAKIH-PHOTO-SOURCES.md`. |
 | Validasi / alternatif lokal | `docs/VERIFICATION.md`, `docs/DEPLOYMENT.md`; bukti rinci di `test-results/` yang tidak dipublikasikan ke Git. |

@@ -4,6 +4,7 @@
 // Cuti khusus, Absensi) tetap utuh.
 //
 //   node scripts/build-archive-deploy.mjs <snapshot-aktif.ts> <sha256-snapshot>
+//   node scripts/build-archive-deploy.mjs <snapshot-dengan-arsip.ts> <sha256-snapshot> --refresh
 //
 // Snapshot aktif = portal-api yang sedang tayang (bandingkan dulu dengan versi di
 // dashboard Supabase). Hasil ditulis ke supabase/deploy/portal-api/index.ts.
@@ -15,24 +16,29 @@
 //     dilindungi juga dari pengikatan dan unduh umum. Sebelum migrasi, jalur lama tetap aktif;
 //  4. modul E-Arsip (lib/archive*.mjs) dibundel dalam satu lingkup (__archives);
 //  5. rute `archives/*` di routeOperation. Modul memeriksa izin sendiri langsung dari
-//     tabel role (bukan `has/can` snapshot), karena Super Admin tidak otomatis Humas.
+//     tabel role (bukan `has/can` snapshot), termasuk kebijakan khusus Super Admin.
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
 import {createHash} from 'node:crypto';
 import {build} from './cloud-tools/node_modules/esbuild/lib/main.js';
-const [sourcePath,expectedHash]=process.argv.slice(2);
+const [sourcePath,expectedHash,mode]=process.argv.slice(2),refresh=mode==='--refresh';
+if(mode&&!refresh)throw new Error('Unknown build mode.');
 if(!sourcePath||!/^[a-f0-9]{64}$/.test(expectedHash||''))throw new Error('Pass active gateway snapshot and its verified SHA-256.');
 const source=readFileSync(resolve(sourcePath),'utf8');
 const sha=createHash('sha256').update(source).digest('hex');
 if(sha!==expectedHash)throw new Error('Active gateway snapshot hash mismatch.');
-if(source.includes('__archives')||source.includes('p[0] === "archives"'))throw new Error('Snapshot already contains the archive module.');
+const containsArchives=source.includes('__archives')||source.includes('p[0] === "archives"');
+if(containsArchives&&!refresh)throw new Error('Snapshot already contains the archive module. Pass --refresh to update only that module.');
+if(refresh&&!containsArchives)throw new Error('Refresh requires a gateway with the archive module.');
 const once=(text,needle,label)=>{const at=text.indexOf(needle);if(at<0||text.indexOf(needle,at+1)>=0)throw new Error(`Gateway boundary not found exactly once: ${label}`);return at;};
 const swap=(text,needle,replacement,label)=>{const at=once(text,needle,label);return text.slice(0,at)+replacement+text.slice(at+needle.length);};
 
+let patched=source;
+if(!refresh){
 // 1. Folder Drive E-Arsip: entri terakhir peta folder, apa pun modul sebelumnya.
 const mapStart=once(source,'var driveModuleFolders = Object.freeze({','drive module folder map'),mapEnd=source.indexOf('\n});',mapStart);
 if(mapEnd<0||mapEnd-mapStart>1200)throw new Error('Drive folder map changed.');
-let patched=source.slice(0,mapEnd)+',\n  arsip: "SPH-Portal-Arsip"'+source.slice(mapEnd);
+patched=source.slice(0,mapEnd)+',\n  arsip: "SPH-Portal-Arsip"'+source.slice(mapEnd);
 
 // 2. Rute archives/* memakai folder modul `arsip`.
 patched=swap(patched,'coaching: "coaching" }[resource];','coaching: "coaching", archives: "arsip" }[resource];','drive module for operation');
@@ -52,6 +58,10 @@ const dashboardRoute='  if (path === "dashboard" && method === "GET") return das
 const routeAt=once(patched,dashboardRoute,'dashboard route');
 if(routeAt<once(patched,'async function routeOperation(','routeOperation'))throw new Error('Dashboard route is outside routeOperation.');
 patched=swap(patched,dashboardRoute,'  if (p[0] === "archives") return __archives.archiveRoutes({ db, user, p, method, body, url }, { claimFile, readFile: (key) => db.storage.get(key, "arsip"), claimStorage: (key) => db.storage.claim(key) }).then(archiveFound, adoptArchiveError);\n'+dashboardRoute,'dashboard route');
+}else{
+ for(const needle of ['arsip: "SPH-Portal-Arsip"','if (await __archives.archiveFileLinked(db, id)) return false;','assert(!await __archives.archiveFileLinked(db, id)',
+  'return await __archives.archiveUploadAllowed(db, user) ? storeUpload(db, user, body) : upload(db, user, body);','if (p[0] === "archives") return __archives.archiveRoutes('])once(patched,needle,'existing archive integration');
+}
 
 // 4. Modul E-Arsip dibundel terpisah lalu dibungkus satu lingkup, supaya nama di
 // snapshot (assert, audit, AppError, …) tidak diganti esbuild.
@@ -92,11 +102,19 @@ function adoptArchiveError(error) {
 `;
 const anchor='async function routeOperation(';
 once(patched,anchor,'routeOperation anchor');
-patched=patched.replace(anchor,()=>namespace+anchor);
-patched=imports.join('\n')+'\n'+patched;
+if(refresh){
+ const previousImports=patched.match(/^import [^\r\n]*__archives_[^\r\n]*;\r?\n/gm)||[];
+ if(previousImports.map(s=>s.trim()).join('\n')!==imports.join('\n'))throw new Error('Archive imports changed; inspect the active snapshot before updating dependencies.');
+ const start=once(patched,'// --- Modul E-Arsip, dibangkitkan dari lib/archive*.mjs (build-archive-deploy.mjs) ---','archive namespace'),end=once(patched,anchor,'routeOperation');
+ if(end<=start)throw new Error('Archive namespace boundaries changed.');
+ patched=patched.slice(0,start)+namespace+patched.slice(end);
+}else{
+ patched=patched.replace(anchor,()=>namespace+anchor);
+ patched=imports.join('\n')+'\n'+patched;
+}
 const {parse}=await import('./cloud-tools/node_modules/acorn/dist/acorn.mjs');
 parse(patched,{ecmaVersion:'latest',sourceType:'module'});
 const out=resolve('supabase/deploy/portal-api/index.ts');mkdirSync(dirname(out),{recursive:true});
 writeFileSync(out,patched);
 console.log(JSON.stringify({source_sha256:sha,output:out,output_sha256:createHash('sha256').update(readFileSync(out)).digest('hex'),
- patches:['arsip Drive folder','archives Drive module','archive officer uploads','archive claim/download guards','archive module imports','archive routes in routeOperation']}));
+ patches:refresh?['archive namespace refreshed; other gateway code preserved']:['arsip Drive folder','archives Drive module','archive officer uploads','archive claim/download guards','archive module imports','archive routes in routeOperation']}));

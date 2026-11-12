@@ -19,6 +19,8 @@ const png=(text='x')=>Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),Buf
 
 function fixture(t){
  const db=openDb(':memory:');t.after(()=>db.close());seedPermissions(db);
+ const itRole=insert(db,'roles',{code:'IT_ADMIN',name:'IT Admin',is_system:1,is_active:1});
+ run(db,'INSERT INTO role_permissions(role_id,permission_id) VALUES(?,?)',itRole.id,one(db,"SELECT id FROM permissions WHERE code='archives.officers.assign'").id);
  const unit=(code,name,parent=null)=>insert(db,'org_units',{code,name,parent_id:parent,is_active:1});
  const sek=unit('SEK','Sekretariat Fiktif'),hms=unit('SEK-HMS','Humas Fiktif',sek.id),keu=unit('SEK-KEU','Keuangan Fiktif',sek.id),ops=unit('OPS','Operasional Fiktif');
  let n=0;
@@ -35,7 +37,7 @@ function fixture(t){
  };
  const u={officerA:person('petugas.keu',keu),staffA:person('staf.keu',keu),officerB:person('petugas.ops',ops),staffB:person('staf.ops',ops),
   humas:person('humas.satu',hms,'HUMAS'),humasOfficer:person('humas.petugas',hms,'HUMAS'),boss:person('pimpinan',sek,'ARSIP_PENGAWAS','ASSIGNED_UNITS'),
-  admin:person('admin',null,'SUPER_ADMIN'),outsider:person('tanpa.pegawai',null)};
+  admin:person('admin',null,'SUPER_ADMIN'),itAdmin:person('it.admin',null,'IT_ADMIN'),outsider:person('tanpa.pegawai',null)};
  run(db,'INSERT INTO user_role_units(user_role_id,org_unit_id,include_descendants) VALUES(?,?,1)',u.boss.role.id,sek.id);
  const store=new Map(),claimed=[];
  const deps={claimFile,readFile:key=>store.get(key)||null,claimStorage:key=>claimed.push(key)};
@@ -45,7 +47,7 @@ function fixture(t){
   mime=mime||{pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}[name.split('.').pop()];
   return insert(db,'files',{storage_key:key,original_name:name,mime_type:mime,size_bytes:bytes.length,checksum:createHash('sha256').update(bytes).digest('hex'),status:'AVAILABLE',uploaded_by:user.id});
  };
- const f={db,u,units:{sek,hms,keu,ops},store,claimed,call,file,deps};
+ const f={db,u,units:{sek,hms,keu,ops},store,claimed,call,file,deps,person};
  f.assign=async(user,unitRow,code)=>call(u.admin,'POST','archives/officers',{user_id:user.id,org_unit_id:unitRow.id,reason:'SK penunjukan fiktif',agenda_code:code});
  f.payload=(user,unitRow,extra={})=>({idempotency_key:randomUUID(),owner_unit_id:unitRow.id,direction:'MASUK',document_type_id:'arsip-jenis-surat',official_number:`${Math.floor(Math.random()*1e6)}/FX/2026`,
   letter_date:'2026-11-10',subject:`Perihal fiktif ${randomUUID().slice(0,8)}`,main_file_id:file(user).id,attachment_file_ids:[],...extra});
@@ -57,6 +59,58 @@ function fixture(t){
 async function ready(t){const f=fixture(t);await f.assign(f.u.officerA,f.units.keu,'KEU');await f.assign(f.u.officerB,f.units.ops,'OPS');await f.assign(f.u.humasOfficer,f.units.hms,'HMS');return f;}
 const status=(promise,code,pattern)=>assert.rejects(promise,error=>{assert.equal(error.status,code,error.message);if(pattern)assert.match(error.message,pattern);return true;});
 const listed=async(f,user,query='')=>(await f.call(user,'GET','archives',{},query)).items;
+
+test('Super Admin tanpa profil pegawai atau penunjukan menambah dan mengelola semua arsip',async t=>{
+ const f=await ready(t),{db,u,units}=f;
+ assert.equal(u.admin.employee_id,null);assert.equal(archiveUploadAllowed(db,u.admin),true);
+ const overview=await f.call(u.admin,'GET','archives/overview');
+ assert.equal(overview.super_admin,true);assert(overview.officer_units.some(x=>x.id===units.ops.id));
+ const a=await f.create(u.admin,units.ops);
+ assert.equal(one(db,'SELECT count(*) n FROM archive_officers WHERE user_id=?',u.admin.id).n,0);
+ await f.call(u.admin,'POST',`archives/${a.id}/classification`,{target:'RAHASIA',reason:'Klasifikasi admin',expected_row_version:1});
+ let detail=await f.call(u.admin,'GET',`archives/${a.id}`);
+ assert.equal(detail.archive.restricted,false);assert.equal(detail.access.edit,true);assert.equal(detail.access.download,true);
+ assert(detail.access.sources.includes('SUPER_ADMIN'));
+ await f.call(u.admin,'PATCH',`archives/${a.id}`,{...f.payload(u.admin,units.ops),subject:'Koreksi Super Admin',expected_row_version:2});
+ detail=await f.call(u.admin,'GET',`archives/${a.id}`);assert.equal(detail.archive.subject,'Koreksi Super Admin');
+ const main=detail.documents.find(d=>d.role==='MAIN');
+ assert(await f.call(u.admin,'GET',`archives/${a.id}/documents/${main.id}/versions/${main.current_version_id}/download`));
+ await status(f.call(u.itAdmin,'GET',`archives/${a.id}`),404);
+ await f.call(u.admin,'POST',`archives/${a.id}/delete`,{reason:'Keliru',reference:'Uji admin'});
+ await status(f.call(u.admin,'GET',`archives/${a.id}`),404);
+ await f.call(u.admin,'POST',`archives/deleted/${a.id}/restore`,{reason:'Dipakai lagi'});
+ assert.equal((await f.call(u.admin,'GET',`archives/${a.id}`)).archive.subject,'Koreksi Super Admin');
+ run(db,'DELETE FROM user_roles WHERE id=?',u.admin.role.id);
+ assert.equal(archiveUploadAllowed(db,u.admin),false);
+ await status(f.call(u.admin,'GET',`archives/${a.id}`),404);
+});
+
+test('Kepala Urusan hanya mencabut bawahannya; staf dan IT Admin tidak dapat melewati aturan lewat penunjukan ulang',async t=>{
+ const f=fixture(t),{db,u,units}=f;
+ const chiefA=f.person('kaur.humas',units.sek,'EMPLOYEE'),chiefB=f.person('kaur.keuangan',units.sek,'EMPLOYEE');
+ const staffA=f.person('anggota.humas',units.sek,'HUMAS'),staffB=f.person('anggota.keuangan',units.sek,'EMPLOYEE');
+ const title=(user,name)=>run(db,'UPDATE positions SET name=? WHERE id=(SELECT position_id FROM employee_placements WHERE employee_id=? AND is_primary=1)',name,user.employee_id);
+ title(chiefA,'Kepala Urusan Hubungan Masyarakat');title(chiefB,'Kepala Urusan Keuangan');
+ run(db,'UPDATE employee_placements SET supervisor_employee_id=? WHERE employee_id=?',chiefA.employee_id,staffA.employee_id);
+ run(db,'UPDATE employee_placements SET supervisor_employee_id=? WHERE employee_id=?',chiefB.employee_id,staffB.employee_id);
+ await f.assign(staffA,units.sek,'SEK');await f.assign(staffB,units.sek,'SEK');
+ const archive=await f.create(staffA,units.sek),appointment=one(db,'SELECT * FROM archive_officers WHERE user_id=?',staffA.id);
+ const overview=await f.call(chiefA,'GET','archives/overview');assert.equal(overview.admin,false);assert.equal(overview.officer_management,true);
+ const list=await f.call(chiefA,'GET','archives/officers');
+ assert.deepEqual(list.officers.map(o=>o.user.id),[staffA.id]);assert.equal(list.officers[0].can_revoke,true);assert.equal(list.can_assign,false);assert.equal(list.can_manage_codes,false);
+ assert((await f.call(u.itAdmin,'GET','archives/officers')).officers.every(o=>o.can_revoke===false));
+ for(const actor of [staffA,u.itAdmin,chiefB])await status(f.call(actor,'POST',`archives/officers/${appointment.id}/revoke`,{reason:'Tidak berwenang'}),403);
+ await status(f.call(u.itAdmin,'POST','archives/officers',{user_id:staffA.id,org_unit_id:units.sek.id,agenda_code:'SEK',reason:'Mencoba menunjuk ulang'}),403);
+ assert.equal(one(db,'SELECT revoked_at FROM archive_officers WHERE id=?',appointment.id).revoked_at,null);
+ title(chiefA,'Koordinator Hubungan Masyarakat');
+ await status(f.call(chiefA,'POST',`archives/officers/${appointment.id}/revoke`,{reason:'Sudah pindah jabatan'}),403);
+ title(chiefA,'Kepala Urusan Hubungan Masyarakat');
+ await f.call(chiefA,'POST',`archives/officers/${appointment.id}/revoke`,{reason:'Rotasi tugas'});
+ assert.equal((await f.call(chiefA,'GET','archives/officers')).officers[0].can_revoke,false);
+ assert.equal((await f.call(staffA,'GET',`archives/${archive.id}`)).access.edit,false);
+ await status(f.call(staffA,'POST','archives',f.payload(staffA,units.sek)),403);
+ assert.equal(one(db,'SELECT count(*) n FROM archive_records').n,1);
+});
 
 test('berkas arsip tidak dapat ditautkan atau dibaca melalui pengumuman, termasuk versi lama',async t=>{
  const f=await ready(t),{db,u,units}=f;
@@ -177,7 +231,7 @@ test('AC01/AC13/AC16: hanya administrator menunjuk petugas; petugas hanya untuk 
  await f.assign(u.officerB,units.ops,'OPS');
  await status(f.call(u.admin,'POST','archives/units',{org_unit_id:units.hms.id,agenda_code:'KEU'}),409,/sudah dipakai/);
  // Pegawai tanpa penunjukan dan Humas tanpa penunjukan ditolak; petugas A ditolak untuk bagian B.
- for(const [user,unitRow] of [[u.staffA,units.keu],[u.humas,units.hms],[u.officerA,units.ops],[u.admin,units.keu]])await status(f.call(user,'POST','archives',f.payload(u.officerA,unitRow)),403,/petugas arsip yang ditunjuk/);
+ for(const [user,unitRow] of [[u.staffA,units.keu],[u.humas,units.hms],[u.officerA,units.ops],[u.itAdmin,units.keu]])await status(f.call(user,'POST','archives',f.payload(u.officerA,unitRow)),403,/petugas arsip yang ditunjuk/);
  const a=await f.create(u.officerA,units.keu);
  assert.match(a.agenda_number,/^KEU\/\d{4}\/0001$/);
  // Kode agenda terkunci setelah dipakai.
@@ -319,9 +373,9 @@ test('AC10/AC41: edit metadata diaudit sebelum/sesudah, konflik versi ditolak, b
 /* ---------- Lingkup baca, berbagi, dan klasifikasi ---------- */
 test('AC14/AC20/AC32/AC33: berbagi hanya oleh Humas, hanya baca, notifikasi hanya untuk yang dituju',async t=>{
  const f=await ready(t),{u,units,db}=f,a=await f.create(u.officerA,units.keu);
- for(const user of [u.staffB,u.outsider,u.admin]){await status(f.call(user,'GET',`archives/${a.id}`),404);assert.equal((await listed(f,user)).length,0);assert.equal((await f.call(user,'GET','archives/dashboard')).total,0);}
+ for(const user of [u.staffB,u.outsider,u.itAdmin]){await status(f.call(user,'GET',`archives/${a.id}`),404);assert.equal((await listed(f,user)).length,0);assert.equal((await f.call(user,'GET','archives/dashboard')).total,0);}
  await status(f.call(u.staffB,'GET',`archives/${randomUUID()}`),404);
- for(const user of [u.officerA,u.staffA,u.admin,u.boss])await status(f.call(user,'POST',`archives/${a.id}/grants`,{purpose:'BIASA_SHARE',target_user_id:u.staffB.id}),403,/Humas/);
+ for(const user of [u.officerA,u.staffA,u.itAdmin,u.boss])await status(f.call(user,'POST',`archives/${a.id}/grants`,{purpose:'BIASA_SHARE',target_user_id:u.staffB.id}),403,/Humas/);
  // Berbagi ke pengguna: langsung berlaku, notifikasi hanya ke pengguna itu.
  await f.grant(a.id,{purpose:'BIASA_SHARE',target_user_id:u.staffB.id,notify_user_ids:[u.staffB.id]});
  const shared=await f.call(u.staffB,'GET',`archives/${a.id}`);
@@ -350,15 +404,15 @@ test('AC14/AC20/AC32/AC33: berbagi hanya oleh Humas, hanya baca, notifikasi hany
  await f.call(u.humas,'POST',`archives/${a.id}/grants/${grant.id}/revoke`,{});
  await status(f.call(u.staffB,'GET',`archives/${a.id}`),404);
  assert.equal((await f.call(u.staffB,'GET','archives/notifications')).items[0].available,false);
- for(const user of [u.officerA,u.admin])await status(f.call(user,'POST',`archives/${a.id}/grants/${grant.id}/revoke`,{}),403);
+ for(const user of [u.officerA,u.itAdmin])await status(f.call(user,'POST',`archives/${a.id}/grants/${grant.id}/revoke`,{}),403);
 });
-test('AC15/AC17/AC39/AC43: Rahasia disamarkan di server; Humas membaca tanpa izin; pimpinan dan admin tidak otomatis',async t=>{
+test('AC15/AC17/AC39/AC43: Rahasia disamarkan di server; Humas membaca tanpa izin; pimpinan dan IT Admin tidak otomatis',async t=>{
  const f=await ready(t),{u,units,db}=f,a=await f.create(u.officerA,units.keu,{subject:'Rencana mutasi fiktif',official_number:'RHS/77'});
  // Pimpinan dengan cakupan Sekretariat melihat arsip Biasa di bawahnya, bukan Operasional.
  assert.deepEqual((await f.call(u.boss,'GET',`archives/${a.id}`)).access.sources,['PENGAWASAN']);
  const other=await f.create(u.officerB,units.ops);
  await status(f.call(u.boss,'GET',`archives/${other.id}`),404);
- for(const user of [u.officerA,u.staffA,u.admin,u.boss])await status(f.call(user,'POST',`archives/${a.id}/classification`,{target:'RAHASIA',reason:'x',expected_row_version:1}),403,/Humas/);
+ for(const user of [u.officerA,u.staffA,u.itAdmin,u.boss])await status(f.call(user,'POST',`archives/${a.id}/classification`,{target:'RAHASIA',reason:'x',expected_row_version:1}),403,/Humas/);
  await status(f.call(u.humas,'POST',`archives/${a.id}/classification`,{target:'BIASA',reason:'x',expected_row_version:1}),422,/berbeda/);
  await status(f.call(u.humas,'POST',`archives/${a.id}/classification`,{target:'RAHASIA',reason:'',expected_row_version:1}),422,/Alasan/);
  await f.grant(a.id,{purpose:'BIASA_SHARE',target_user_id:u.staffB.id});
@@ -377,7 +431,7 @@ test('AC15/AC17/AC39/AC43: Rahasia disamarkan di server; Humas membaca tanpa izi
   await status(f.call(user,'PATCH',`archives/${a.id}`,{expected_row_version:2,direction:'MASUK',document_type_id:'arsip-jenis-surat',letter_date:'2026-11-10',subject:'x'}),403);
  }
  // Administrator tanpa role Humas tetap di luar hak daftar.
- await status(f.call(u.admin,'GET',`archives/${a.id}`),404);
+ await status(f.call(u.itAdmin,'GET',`archives/${a.id}`),404);
  // Semua Humas membaca penuh tanpa izin, lintas bagian.
  for(const user of [u.humas,u.humasOfficer]){const detail=await f.call(user,'GET',`archives/${a.id}`);assert.equal(detail.archive.subject,'Rencana mutasi fiktif');assert.deepEqual(detail.access.sources,['HUMAS']);assert.equal(detail.access.edit,false);}
  // Role Humas dicabut saat sesi masih hidup: permintaan berikutnya ditolak.
@@ -566,7 +620,7 @@ test('AC11/AC12/AC37: petugas mengajukan hapus, Humas memutuskan; hapus logis da
  await status(f.call(u.humas,'GET',`archives/${a.id}/documents/${main.id}/versions/${main.current_version_id}/preview`),404);
  assert.equal(f.store.size>0,true,'berkas tidak dihapus dari penyimpanan');
  // Hanya Humas melihat metadata pemulihan.
- await status(f.call(u.officerA,'GET','archives/deleted'),403);await status(f.call(u.admin,'GET','archives/deleted'),403);
+ await status(f.call(u.officerA,'GET','archives/deleted'),403);await status(f.call(u.itAdmin,'GET','archives/deleted'),403);
  const deleted=(await f.call(u.humas,'GET','archives/deleted')).items;assert.equal(deleted[0].delete_reason,'Disetujui');assert.equal(deleted[0].agenda_number,a.agenda_number);
  await status(f.call(u.officerA,'POST',`archives/deleted/${a.id}/restore`,{reason:'x'}),403);
  await status(f.call(u.humas,'POST',`archives/deleted/${a.id}/restore`,{reason:''}),422);
@@ -586,7 +640,7 @@ test('AC11/AC12/AC37: petugas mengajukan hapus, Humas memutuskan; hapus logis da
 });
 test('AC36: Humas mengelola jenis dokumen; jenis nonaktif tetap terbaca di arsip lama',async t=>{
  const f=await ready(t),{u,units,db}=f;
- await status(f.call(u.officerA,'POST','archives/types',{code:'MEMO',name:'Memo'}),403,/Humas/);await status(f.call(u.admin,'POST','archives/types',{code:'MEMO',name:'Memo'}),403);
+ await status(f.call(u.officerA,'POST','archives/types',{code:'MEMO',name:'Memo'}),403,/Humas/);await status(f.call(u.itAdmin,'POST','archives/types',{code:'MEMO',name:'Memo'}),403);
  const created=await f.call(u.humas,'POST','archives/types',{code:'memo',name:'Memo Internal'}),memo=created.types.find(t=>t.code==='MEMO');
  assert(memo.active);
  await status(f.call(u.humas,'POST','archives/types',{code:'MEMO2',name:'memo  internal'}),409,/sudah ada/);
@@ -693,7 +747,7 @@ test('AC22/AC40/AC45: tidak ada alur permintaan akses digital; audit hanya berta
  // Ikhtisar: batas berkas dan kewenangan dari server.
  const overview=await f.call(u.officerA,'GET','archives/overview');
  assert.equal(overview.limits.max_file_bytes,10_000_000);assert.deepEqual(overview.officer_units.map(x=>x.agenda_code),['KEU']);assert.equal(overview.humas,false);assert.equal(overview.admin,false);
- assert.equal((await f.call(u.admin,'GET','archives/overview')).admin,true);assert.equal((await f.call(u.admin,'GET','archives/overview')).humas,false,'Super Admin bukan Humas secara otomatis');
+ assert.equal((await f.call(u.admin,'GET','archives/overview')).admin,true);assert.equal((await f.call(u.admin,'GET','archives/overview')).humas,true,'Super Admin mengelola seluruh arsip sesuai revisi 13 November');
  assert.equal((await f.call(u.humas,'GET','archives/overview')).humas,true);
  await status(f.call(u.staffA,'GET','archives/lookups',{},'kind=users&q=pe'),403);
  assert((await f.call(u.humas,'GET','archives/lookups',{},'kind=users&q=staf')).users.length>=2);
@@ -740,8 +794,8 @@ test('E-Arsip lewat server: petugas mengunggah, menyimpan, dan berkas tidak boco
  assert.equal((await asStaff(`${path}/download`)).status,403);
  // Rute berkas umum menolak berkas arsip, juga bagi pengunggahnya.
  assert.equal((await asOfficer(`files/${uploaded.data.id}`)).status,403);
- // Administrator di bagian yang sama membaca sebagai anggota bagian, bukan karena jabatan administratornya.
- const adminView=await asAdmin(`archives/${created.data.archive.id}`);assert.deepEqual(adminView.data.access.sources,['BAGIAN']);assert.equal(adminView.data.access.humas,false);
+ // Super Admin mengelola arsip tanpa penunjukan tambahan; keanggotaan bagiannya tetap tercatat.
+ const adminView=await asAdmin(`archives/${created.data.archive.id}`);assert.deepEqual(adminView.data.access.sources,['SUPER_ADMIN','BAGIAN']);assert.equal(adminView.data.access.humas,true);
  assert.equal((await asStaff('archives/overview')).data.officer_units.length,0);
  assert.equal((await asOfficer('archives/tidak-ada/aksi/aneh')).status,404);
 });
