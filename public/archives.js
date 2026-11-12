@@ -362,7 +362,7 @@ function renderDetail(){
  <footer class="page-footer"><span>SPH Portal · E-Arsip</span><span>Waktu operasional WITA</span></footer>`;
 }
 function afterDetail(){
- if(!R.detail?.access.read||R.section!=='documents')return;
+ if(!R.id||!R.detail?.access.read||R.section!=='documents')return;
  const main=R.detail.documents.find(d=>d.role==='MAIN'),current=main?.versions.find(v=>v.current);
  if(!current)return;
  // Berkas besar tidak dimuat otomatis supaya kuota data HP tidak terpakai tanpa diminta.
