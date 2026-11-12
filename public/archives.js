@@ -59,7 +59,7 @@ function tabs(){
  list.push(['reports','Laporan']);
  if(o.humas||o.officer_units.length)list.push(['requests',`Pengajuan Hapus${o.humas&&o.pending_delete_requests?` (${o.pending_delete_requests})`:''}`]);
  if(o.humas)list.push(['types','Jenis Dokumen'],['deleted','Arsip Dihapus']);
- if(o.admin)list.push(['officers','Petugas Arsip']);
+ if(o.officer_management||o.admin)list.push(['officers','Petugas Arsip']);
  return list;
 }
 
@@ -113,7 +113,7 @@ function render(){
 function headerActions(){
  if(['summary','list'].includes(R.tab)&&R.overview.officer_units.length)return btn('Tambah Arsip','tab','plus','primary','data-tab="new"');
  if(R.tab==='types')return btn('Tambah jenis','type-new');
- if(R.tab==='officers')return btn('Tunjuk petugas','officer-new','people');
+ if(R.tab==='officers'&&R.officers?.can_assign)return btn('Tunjuk petugas','officer-new','people');
  return '';
 }
 async function rerender(){
@@ -619,9 +619,9 @@ function typesTab(){
 function officersTab(){
  const o=R.officers;
  const rows=o.officers.map(r=>{const [label,tone]=officerStatus[r.status]||[r.status,'neutral'];
-  return `<tr class="${r.revoked_at?'muted':''}">${cell('Petugas',`<strong>${esc(r.user.name)}</strong>`)}${cell('Bagian',esc(r.unit.name))}${cell('Berlaku',`${esc(stamp(r.valid_from))}<br><span class="muted text-small">${r.expires_at?`sampai ${esc(stamp(r.expires_at))}`:'sampai dicabut'}</span>`)}${cell('Dasar',`${esc(r.reason)}<br><span class="muted text-small">oleh ${esc(r.assigned_by)}</span>`)}${cell('Status',`${pill(label,tone)}${r.revoked_at?`<br><span class="muted text-small">${esc(stamp(r.revoked_at))}${r.revoke_reason?` · ${esc(r.revoke_reason)}`:''}</span>`:''}`)}${cell('Aksi',r.revoked_at?'':link('Cabut','officer-revoke',`data-id="${esc(r.id)}"`),'archive-action')}</tr>`;});
- const codes=o.units.filter(u=>u.agenda_code).map(u=>`<tr>${cell('Bagian',esc(u.name))}${cell('Kode agenda',`<strong>${esc(u.agenda_code)}</strong>`)}${cell('Aksi',u.code_locked?'<span class="muted text-small">Sudah dipakai nomor agenda</span>':link('Ubah kode','unit-code',`data-id="${esc(u.id)}"`),'archive-action')}</tr>`);
- return `${notice('Penunjukan petugas arsip','Hanya petugas yang ditunjuk di sini yang dapat menambah dan mengubah arsip bagiannya. Menunjuk petugas tidak memberi Anda hak membaca arsip Rahasia.','people')}
+  return `<tr class="${r.revoked_at?'muted':''}">${cell('Petugas',`<strong>${esc(r.user.name)}</strong>`)}${cell('Bagian',esc(r.unit.name))}${cell('Berlaku',`${esc(stamp(r.valid_from))}<br><span class="muted text-small">${r.expires_at?`sampai ${esc(stamp(r.expires_at))}`:'sampai dicabut'}</span>`)}${cell('Dasar',`${esc(r.reason)}<br><span class="muted text-small">oleh ${esc(r.assigned_by)}</span>`)}${cell('Status',`${pill(label,tone)}${r.revoked_at?`<br><span class="muted text-small">${esc(stamp(r.revoked_at))}${r.revoke_reason?` · ${esc(r.revoke_reason)}`:''}</span>`:''}`)}${cell('Aksi',r.can_revoke?link('Cabut','officer-revoke',`data-id="${esc(r.id)}"`):'','archive-action')}</tr>`;});
+ const codes=o.units.filter(u=>u.agenda_code).map(u=>`<tr>${cell('Bagian',esc(u.name))}${cell('Kode agenda',`<strong>${esc(u.agenda_code)}</strong>`)}${cell('Aksi',u.code_locked?'<span class="muted text-small">Sudah dipakai nomor agenda</span>':o.can_manage_codes?link('Ubah kode','unit-code',`data-id="${esc(u.id)}"`):'','archive-action')}</tr>`);
+ return `${notice('Penunjukan petugas arsip','Petugas mengelola arsip bagiannya. Kepala Urusan dapat mencabut petugas di bawah urusannya; Super Admin dapat mengelola semua arsip dan penunjukan.','people')}
  ${card('Petugas arsip','Penunjukan berlaku per bagian.',table(['Petugas','Bagian','Berlaku','Dasar','Status','Aksi'],rows,'Belum ada petugas arsip. Mulai dengan Tunjuk petugas.'))}
  ${card('Kode agenda bagian','Awalan nomor agenda tiap bagian, misalnya HMS/2026/0001.',table(['Bagian','Kode agenda','Aksi'],codes,'Belum ada kode agenda. Kode ditetapkan saat petugas pertama suatu bagian ditunjuk.'))}`;
 }
@@ -672,7 +672,7 @@ async function handle(action,el){
  if(action==='type-toggle'){const type=R.types.find(t=>t.id===el.dataset.id);if(type.active&&!confirm(`Nonaktifkan jenis "${type.name}"? Arsip lama tetap terbaca; jenis ini tidak dapat dipilih untuk arsip baru.`))return;
   R.types=(await patch(`archives/types/${encodeURIComponent(type.id)}`,{is_active:!type.active,expected_row_version:type.row_version})).types;R.overview.types=R.types;toast(type.active?'Jenis dinonaktifkan.':'Jenis diaktifkan.');await rerender();return;}
  if(action==='officer-new'){officerDialog();return;}
- if(action==='officer-revoke'){reasonDialog('Cabut penunjukan petugas','Alasan pencabutan',{max:300,submit:'Cabut penunjukan',note:'Petugas tidak lagi dapat menambah atau mengubah arsip bagian ini. Arsip dan riwayat yang sudah ada tidak berubah.',send:async reason=>{R.officers=await post(`archives/officers/${encodeURIComponent(el.dataset.id)}/revoke`,{reason});toast('Penunjukan dicabut.');await rerender();}});return;}
+ if(action==='officer-revoke'){reasonDialog('Cabut penunjukan petugas','Alasan pencabutan',{max:300,submit:'Cabut penunjukan',note:'Penunjukan sebagai petugas bagian ini dicabut. Hak dari role lain tetap berlaku. Arsip dan riwayat yang sudah ada tetap tersimpan.',send:async reason=>{R.officers=await post(`archives/officers/${encodeURIComponent(el.dataset.id)}/revoke`,{reason});toast('Penunjukan dicabut.');await rerender();}});return;}
  if(action==='unit-code'){const unit=R.officers.units.find(u=>u.id===el.dataset.id);formDialog(`Kode agenda ${unit.name}`,input('Kode agenda (2–12 huruf kapital atau angka)','agenda_code','text',unit.agenda_code,'required maxlength="12" pattern="[A-Za-z0-9]{2,12}" autocomplete="off"'),async b=>{R.officers=await post('archives/units',{org_unit_id:unit.id,agenda_code:b.agenda_code.trim().toUpperCase()});toast('Kode agenda diperbarui.');await refreshOverview();await rerender();},{note:'Kode hanya dapat diubah sebelum arsip pertama bagian ini tersimpan.'});return;}
 }
 export function bindArchivesPage(){

@@ -14,7 +14,7 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:net';
-import {openDb,one} from '../lib/db.mjs';
+import {openDb,one,run} from '../lib/db.mjs';
 import {seedPermissions,hashPasswordSync} from '../lib/auth.mjs';
 import {createApp} from '../server.mjs';
 import {seedArchiveDemo,samplePdf,samplePng} from './archive-demo-data.mjs';
@@ -25,6 +25,8 @@ const freePort=()=>new Promise(r=>{const probe=createServer().listen(0,'127.0.0.
 const db=openDb(':memory:');seedPermissions(db);
 const dataDir=mkdtempSync(resolve(tmpdir(),'archives-ui-')),password='UjiArsip!2026';
 const demo=await seedArchiveDemo(db,dataDir,hashPasswordSync(password));
+run(db,"UPDATE positions SET name='Kepala Urusan Keuangan' WHERE id=(SELECT position_id FROM employee_placements WHERE employee_id=?)",demo.users.staffKeu.employee_id);
+run(db,'UPDATE employee_placements SET supervisor_employee_id=? WHERE employee_id=?',demo.users.staffKeu.employee_id,demo.users.officerKeu.employee_id);
 const port=await freePort(),base=`http://127.0.0.1:${port}`,app=createApp({db,dataDir,origin:base});
 await new Promise(r=>app.server.listen(port,'127.0.0.1',r));
 const letter=resolve(dataDir,'surat-baru.pdf'),attachment=resolve(dataDir,'lampiran-foto.png'),other=resolve(dataDir,'surat-lain.pdf'),fake=resolve(dataDir,'bukan-pdf.pdf'),heic=resolve(dataDir,'foto.heic');
@@ -166,20 +168,37 @@ try{
   await staff.shot('07-laporan-hp');
  });
 
- await check('administrator menunjuk petugas tanpa memperoleh hak baca; jenis dokumen dikelola Humas',async()=>{
+ await check('Super Admin menunjuk petugas dan mengelola arsip lengkap',async()=>{
   await admin.open('tab=officers');
-  assert.equal(await admin.locator('[data-arc=tab][data-tab=types]').count(),0);
+  assert.equal(await admin.locator('[data-arc=tab][data-tab=types]').count(),1);
   await admin.click('[data-arc=officer-new]');await admin.selectOption('dialog [name=org_unit_id]',demo.units.hms.id);
   assert.equal(await admin.inputValue('dialog [name=agenda_code]'),'ARSHMS');await admin.fill('dialog [name=agenda_code]','HMS');
   await admin.fill('dialog [data-picker-query]','humas');await admin.click('dialog [data-picker-search]');await admin.check('dialog [name=picked_user]');
   await admin.fill('dialog [name=reason]','SK penunjukan uji');await admin.click('dialog [type=submit]');await admin.toast('Petugas arsip ditunjuk.');
   await admin.shot('08-petugas');
-  await admin.open(`id=${demo.archives.invitation.id}`);assert.match(await admin.locator('#main').innerText(),/Arsip tidak ditemukan/);
+  await admin.open(`id=${demo.archives.invitation.id}`);assert.match(await admin.locator('#main').innerText(),/Undangan rapat koordinasi/);
+  assert(await admin.locator('[data-arc=download]').count()>0);
   await humas.open('tab=new');assert.match(await humas.locator('.archive-static').first().innerText(),/Humas Contoh \(HMS\)/);
   await humas.open('tab=types');await humas.click('[data-arc=type-new]');await humas.fill('dialog [name=code]','MOU');await humas.fill('dialog [name=name]','Nota Kesepahaman');await humas.click('dialog [type=submit]');
   await humas.toast('Jenis dokumen ditambahkan.');await humas.waitForSelector('#archive-content tr:has-text("MOU"):has-text("Nota Kesepahaman")');
  });
 
+ await check('Super Admin tanpa penunjukan menambah arsip dari antarmuka',async()=>{
+  const file=resolve(dataDir,'admin-baru.pdf');writeFileSync(file,await samplePdf('Arsip Super Admin unik',4));
+  await admin.open('tab=new');await admin.setInputFiles('[name=main]',file);await admin.selectOption('[name=owner_unit_id]',demo.units.keu.id);
+  await admin.selectOption('[name=direction]','MASUK');await admin.selectOption('[name=document_type_id]','arsip-jenis-surat');
+  await admin.fill('[name=letter_date]','2026-11-09');await admin.fill('[name=official_number]','ADMIN-001/UJI');await admin.fill('[name=subject]','Arsip administrasi Super Admin uji');
+  await admin.click('.archive-form [type=submit]');await admin.toast('Arsip tersimpan dengan nomor agenda KEU/');
+  assert(one(db,"SELECT id FROM archive_records WHERE subject='Arsip administrasi Super Admin uji'"));
+  assert.equal(Number(one(db,'SELECT count(*) n FROM archive_officers WHERE user_id=?',demo.users.admin.id).n),0);
+ });
+ await check('Kepala Urusan mencabut bawahannya; hak petugas berubah setelah pencabutan',async()=>{
+  await staff.open('tab=officers');assert.equal(await staff.locator('[data-arc=officer-new]').count(),0);assert.equal(await staff.locator('[data-arc=unit-code]').count(),0);
+  assert.equal(await staff.locator('[data-arc=officer-revoke]').count(),1);
+  await staff.click('[data-arc=officer-revoke]');await staff.fill('dialog [name=reason]','Rotasi petugas oleh Kepala Urusan');await staff.click('dialog [type=submit]');await staff.toast('Penunjukan dicabut.');
+  assert.equal(await staff.locator('[data-arc=officer-revoke]').count(),0);
+  await officer.open('tab=new');assert.equal(await officer.locator('[data-arc=tab][data-tab=new]').count(),0);
+ });
  assert.deepEqual(problems,[],'tidak boleh ada galat halaman atau pelanggaran CSP');
  console.log(`${checks} archive UI checks passed.`);
 }finally{await browser.close();await new Promise(r=>app.server.close(r));db.close();rmSync(dataDir,{recursive:true,force:true});}
