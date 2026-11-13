@@ -78,12 +78,99 @@ var visitRoleCodes = {
 };
 var visitRoles = Object.entries(visitRoleCodes).map(([code, [name, codes]]) => [code, name, (c) => codes.includes(c)]);
 
+// supabase/functions/_shared/portal/visit-scoring.mjs
+var scoringRules = Object.freeze({
+  teguranMaks: 2,
+  potonganMaks: 50,
+  catatanMin: 3,
+  flagLimit: 500
+});
+var findingKinds = Object.freeze(["teguran", "berat", "apresiasi"]);
+var seragamValues = Object.freeze(["lengkap", "kurang", "tidak"]);
+var seragamLabels = Object.freeze({
+  lengkap: "Lengkap",
+  kurang: "Kurang lengkap",
+  tidak: "Tidak berseragam"
+});
+var findingCode = /^[a-z0-9-]{2,40}$/;
+var defaultScoreRule = Object.freeze({
+  berlaku_mulai: "2026-01",
+  pot_id: 20,
+  pot_kurang: 10,
+  pot_tidak: 20,
+  pot_teguran: 20,
+  ambang: 95,
+  minimal: 10
+});
+var ruleView = (r) => ({
+  berlaku_mulai: r.berlaku_mulai,
+  pot_id: Number(r.pot_id),
+  pot_kurang: Number(r.pot_kurang),
+  pot_tidak: Number(r.pot_tidak),
+  pot_teguran: Number(r.pot_teguran),
+  ambang: Number(r.ambang),
+  minimal: Number(r.minimal),
+  created_at: r.created_at || null
+});
+var scoreRuleRows = async (db) => (await all(db, "SELECT * FROM visit_score_rules ORDER BY berlaku_mulai")).map(ruleView);
+function ruleFinder(rows) {
+  const sorted = rows.slice().sort((a, b) => a.berlaku_mulai < b.berlaku_mulai ? -1 : 1);
+  return (month) => {
+    let found = null;
+    for (const r of sorted) {
+      if (r.berlaku_mulai <= month) found = r;
+      else break;
+    }
+    return found || sorted[0] || defaultScoreRule;
+  };
+}
+var scoreRuleFinder = async (db) => ruleFinder(await scoreRuleRows(db));
+var potonganOf = (rule, n) => n.nId * rule.pot_id + n.nKurang * rule.pot_kurang + n.nTidak * rule.pot_tidak + n.nTeguran * rule.pot_teguran;
+async function formSettings(db) {
+  const s = await one(db, "SELECT * FROM visit_form_settings WHERE id=1");
+  return {
+    petunjuk_id: s?.petunjuk_id || "",
+    petunjuk_seragam: s?.petunjuk_seragam || "",
+    row_version: Number(s?.row_version || 1),
+    updated_at: s?.updated_at || null
+  };
+}
+async function formScoringContext(db) {
+  const types = await all(db, "SELECT id,jenis,label,perlu_catatan FROM visit_finding_types WHERE is_active=1 ORDER BY jenis,urut,label");
+  const byKind = (jenis) => types.filter((t) => t.jenis === jenis).map((t) => ({
+    kode: t.id,
+    label: t.label,
+    perluCatatan: jenis !== "teguran" || Number(t.perlu_catatan) === 1
+  }));
+  const s = await formSettings(db);
+  return {
+    versi: 2,
+    teguranMaks: scoringRules.teguranMaks,
+    catatanMin: scoringRules.catatanMin,
+    teguran: byKind("teguran"),
+    berat: byKind("berat"),
+    apresiasi: byKind("apresiasi"),
+    petugas: (await all(db, "SELECT id,nama,keterangan FROM visit_assessors WHERE is_active=1 ORDER BY nama")).map((a) => ({
+      id: a.id,
+      nama: a.nama,
+      keterangan: a.keterangan || ""
+    })),
+    petunjuk: {
+      idCard: s.petunjuk_id,
+      seragam: s.petunjuk_seragam
+    }
+  };
+}
+var flagStatuses = Object.freeze(["menunggu", "disetujui", "ditolak", "dibatalkan"]);
+async function cancelPendingFlags(db, evaluationId) {
+  return (await run(db, "UPDATE visit_flags SET status='dibatalkan',updated_at=?,row_version=row_version+1 WHERE evaluation_id=? AND status='menunggu'", now(), evaluationId)).changes;
+}
+
 // supabase/functions/_shared/portal/visit-data.mjs
 var visitRules = Object.freeze({
   jedaMenit: 15,
   umurMaksHari: 30,
   retensiHari: 42,
-  minimalPengantaran: 5,
   jumlahPeringkat: 10,
   reviewMaks: 20,
   importMaks: 2e3
@@ -109,9 +196,55 @@ var reguCodes = reguInfo.map((r) => r.kode);
 var witaOffset = 8 * 36e5;
 var witaDate = (ms) => new Date(ms + witaOffset).toISOString().slice(0, 10);
 var shiftDate = (day, days) => new Date(Date.parse(day + "T00:00:00Z") + days * 864e5).toISOString().slice(0, 10);
+function newCriteriaProblem(c, catatan, petugasId, types, assessors) {
+  for (const code of c.teguran) {
+    const t = types.get(code);
+    if (!t || t.jenis !== "teguran") return `Jenis teguran "${code}" tidak dikenal portal. Perbarui daftar di HP (Pengaturan \u2192 Tes Koneksi), lalu nilai ulang.`;
+  }
+  for (const [jenis, code] of [["berat", c.berat], ["apresiasi", c.apresiasi]]) if (code) {
+    const t = types.get(code);
+    if (!t || t.jenis !== jenis) return `Jenis ${jenis === "berat" ? "pelanggaran berat" : "apresiasi"} "${code}" tidak dikenal portal. Perbarui daftar di HP, lalu nilai ulang.`;
+  }
+  let needsNote = Boolean(c.berat || c.apresiasi);
+  for (const code of c.teguran) if (Number(types.get(code).perlu_catatan) === 1) needsNote = true;
+  if (needsNote && catatan.trim().length < scoringRules.catatanMin) return 'Catatan wajib diisi untuk pelanggaran berat, apresiasi, atau teguran "lain".';
+  if (petugasId && !assessors.has(petugasId)) return "Petugas penilai tidak terdaftar di portal. Perbarui daftar petugas di HP, lalu pilih nama lagi.";
+  return null;
+}
+function storedValues(c, petugas) {
+  if (c.seragam === void 0) return {
+    versi: 1,
+    uniform: c.uniform,
+    id_card: c.idCard ? 1 : 0,
+    etika: Math.min(5, Math.max(-5, Math.round(Number(c.etika) || 0))),
+    seragam: null,
+    teguran: "",
+    teguran_n: 0,
+    berat: null,
+    apresiasi: null,
+    petugas_id: null,
+    petugas_nama: null
+  };
+  return {
+    versi: 2,
+    uniform: c.seragam === "lengkap" ? 1 : -1,
+    id_card: c.idCard ? 1 : 0,
+    etika: -c.teguran.length,
+    seragam: c.seragam,
+    teguran: c.teguran.join(","),
+    teguran_n: c.teguran.length,
+    berat: c.berat || null,
+    apresiasi: c.apresiasi || null,
+    petugas_id: petugas ? petugas.id : null,
+    petugas_nama: petugas ? petugas.nama : null
+  };
+}
 async function ingestGuideEvaluations(db, link, items, nowMs = Date.now()) {
   const accepted = [], rejected = [];
   const receivedAt = new Date(nowMs).toISOString(), oldest = nowMs - visitRules.umurMaksHari * 864e5;
+  const anyNew = items.some((item) => item.criteria.seragam !== void 0);
+  const types = new Map(anyNew ? (await all(db, "SELECT id,jenis,perlu_catatan FROM visit_finding_types")).map((t) => [t.id, t]) : []);
+  const assessors = new Map(anyNew ? (await all(db, "SELECT id,nama FROM visit_assessors")).map((a) => [a.id, a]) : []);
   for (const item of items) {
     const id = item.evaluationId.toLowerCase();
     const reject = (reason, message, extra = {}) => {
@@ -140,6 +273,15 @@ async function ingestGuideEvaluations(db, link, items, nowMs = Date.now()) {
       reject("GUIDE", `Guide ${item.guideId} tidak terdaftar di Data Guide portal. Muat ulang daftar guide di HP lalu nilai ulang.`);
       continue;
     }
+    const c = item.criteria, catatan = String(item.catatan || "").slice(0, 500), petugasId = item.petugasId ? item.petugasId.toLowerCase() : null;
+    if (c.seragam !== void 0) {
+      const problem = newCriteriaProblem(c, catatan, petugasId, types, assessors);
+      if (problem) {
+        reject("VALIDASI", problem);
+        continue;
+      }
+    }
+    const v = storedValues(c, petugasId ? assessors.get(petugasId) : null);
     const replaces = item.koreksiDari ? item.koreksiDari.toLowerCase() : null;
     if (replaces) {
       const original = await one(db, "SELECT id,guide_id,pos,wita_date,status FROM visit_evaluations WHERE id=?", replaces);
@@ -156,6 +298,7 @@ async function ingestGuideEvaluations(db, link, items, nowMs = Date.now()) {
         continue;
       }
       await run(db, "UPDATE visit_evaluations SET status='diganti',replaced_by=?,sheet_dirty=CASE WHEN sheet_row IS NULL THEN 0 ELSE 1 END,sheet_verified_at=NULL WHERE id=? AND status='aktif'", id, original.id);
+      await cancelPendingFlags(db, original.id);
     } else {
       const low = new Date(ms - visitRules.jedaMenit * 6e4).toISOString(), high = new Date(ms + visitRules.jedaMenit * 6e4).toISOString();
       const clash = await one(db, "SELECT id,evaluated_at FROM visit_evaluations WHERE guide_id=? AND pos=? AND status='aktif' AND evaluated_at>? AND evaluated_at<? ORDER BY evaluated_at LIMIT 1", guide.id, link.pos, low, high);
@@ -169,9 +312,22 @@ async function ingestGuideEvaluations(db, link, items, nowMs = Date.now()) {
         continue;
       }
     }
-    const c = item.criteria, etika = Math.min(5, Math.max(-5, Math.round(Number(c.etika) || 0)));
-    await run(db, `INSERT INTO visit_evaluations(id,link_id,pos,guide_id,guide_name,uniform,id_card,review,etika,catatan,evaluated_at,wita_date,received_at,koreksi_dari,status)
-   VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,'aktif')`, id, link.id, link.pos, guide.id, guide.name, c.uniform, c.idCard ? 1 : 0, etika, String(item.catatan || "").slice(0, 500), evaluatedAt, day, receivedAt, replaces);
+    await run(db, `INSERT INTO visit_evaluations(id,link_id,pos,guide_id,guide_name,uniform,id_card,review,etika,catatan,evaluated_at,wita_date,received_at,koreksi_dari,status,versi,seragam,teguran,teguran_n,berat,apresiasi,petugas_id,petugas_nama)
+   VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,'aktif',?,?,?,?,?,?,?,?)`, id, link.id, link.pos, guide.id, guide.name, v.uniform, v.id_card, v.etika, catatan, evaluatedAt, day, receivedAt, replaces, v.versi, v.seragam, v.teguran, v.teguran_n, v.berat, v.apresiasi, v.petugas_id, v.petugas_nama);
+    for (const [jenis, kode] of [["berat", v.berat], ["apresiasi", v.apresiasi]]) if (kode) await insert(db, "visit_flags", {
+      evaluation_id: id,
+      jenis,
+      kode,
+      guide_id: guide.id,
+      guide_name: guide.name,
+      pos: link.pos,
+      wita_date: day,
+      evaluated_at: evaluatedAt,
+      catatan: catatan.trim(),
+      petugas_nama: v.petugas_nama,
+      status: "menunggu",
+      keputusan_catatan: ""
+    });
     accepted.push({
       evaluationId: item.evaluationId,
       duplicate: false
@@ -208,6 +364,17 @@ var historyReasons = Object.freeze({
   ID_PORTAL: "Ditolak: evaluationId sama dengan penilaian yang sudah ada di portal"
 });
 var historyReasonKeys = Object.keys(historyReasons);
+var visitFindingSums = "sum(CASE WHEN id_card=0 THEN 1 ELSE 0 END) AS n_id,sum(CASE WHEN versi=2 AND seragam='kurang' THEN 1 ELSE 0 END) AS n_kurang,sum(CASE WHEN versi=2 THEN CASE WHEN seragam='tidak' THEN 1 ELSE 0 END WHEN uniform=-1 THEN 1 ELSE 0 END) AS n_tidak,sum(CASE WHEN versi=2 THEN teguran_n WHEN etika<0 AND uniform>=1 THEN 1 ELSE 0 END) AS n_teguran";
+function rowFindings(r) {
+  const v2 = Number(r.versi) === 2, uniform = Number(r.uniform), etika = Number(r.etika);
+  return {
+    nId: Number(r.id_card) === 0 ? 1 : 0,
+    nKurang: v2 && r.seragam === "kurang" ? 1 : 0,
+    nTidak: v2 ? r.seragam === "tidak" ? 1 : 0 : uniform === -1 ? 1 : 0,
+    nTeguran: v2 ? Number(r.teguran_n) : etika < 0 && uniform >= 1 ? 1 : 0
+  };
+}
+var visitScoreOf = (r, ruleOf) => 100 - potonganOf(ruleOf(String(r.wita_date).slice(0, 7)), rowFindings(r));
 
 // supabase/functions/_shared/portal/guide-form.mjs
 var guidePosts = {
@@ -242,6 +409,14 @@ async function takeGuideFormIpSlot(db, action, clientIp, b) {
   await run(db, "DELETE FROM guide_form_rate_limits WHERE window_start<?", new Date(Date.now() - 24 * 36e5).toISOString());
   return await takeSlot(db, `guide-form\0${action}\0ip\0${clientIp}`, batchSize(action, b), guideFormLimits[action]);
 }
+var optionalCode = (v) => v === void 0 || v === null || v === "" || typeof v === "string" && findingCode.test(v);
+function checkNewCriteria(c, errors) {
+  if (!seragamValues.includes(c.seragam)) errors.push("criteria.seragam harus lengkap, kurang, atau tidak");
+  const teguran = c.teguran ?? [];
+  if (!Array.isArray(teguran) || teguran.length > scoringRules.teguranMaks || !teguran.every((code) => typeof code === "string" && findingCode.test(code)) || new Set(teguran).size !== teguran.length) errors.push(`criteria.teguran berisi paling banyak ${scoringRules.teguranMaks} jenis teguran yang berbeda`);
+  if (!optionalCode(c.berat)) errors.push("criteria.berat tidak valid");
+  if (!optionalCode(c.apresiasi)) errors.push("criteria.apresiasi tidak valid");
+}
 function checkGuideItem(item, pos) {
   const errors = [];
   if (!item || typeof item !== "object" || Array.isArray(item)) return ["penilaian tidak valid"];
@@ -254,28 +429,41 @@ function checkGuideItem(item, pos) {
   if (!c || typeof c !== "object" || Array.isArray(c)) errors.push("criteria wajib");
   else {
     if (typeof c.idCard !== "boolean") errors.push("criteria.idCard harus Ya/Tidak");
-    if (![-1, 1, 2].includes(c.uniform)) errors.push("criteria.uniform harus -1, 1, atau 2");
-    if (c.etika !== void 0 && c.etika !== null && !(Number.isInteger(c.etika) && c.etika >= -5 && c.etika <= 5)) errors.push("criteria.etika harus bilangan bulat -5 sampai 5");
+    if (c.seragam !== void 0) checkNewCriteria(c, errors);
+    else {
+      if (![-1, 1, 2].includes(c.uniform)) errors.push("criteria.uniform harus -1, 1, atau 2");
+      if (c.etika !== void 0 && c.etika !== null && !(Number.isInteger(c.etika) && c.etika >= -5 && c.etika <= 5)) errors.push("criteria.etika harus bilangan bulat -5 sampai 5");
+    }
   }
+  if (item.petugasId !== void 0 && item.petugasId !== null && item.petugasId !== "" && (typeof item.petugasId !== "string" || !uuid.test(item.petugasId))) errors.push("petugasId tidak valid");
   if (item.catatan !== void 0 && item.catatan !== null && (typeof item.catatan !== "string" || item.catatan.length > 500)) errors.push("catatan maksimal 500 huruf");
   if (item.koreksiDari !== void 0 && item.koreksiDari !== null && item.koreksiDari !== "" && (typeof item.koreksiDari !== "string" || !uuid.test(item.koreksiDari) || item.koreksiDari === item.evaluationId)) errors.push("koreksiDari tidak valid");
   return errors;
 }
 var cleanItem = (item) => {
+  const c = item.criteria;
+  const criteria = c.seragam !== void 0 ? {
+    idCard: c.idCard,
+    seragam: c.seragam,
+    teguran: [...c.teguran || []],
+    berat: c.berat || null,
+    apresiasi: c.apresiasi || null
+  } : {
+    idCard: c.idCard,
+    uniform: c.uniform,
+    etika: c.etika ?? 0
+  };
   const out = {
     evaluationId: item.evaluationId,
     guideId: item.guideId.trim(),
     guideName: item.guideName.trim(),
     pos: Number(item.pos),
     timestamp: item.timestamp,
-    criteria: {
-      idCard: item.criteria.idCard,
-      uniform: item.criteria.uniform,
-      etika: item.criteria.etika ?? 0
-    },
+    criteria,
     catatan: typeof item.catatan === "string" ? item.catatan : ""
   };
   if (item.koreksiDari) out.koreksiDari = item.koreksiDari;
+  if (c.seragam !== void 0 && item.petugasId) out.petugasId = item.petugasId;
   return out;
 };
 async function admitGuideForm(db, action, b) {
@@ -321,7 +509,8 @@ var guideFormContext = async (db, link) => ({
   pos: link.pos,
   label: link.label,
   serverTime: now(),
-  guides: await formGuideList(db)
+  guides: await formGuideList(db),
+  penilaian: await formScoringContext(db)
 });
 async function submitGuideForm(db, admitted, nowMs = Date.now()) {
   return admitted.items.length ? await ingestGuideEvaluations(db, admitted.link, admitted.items, nowMs) : {
@@ -365,7 +554,14 @@ function guideFormReceipt(admitted, result) {
 
 // supabase/functions/_shared/portal/visit-sheets.mjs
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-var visitSheetHeader = Object.freeze(["evaluationId", "timestamp", "pos", "guideId", "guideName", "uniform", "idCard", "review", "etika", "catatan", "receivedAt", "koreksiDari", "status"]);
+var visitSheetLegacyColumns = 13;
+var visitSheetHeader = Object.freeze(["evaluationId", "timestamp", "pos", "guideId", "guideName", "uniform", "idCard", "review", "etika", "catatan", "receivedAt", "koreksiDari", "status", "versi", "seragam", "teguran", "pelanggaranBerat", "apresiasi", "petugas", "nilai"]);
+var columnLetter = (n) => {
+  let out = "";
+  for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) out = String.fromCharCode(65 + (x - 1) % 26) + out;
+  return out;
+};
+var lastColumn = columnLetter(visitSheetHeader.length);
 var visitSheetLimits = Object.freeze({
   batchRows: 500,
   dirtyRows: 200,
@@ -385,7 +581,7 @@ var visitSheetLimits = Object.freeze({
     }
   })
 });
-var columnWidths = [290, 190, 50, 90, 200, 80, 70, 70, 70, 240, 190, 290, 80];
+var columnWidths = [290, 190, 50, 90, 200, 80, 70, 70, 70, 240, 190, 290, 80, 60, 120, 220, 160, 140, 180, 60];
 var sheetsApi = "https://sheets.googleapis.com/v4/spreadsheets";
 var driveApi = "https://www.googleapis.com/drive/v3/files";
 var tokenApi = "https://oauth2.googleapis.com/token";
@@ -395,7 +591,7 @@ var kunjunganFolder = "SPH-Portal-Kunjungan";
 var driveIdPattern = /^[A-Za-z0-9_-]{8,200}$/;
 var evaluationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var sheetAccessTokens = /* @__PURE__ */ new Map();
-var guideNotes = ["Penilaian Guide \u2014 salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).", "Satu tab per bulan, tanggal menurut WITA. Kolomnya sama dengan tab Evaluations aplikasi NilaiGuide lama.", 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', "Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.", "Untuk mengolah data, gunakan Data \u2192 Tampilan filter, atau salin tab ke spreadsheet lain.", `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
+var guideNotes = ["Penilaian Guide \u2014 salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).", "Satu tab per bulan, tanggal menurut WITA. Kolom A\u2013M sama dengan tab Evaluations aplikasi NilaiGuide lama.", 'Kolom N\u2013T: penilaian "100 \u2212 potongan" (versi 2). nilai = 100 \u2212 potongan menurut aturan bulan itu. Baris cara lama (versi kosong) dihitung portal dengan pemetaan: ID 0 = tanpa ID, Uniform \u22121 = tidak berseragam, Etika minus dengan seragam sesuai = satu teguran.', 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', "Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.", "Untuk mengolah data, gunakan Data \u2192 Tampilan filter, atau salin tab ke spreadsheet lain.", `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
 function visitSheetConfig(env = {}) {
   const value = (name) => typeof env[name] === "string" ? env[name].trim() : "";
   const config = {
@@ -409,7 +605,11 @@ function visitSheetConfig(env = {}) {
     configured: Boolean(config.clientId && config.clientSecret && config.refreshToken && driveIdPattern.test(config.folder))
   };
 }
-var visitSheetValues = (r) => [r.id, r.evaluated_at, Number(r.pos), r.guide_id, r.guide_name, Number(r.uniform), Number(r.id_card), Number(r.review), Number(r.etika), r.catatan || "", r.received_at, r.koreksi_dari || "", r.status];
+function visitSheetValues(r, ruleOf) {
+  const base = [r.id, r.evaluated_at, Number(r.pos), r.guide_id, r.guide_name, Number(r.uniform), Number(r.id_card), Number(r.review), Number(r.etika), r.catatan || "", r.received_at, r.koreksi_dari || "", r.status];
+  if (Number(r.versi) !== 2) return [...base, "", "", "", "", "", "", ""];
+  return [...base, 2, seragamLabels[r.seragam] || r.seragam, r.teguran || "", r.berat || "", r.apresiasi || "", r.petugas_nama || "", visitScoreOf(r, ruleOf)];
+}
 var sameSheetRow = (cells, expected) => Array.isArray(cells) && expected.every((v, i) => typeof v === "number" ? Number(cells[i]) === v && cells[i] !== "" && cells[i] !== void 0 : String(cells[i] ?? "") === v);
 var quoteTab = (title) => `'${title}'`;
 var monthOfDay = (day) => day.slice(0, 7);
@@ -741,7 +941,8 @@ async function sheetTabs(ctx, spreadsheetId) {
   return (meta.sheets || []).map((s) => ({
     sheetId: Number(s.properties?.sheetId),
     title: String(s.properties?.title || ""),
-    rowCount: Number(s.properties?.gridProperties?.rowCount || 0)
+    rowCount: Number(s.properties?.gridProperties?.rowCount || 0),
+    columnCount: Number(s.properties?.gridProperties?.columnCount || 0)
   }));
 }
 function monthTabRequests(title, sheetId, rows) {
@@ -810,6 +1011,58 @@ function monthTabRequests(title, sheetId, rows) {
     }
   }];
 }
+function widenTabRequests(sheet) {
+  const start = sheet.columnCount, add = visitSheetHeader.length - start;
+  if (add <= 0) return [];
+  return [{
+    appendDimension: {
+      sheetId: sheet.sheetId,
+      dimension: "COLUMNS",
+      length: add
+    }
+  }, {
+    updateCells: {
+      range: {
+        sheetId: sheet.sheetId,
+        startRowIndex: 0,
+        endRowIndex: 1,
+        startColumnIndex: start,
+        endColumnIndex: visitSheetHeader.length
+      },
+      rows: [{
+        values: visitSheetHeader.slice(start).map((h) => ({
+          userEnteredValue: {
+            stringValue: h
+          },
+          userEnteredFormat: {
+            textFormat: {
+              bold: true
+            },
+            backgroundColor: {
+              red: 0.93,
+              green: 0.95,
+              blue: 0.97
+            }
+          }
+        }))
+      }],
+      fields: "userEnteredValue,userEnteredFormat(textFormat,backgroundColor)"
+    }
+  }, ...columnWidths.slice(start).map((pixelSize, i) => ({
+    updateDimensionProperties: {
+      range: {
+        sheetId: sheet.sheetId,
+        dimension: "COLUMNS",
+        startIndex: start + i,
+        endIndex: start + i + 1
+      },
+      properties: {
+        pixelSize
+      },
+      fields: "pixelSize"
+    }
+  }))];
+}
 async function addMonthTabs(ctx, file, meta, titles, pendingByTab) {
   const { runTx } = ctx, used = new Set(meta.map((s) => s.sheetId)), requests = [], added = [];
   for (const title of titles) {
@@ -867,12 +1120,14 @@ async function copyRound(ctx, summary) {
     pending: await all(db, "SELECT * FROM visit_evaluations WHERE sheet_row IS NULL ORDER BY received_at,id LIMIT ?", visitSheetLimits.batchRows),
     dirty: await all(db, "SELECT * FROM visit_evaluations WHERE sheet_dirty=1 ORDER BY sheet_tab,sheet_row LIMIT ?", visitSheetLimits.dirtyRows),
     files: await all(db, "SELECT * FROM visit_sheet_files"),
-    tabs: await all(db, "SELECT * FROM visit_sheet_tabs")
+    tabs: await all(db, "SELECT * FROM visit_sheet_tabs"),
+    ruleOf: await scoreRuleFinder(db)
   }));
   if (!work.pending.length && !work.dirty.length) return {
     more: false,
     structural: false
   };
+  const sheetRow = (r) => visitSheetValues(r, work.ruleOf);
   const pendingByTab = groupBy(work.pending, (r) => monthOfDay(r.wita_date)), dirtyByTab = groupBy(work.dirty, (r) => r.sheet_tab);
   const tabRows = new Map(work.tabs.map((t) => [t.title, t])), files = new Map(work.files.map((f) => [Number(f.year), f]));
   const titles = [.../* @__PURE__ */ new Set([...pendingByTab.keys(), ...dirtyByTab.keys()])].sort();
@@ -880,7 +1135,7 @@ async function copyRound(ctx, summary) {
   for (const year of [...new Set(titles.map((t) => Number(t.slice(0, 4))))]) {
     const file = files.get(year) || await yearSpreadsheet(ctx, year);
     const meta = await sheetTabs(ctx, file.spreadsheet_id), yearTitles = titles.filter((t) => t.startsWith(`${year}-`));
-    const missing = [], grow = [];
+    const missing = [], grow = [], widen = [];
     let changed = false;
     for (const title of yearTitles) {
       const sheet = meta.find((s) => s.title === title), known = tabRows.get(title);
@@ -904,6 +1159,7 @@ async function copyRound(ctx, summary) {
         add: Math.max(visitSheetLimits.growRows, needed - sheet.rowCount),
         rowCount: sheet.rowCount
       });
+      if (sheet.columnCount < visitSheetHeader.length) widen.push(sheet);
     }
     if (missing.length) {
       await addMonthTabs(ctx, file, meta, missing, pendingByTab);
@@ -937,20 +1193,21 @@ async function copyRound(ctx, summary) {
         continue;
       }
     }
-    if (grow.length) {
+    if (grow.length || widen.length) {
       await google.write(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}:batchUpdate`, {
-        requests: grow.map((g) => ({
+        requests: [...grow.map((g) => ({
           appendDimension: {
             sheetId: g.sheetId,
             dimension: "ROWS",
             length: g.add
           }
-        }))
+        })), ...widen.flatMap(widenTabRequests)]
       }, "sheet-structure");
-      await runTx(async (db) => {
+      if (grow.length) await runTx(async (db) => {
         await holdSheetLease(db, ctx.owner);
         for (const g of grow) await run(db, "UPDATE visit_sheet_tabs SET row_count=?,updated_at=? WHERE title=?", g.rowCount + g.add, now(), g.title);
       });
+      summary.widened += widen.length;
     }
     const data = [], placed = [], nextRows = [];
     for (const title of yearTitles) {
@@ -958,9 +1215,9 @@ async function copyRound(ctx, summary) {
       if (!rows.length) continue;
       const start = Number(tabRows.get(title).next_row);
       data.push({
-        range: `${quoteTab(title)}!A${start}:M${start + rows.length - 1}`,
+        range: `${quoteTab(title)}!A${start}:${lastColumn}${start + rows.length - 1}`,
         majorDimension: "ROWS",
-        values: rows.map(visitSheetValues)
+        values: rows.map(sheetRow)
       });
       rows.forEach((r, i) => placed.push({
         id: r.id,
@@ -971,9 +1228,9 @@ async function copyRound(ctx, summary) {
       nextRows.push([title, start + rows.length]);
     }
     for (const r of rewrites) data.push({
-      range: `${quoteTab(r.sheet_tab)}!A${r.sheet_row}:M${r.sheet_row}`,
+      range: `${quoteTab(r.sheet_tab)}!A${r.sheet_row}:${lastColumn}${r.sheet_row}`,
       majorDimension: "ROWS",
-      values: [visitSheetValues(r)]
+      values: [sheetRow(r)]
     });
     ctx.writing = true;
     await google.write(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}/values:batchUpdate`, {
@@ -1001,14 +1258,17 @@ async function verifyOldRows(ctx, summary, cutoff) {
   const { google, runTx } = ctx;
   const work = await runTx(async (db) => ({
     rows: await all(db, "SELECT * FROM visit_evaluations WHERE wita_date<? AND sheet_row IS NOT NULL AND sheet_dirty=0 AND sheet_verified_at IS NULL ORDER BY sheet_tab,sheet_row LIMIT ?", cutoff, visitSheetLimits.verifyRows),
-    files: await all(db, "SELECT * FROM visit_sheet_files")
+    files: await all(db, "SELECT * FROM visit_sheet_files"),
+    ruleOf: await scoreRuleFinder(db)
   }));
   if (!work.rows.length) return;
   const files = new Map(work.files.map((f) => [Number(f.year), f]));
-  const verified = [], stale = [], moved = /* @__PURE__ */ new Set();
+  const verified = [], stale = [], moved = /* @__PURE__ */ new Set(), widths = /* @__PURE__ */ new Map();
   for (const [title, rows] of groupBy(work.rows, (r) => r.sheet_tab)) {
     const file = files.get(Number(title.slice(0, 4)));
     if (!file) continue;
+    if (!widths.has(file.year)) widths.set(file.year, new Map((await sheetTabs(ctx, file.spreadsheet_id)).map((t) => [t.title, t.columnCount])));
+    const width = Math.min(visitSheetHeader.length, Math.max(visitSheetLegacyColumns, widths.get(file.year).get(title) || visitSheetLegacyColumns)), readTo = columnLetter(width);
     const runs = [];
     for (const r of rows) {
       const last = runs.at(-1);
@@ -1023,13 +1283,14 @@ async function verifyOldRows(ctx, summary, cutoff) {
     }
     for (const part of chunked(runs, visitSheetLimits.rangesPerRead)) {
       const url = new URL(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}/values:batchGet`);
-      for (const span of part) url.searchParams.append("ranges", `${quoteTab(title)}!A${span.start}:M${span.end}`);
+      for (const span of part) url.searchParams.append("ranges", `${quoteTab(title)}!A${span.start}:${readTo}${span.end}`);
       url.searchParams.set("valueRenderOption", "UNFORMATTED_VALUE");
       url.searchParams.set("majorDimension", "ROWS");
       const data = await google.read(url.href, "sheet-read");
       part.forEach((span, i) => span.rows.forEach((r, j) => {
         const cells = data.valueRanges?.[i]?.values?.[j];
-        if (sameSheetRow(cells, visitSheetValues(r))) verified.push(r);
+        const expected = visitSheetValues(r, work.ruleOf);
+        if (sameSheetRow(cells, expected.slice(0, width)) && expected.slice(width).every((v) => v === "")) verified.push(r);
         else if (String(cells?.[0] ?? "").trim().toLowerCase() === r.id) stale.push(r);
         else moved.add(title);
       }));
@@ -1074,9 +1335,10 @@ async function foldVerifiedDays(db, owner, cutoff) {
   for (const g of groups) await run(db, `INSERT INTO visit_monthly_totals(month,guide_id,pos,antar,uniform,uniform_patuh,id_card,review,etika,hari,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(month,guide_id,pos) DO UPDATE SET antar=visit_monthly_totals.antar+excluded.antar,uniform=visit_monthly_totals.uniform+excluded.uniform,uniform_patuh=visit_monthly_totals.uniform_patuh+excluded.uniform_patuh,
   id_card=visit_monthly_totals.id_card+excluded.id_card,review=visit_monthly_totals.review+excluded.review,etika=visit_monthly_totals.etika+excluded.etika,hari=visit_monthly_totals.hari+excluded.hari,updated_at=excluded.updated_at`, g.month, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), Number(g.hari), stamp);
-  for (const g of await all(db, `SELECT wita_date AS day,guide_id,pos,count(*) AS antar,sum(uniform) AS uniform,sum(CASE WHEN uniform>=1 THEN 1 ELSE 0 END) AS uniform_patuh,sum(id_card) AS id_card,sum(review) AS review,sum(etika) AS etika FROM visit_evaluations WHERE status='aktif' AND wita_date<=? GROUP BY wita_date,guide_id,pos`, through)) await run(db, `INSERT INTO visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at) VALUES(?,?,?,'portal',?,?,?,?,?,?,?)
+  for (const g of await all(db, `SELECT wita_date AS day,guide_id,pos,count(*) AS antar,sum(uniform) AS uniform,sum(CASE WHEN uniform>=1 THEN 1 ELSE 0 END) AS uniform_patuh,sum(id_card) AS id_card,sum(review) AS review,sum(etika) AS etika,${visitFindingSums} FROM visit_evaluations WHERE status='aktif' AND wita_date<=? GROUP BY wita_date,guide_id,pos`, through)) await run(db, `INSERT INTO visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at,n_id,n_kurang,n_tidak,n_teguran) VALUES(?,?,?,'portal',?,?,?,?,?,?,?,?,?,?,?)
    ON CONFLICT(day,guide_id,pos,sumber) DO UPDATE SET antar=visit_daily_totals.antar+excluded.antar,uniform=visit_daily_totals.uniform+excluded.uniform,uniform_patuh=visit_daily_totals.uniform_patuh+excluded.uniform_patuh,
-   id_card=visit_daily_totals.id_card+excluded.id_card,review=visit_daily_totals.review+excluded.review,etika=visit_daily_totals.etika+excluded.etika,updated_at=excluded.updated_at`, g.day, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), stamp);
+   id_card=visit_daily_totals.id_card+excluded.id_card,review=visit_daily_totals.review+excluded.review,etika=visit_daily_totals.etika+excluded.etika,updated_at=excluded.updated_at,
+   n_id=visit_daily_totals.n_id+excluded.n_id,n_kurang=visit_daily_totals.n_kurang+excluded.n_kurang,n_tidak=visit_daily_totals.n_tidak+excluded.n_tidak,n_teguran=visit_daily_totals.n_teguran+excluded.n_teguran`, g.day, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), stamp, Number(g.n_id), Number(g.n_kurang), Number(g.n_tidak), Number(g.n_teguran));
   const days = Number((await one(db, "SELECT count(DISTINCT wita_date) AS n FROM visit_evaluations WHERE wita_date<=?", through)).n);
   const deleted = (await run(db, "DELETE FROM visit_evaluations WHERE wita_date<=?", through)).changes;
   await run(db, "UPDATE visit_sheet_state SET folded_through=?,updated_at=? WHERE id=1", through, stamp);
@@ -1126,6 +1388,7 @@ async function runVisitSheetSync({ runTx, env, fetchImpl, trigger = "manual", to
     written: 0,
     rewritten: 0,
     rescanned: 0,
+    widened: 0,
     verified: 0,
     rewrite_queued: 0,
     folded_days: 0,

@@ -73,7 +73,12 @@ test('terapkan per bagian: bagian yang diulang tidak menggandakan, dan baru dihi
   assert.deepEqual([done.import.first_day,done.import.last_day],['2026-02-10','2026-04-01']);
   const o=visitOverview(f.db,'2026-02-01','2026-04-30');
   assert.equal(o.ringkasan.pengantaran,4);assert.equal(o.ringkasan.hariDinilai,3);
-  const g1=o.perGuide.find(g=>g.guideId==='G-001');assert.deepEqual([g1.antar,g1.uniform,g1.idCard,g1.etika,g1.review,g1.hari],[2,3,2,3,0,2]);
+  // Nilai lama dipetakan ke "100 − potongan": G-002 tanpa ID (−20) dan Uniform −1 (−20);
+  // Etika −1 saat seragam tidak sesuai tidak dihitung lagi sebagai teguran.
+  const g1=o.perGuide.find(g=>g.guideId==='G-001'),g2=o.perGuide.find(g=>g.guideId==='G-002');
+  assert.deepEqual([g1.antar,g1.hari,g1.nilai,g1.tanpaId,g1.tidakBerseragam,g1.teguran],[2,2,100,0,0,0]);
+  assert.deepEqual([g2.antar,g2.nilai,g2.tanpaId,g2.tidakBerseragam,g2.teguran],[1,60,1,1,0]);
+  assert.deepEqual(all(f.db,"SELECT n_id,n_kurang,n_tidak,n_teguran FROM visit_daily_totals WHERE guide_id='G-002'").map(r=>({...r})),[{n_id:1,n_kurang:0,n_tidak:1,n_teguran:0}]);
   assert.equal(visitOverview(f.db,'2026-02-11','2026-02-11').perPos.find(p=>p.pos===3).pengantaran,1,'rentang harian bebas');
   assert.equal(one(f.db,'SELECT count(*) n FROM visit_history_ids').n,4);
   assert.equal(one(f.db,"SELECT count(*) n FROM audit_events WHERE action='IMPORT' AND object_type='visit_history_import'").n,1);
@@ -119,10 +124,11 @@ test('masa uji coba: bentrok 15 menit dengan penilaian portal dilewati, ID porta
 
 test('rekap harian portal dan migrasi awal dijumlahkan; izin dan batas bagian dijaga',t=>{
   const f=fixture(t);
-  run(f.db,"INSERT INTO visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at) VALUES('2026-06-01','G-001',1,'portal',2,3,2,1,0,2,?)",now());
-  const id=apply(f,[row(wita('2026-06-01'),{uniform:-1,idCard:0,etika:-2})],file(1)).import.id;finish(f,id);
+  run(f.db,"INSERT INTO visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at,n_id,n_kurang,n_tidak,n_teguran) VALUES('2026-06-01','G-001',1,'portal',2,3,2,1,0,2,?,1,0,0,1)",now());
+  const id=apply(f,[row(wita('2026-06-01'),{uniform:-1,idCard:0,etika:-2}),row(wita('2026-06-01','10:00'),{uniform:1,idCard:1,etika:-1})],file(2)).import.id;finish(f,id);
   const g=visitOverview(f.db,'2026-06-01','2026-06-01').perGuide.find(x=>x.guideId==='G-001');
-  assert.deepEqual([g.antar,g.uniform,g.uniformPatuh,g.idCard,g.etika,g.hari],[3,2,2,1,0,1]);
+  // Portal: 1 tanpa ID + 1 teguran; NilaiGuide: tanpa ID + Uniform −1, lalu Etika −1 dengan seragam sesuai = 1 teguran.
+  assert.deepEqual([g.antar,g.tanpaId,g.tidakBerseragam,g.teguran,g.potongan,g.hari],[4,2,1,2,100,1]);assert.equal(g.nilai,75);
   assert.throws(()=>preview(f,[row(wita('2026-06-02'))],file(1),0,f.users.leader),e=>e.status===403);
   assert.throws(()=>f.route(f.users.hr,'history'),e=>e.status===403);
   const many=Array.from({length:historyRules.barisPerBagian+1},()=>row(wita('2026-06-02')));
