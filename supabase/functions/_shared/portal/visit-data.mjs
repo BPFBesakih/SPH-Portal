@@ -931,13 +931,13 @@ export async function visitDayRows(db, from, to) {
   return out;
 }
 export function rewardStatus(g, rule) {
-  if (g.antar < rule.minimal) return {
-    status: 'kurang',
-    alasan: `Belum cukup data (< ${rule.minimal} pengantaran)`
-  };
   if (g.berat > 0) return {
     status: 'gugur',
     alasan: 'Pelanggaran berat terverifikasi'
+  };
+  if (g.antar < rule.minimal) return {
+    status: 'kurang',
+    alasan: `Belum cukup data (< ${rule.minimal} pengantaran)`
   };
   if (g.nilai < rule.ambang) return {
     status: 'bawah',

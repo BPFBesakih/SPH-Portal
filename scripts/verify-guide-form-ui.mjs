@@ -5,6 +5,8 @@
 // Portal SQLite di memori + Google Drive/Sheets TIRUAN (scripts/fake-google-sheets.mjs),
 // data guide fiktif. Memeriksa skenario UJI-01/02/03/05/10/13/17/27 PRD di HP pos,
 // daftar saran nama guide (nama + ID · regu, filter, keyboard, nama kembar),
+// isian "100 − potongan" (ID, seragam, teguran ≤ 2, laporan berat dengan catatan wajib,
+// nama petugas sekali per shift), Verifikasi dan Aturan Nilai di ruang kerja,
 // salinan spreadsheet di latar belakang, serta Data Guide (impor .csv), Dashboard,
 // migrasi awal NilaiGuide (pratinjau, putus lalu lanjutkan, batalkan), dan Tautan Pos
 // (periksa koneksi, sinkronkan) di portal.
@@ -32,6 +34,7 @@ let seq=0;for(const regu of ['A1','A2','D1','D2'])for(let i=1;i<=10;i++){seq++;i
 // Dua guide bernama persis sama: daftar saran harus membedakannya lewat ID dan regu.
 for(const [id,regu] of [['G-090','A1'],['G-091','D2']])insert(db,'visit_guides',{id,seq:Number(id.slice(2)),name:'Guide Kembar Uji',kategori:regu.startsWith('A')?'Asing':'Domestik',regu,is_active:1});
 const tokens={1:'1'.repeat(64),3:'3'.repeat(64)};
+const petugasUji=insert(db,'visit_assessors',{nama:'Petugas Uji Satu',keterangan:'Pos 1',is_active:1});
 for(const pos of [1,3])insert(db,'guide_form_links',{pos,label:guidePosts[pos],token_hash:digest(tokens[pos]),share_token:tokens[pos],is_active:1,created_by:user.id});
 const google=createFakeGoogle();
 const port=await freePort(),base=`http://127.0.0.1:${port}`,dataDir=mkdtempSync(resolve(tmpdir(),'guide-form-ui-'));
@@ -49,7 +52,7 @@ try{
   const saran=()=>page.$$eval('#guideSaran .saran-item',els=>els.map(e=>({id:e.dataset.saran,nama:e.querySelector('.saran-nama').textContent,meta:e.querySelector('.saran-meta').textContent})));
   const pilihSaran=async name=>{const ids=(await saran()).filter(r=>r.nama===name).map(r=>r.id);assert.equal(ids.length,1,`satu saran bernama ${name}`);await page.click(`#guideSaran [data-saran="${ids[0]}"]`);};
   // Ketik sebagian nama lalu pilih dari daftar, seperti petugas di pos.
-  const pick=async(name,uniform='1',id='1')=>{await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput',name.slice(0,-1));await pilihSaran(name);await page.click(`.criterion[data-crit="idCard"] .seg[data-val="${id}"]`);await page.click(`.criterion[data-crit="uniform"] .seg[data-val="${uniform}"]`);};
+  const pick=async(name,seragam='lengkap',id='1')=>{await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput',name.slice(0,-1));await pilihSaran(name);await page.click(`.criterion[data-crit="idCard"] .seg[data-val="${id}"]`);await page.click(`.criterion[data-crit="seragam"] .seg[data-val="${seragam}"]`);};
   await page.goto(base+'/penilaian-guide/');await page.waitForTimeout(800);await page.click('#tutSkip').catch(()=>{});
   await check('UJI-02 tanpa token hanya petunjuk tautan, tanpa daftar guide',async()=>{assert(await page.isVisible('#view-tautan'));assert.equal(await page.evaluate(()=>App.state.guides.length),0);assert.equal((await saran()).length,0);});
   await page.goto(base+'/penilaian-guide/#'+tokens[1]);await page.waitForFunction(()=>App.state.guides.length>30);
@@ -84,18 +87,37 @@ try{
     assert.equal(await page.inputValue('#guideInput'),'Guide Contoh D1-02');assert.equal(await page.evaluate(()=>App.state.form.guide.guideId),'G-022');
     assert(await page.isHidden('#guideSaran'));assert.equal(await page.evaluate(()=>window.__kirim),0);
   });
-  await pick('Guide Contoh A1-03','2');await page.click('.criterion[data-crit="etika"] [data-step="1"]');await page.fill('#catatan','=IMPORTDATA("x")');await page.dispatchEvent('#catatan','input');await page.waitForTimeout(600);
-  await check('UJI-13 draf pulih setelah dimuat ulang',async()=>{await page.reload();await page.waitForTimeout(1000);await page.evaluate(()=>App.go('nilai'));assert.equal(await page.inputValue('#guideInput'),'Guide Contoh A1-03');assert.equal(await page.inputValue('#catatan'),'=IMPORTDATA("x")');assert.equal(await page.textContent('#etikaNilai'),'+1');});
+  await check('Isian 100 − potongan: daftar teguran dari portal, paling banyak 2; ID dan seragam wajib; nama petugas sekali per shift',async()=>{
+    await page.evaluate(()=>App.go('nilai'));
+    assert.equal(await page.$$eval('#teguranList [data-teguran]',els=>els.length),5);assert.match(await page.textContent('#petunjukId'),/Terpasang = kartu ID resmi/);
+    assert.equal(await page.$$eval('#beratSelect option',o=>o.length),6);assert(await page.isVisible('#petugasSelect'),'nama petugas diminta');
+    await page.fill('#guideInput','Guide Contoh A1-0');await pilihSaran('Guide Contoh A1-03');await page.click('#btnSave');
+    assert.match(await page.textContent('#toastWrap'),/Pilih ID-Card dan Seragam/);
+    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');await page.click('.criterion[data-crit="seragam"] .seg[data-val="kurang"]');
+    for(const kode of ['antrean','merokok-hp'])await page.click(`[data-teguran="${kode}"]`);
+    assert.equal(await page.$eval('[data-teguran="meninggalkan-tamu"]',b=>b.disabled),true,'chip ketiga dikunci');
+    await page.click('[data-teguran="merokok-hp"]');assert.deepEqual(await page.evaluate(()=>App.state.form.crit.teguran),['antrean']);
+    await page.click('#btnSave');assert.match(await page.textContent('#toastWrap'),/Pilih nama petugas/);assert.equal(rows(),0);
+    await page.selectOption('#petugasSelect',petugasUji.id);await page.waitForSelector('#petugasBox [data-ganti-petugas]');
+    assert.match(await page.textContent('#petugasBox'),/Petugas Uji Satu · berlaku sampai/);
+  });
+  await page.fill('#catatan','=IMPORTDATA("x")');await page.dispatchEvent('#catatan','input');await page.waitForTimeout(600);
+  await check('UJI-13 draf pulih setelah dimuat ulang (termasuk seragam dan teguran), nama petugas tetap',async()=>{await page.reload();await page.waitForTimeout(1000);await page.evaluate(()=>App.go('nilai'));assert.equal(await page.inputValue('#guideInput'),'Guide Contoh A1-03');assert.equal(await page.inputValue('#catatan'),'=IMPORTDATA("x")');
+    assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:true,seragam:'kurang',teguran:['antrean'],berat:'',apresiasi:''});assert(await page.$eval('[data-teguran="antrean"]',b=>b.classList.contains('active')));
+    assert.match(await page.textContent('#petugasBox'),/Petugas Uji Satu/);});
   await page.click('#btnSave');await until(c=>c.synced===1,'kiriman pertama');await settle();
-  await check('Simpan → ✅ hanya setelah portal menyimpan; salinan spreadsheet menyimpan catatan rumus sebagai teks',async()=>{
+  await check('Simpan → ✅ hanya setelah portal menyimpan; cara baru tersimpan dengan petugas; spreadsheet: catatan rumus tetap teks, kolom N–T terisi',async()=>{
     assert.equal(rows(),1);const saved=one(db,'SELECT * FROM visit_evaluations');assert.equal(saved.catatan,'=IMPORTDATA("x")');
-    const tab=google.rows(saved.wita_date.slice(0,7));assert.equal(tab.length,1);assert.equal(tab[0][9],'=IMPORTDATA("x")');
+    assert.deepEqual([saved.versi,saved.seragam,saved.teguran,saved.petugas_nama],[2,'kurang','antrean','Petugas Uji Satu']);
+    const tab=google.rows(saved.wita_date.slice(0,7));assert.equal(tab.length,1);assert.equal(tab[0][9],'=IMPORTDATA("x")');assert.deepEqual(tab[0].slice(13),[2,'Kurang lengkap','antrean','','','Petugas Uji Satu',70]);
   });
   await pick('Guide Contoh A1-03');await page.click('#btnSave');await page.waitForTimeout(400);
   await check('UJI-05 guide & pos sama < 15 menit ditahan aplikasi tanpa tombol lanjut',async()=>{assert.match(await page.textContent('#guideAmbigu'),/server akan menolaknya/);assert.equal(await page.$('#guideAmbigu [data-lanjut]'),null);});
-  await page.click('#guideAmbigu [data-fix]');await page.click('.criterion[data-crit="uniform"] .seg[data-val="-1"]');await page.click('#btnSave');await until(c=>c.synced===2,'koreksi');
+  await page.click('#guideAmbigu [data-fix]');await page.waitForSelector('#koreksiBar:not([hidden])');
+  await check('Koreksi membuka isian lama (seragam, teguran) untuk dibetulkan',async()=>{assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:true,seragam:'kurang',teguran:['antrean'],berat:'',apresiasi:''});assert.match(await page.textContent('#koreksiBar'),/Seragam Kurang lengkap, 1 teguran/);});
+  await page.click('.criterion[data-crit="seragam"] .seg[data-val="tidak"]');await page.click('[data-teguran="antrean"]');await page.click('#btnSave');await until(c=>c.synced===2,'koreksi');
   await check('UJI-10 koreksi menandai baris lama diganti, dengan jam yang sama',async()=>{const [a,b]=all(db,'SELECT * FROM visit_evaluations ORDER BY received_at');assert.equal(a.status,'diganti');assert.equal(b.status,'aktif');assert.equal(b.koreksi_dari,a.id);assert.equal(b.evaluated_at,a.evaluated_at);});
-  await ctx.setOffline(true);for(const name of ['Guide Contoh A2-01','Guide Contoh D1-02','Guide Contoh D2-03']){await pick(name,'1','0');await page.click('#btnSave');await page.waitForTimeout(250);}
+  await ctx.setOffline(true);for(const name of ['Guide Contoh A2-01','Guide Contoh D1-02','Guide Contoh D2-03']){await pick(name,'lengkap','0');await page.click('#btnSave');await page.waitForTimeout(250);}
   assert.equal((await page.evaluate(()=>DB.counts())).pending,3);
   await ctx.setOffline(false);await page.evaluate(()=>window.dispatchEvent(new Event('online')));await until(c=>c.pending===0&&c.synced===5,'antrean offline');
   await check('UJI-03 tiga penilaian offline terkirim setelah online',async()=>{assert.equal(rows(),5);});
@@ -103,15 +125,22 @@ try{
     await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput','kembar');
     assert.deepEqual((await saran()).map(r=>[r.id,r.nama,r.meta]),[['G-090','Guide Kembar Uji','G-090 · Asing · Regu 1'],['G-091','Guide Kembar Uji','G-091 · Domestik · Regu 2']]);
     await page.click('#guideSaran [data-saran="G-091"]');assert(await page.isHidden('#guideSaran'));assert.match(await page.textContent('#guidePicked'),/G-091/);
-    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');await page.click('.criterion[data-crit="uniform"] .seg[data-val="1"]');
+    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');await page.click('.criterion[data-crit="seragam"] .seg[data-val="lengkap"]');
+    // Laporan pelanggaran berat: catatan wajib, lalu menunggu verifikasi Pengelola.
+    await page.click('#laporanBox summary');await page.selectOption('#beratSelect','pungutan');assert.match(await page.textContent('#catatanWajib'),/wajib/);
+    await page.click('#btnSave');assert.match(await page.textContent('#toastWrap'),/Tulis catatan singkat/);
+    await page.fill('#catatan','Meminta uang parkir ke tamu.');await page.dispatchEvent('#catatan','input');
     await page.click('#btnSave');await until(c=>c.synced===6,'nama kembar');
+    assert.equal(one(db,"SELECT status FROM visit_flags WHERE guide_id='G-091'").status,'menunggu');
     assert.deepEqual(all(db,"SELECT guide_id FROM visit_evaluations WHERE guide_name='Guide Kembar Uji'").map(r=>r.guide_id),['G-091']);
   });
   await page.evaluate(()=>App.go('tautan'));await page.fill('#tautanInput',`${base}/penilaian-guide/#${tokens[3]}`);await page.click('#formTautan button[type=submit]');await page.waitForTimeout(1200);
   await check('UJI-27 tempel tautan Pos 3; pemilih pos muncul',async()=>{assert(await page.isVisible('#homePos'));assert.equal((await page.$$eval('#homePos option',o=>o.length)),2);});
   const csv=await page.evaluate(async()=>{let out='';const orig=App.download;App.download=(n,c)=>{out=c;};await App.exportCsv();App.download=orig;return out;});
-  await check('UJI-17 CSV menulis Uniform -1 dan 2',async()=>{const lines=csv.split('\n').filter(l=>l.includes('A1-03'));assert(lines.some(l=>l.includes(';-1;')));assert(lines.some(l=>l.includes(';2;')));});
-  await check('NG-R6 riwayat membedakan Sesuai dan Bagus',async()=>{await page.evaluate(()=>App.go('riwayat'));await page.waitForTimeout(300);const t=await page.textContent('#historyList');assert.match(t,/Uniform Bagus/);assert.match(t,/Uniform Sesuai/);});
+  await check('UJI-17 CSV menulis temuan per pengantaran dan rinciannya',async()=>{const lines=csv.split('\n').filter(l=>l.includes('A1-03'));
+    assert(lines.some(l=>/;Tidak berseragam;;;;Petugas Uji Satu;/.test(l)),lines.join('\n'));assert(lines.some(l=>/;Kurang lengkap;antrean;;;Petugas Uji Satu;/.test(l)),'koreksi tercatat di bagian dibetulkan');
+    assert.match(csv,/TANPA ID;KURANG LENGKAP;TIDAK BERSERAGAM;TEGURAN/);});
+  await check('Riwayat HP menampilkan seragam, teguran, laporan berat, dan nama petugas',async()=>{await page.evaluate(()=>App.go('riwayat'));await page.waitForTimeout(300);const t=await page.textContent('#historyList');assert.match(t,/Seragam Tidak berseragam/);assert.match(t,/Teguran: Tidak tertib antrean/);assert.match(t,/Berat: Meminta uang/);assert.match(t,/👤 Petugas Uji Satu/);});
   assert.deepEqual(errors,[]);
 
   // Ruang kerja portal (layar laptop).
@@ -123,7 +152,25 @@ try{
   await check('Dashboard menghitung penilaian dari portal dan menampilkan status salinan',async()=>{
     await portal.goto(base+'/#visits-records');await portal.goto(base+'/#visits');await portal.waitForSelector('.stat-value');
     const values=await portal.$$eval('.stat-card .stat-value',els=>els.map(e=>e.textContent.trim()));assert.equal(values[0],'5','5 pengantaran aktif (1 diganti), termasuk nama kembar');
-    assert.match(await portal.textContent('main'),/semua baris sudah tersalin/);
+    // Tidak berseragam (−20) + 3 tanpa ID (−60) dari 5 pengantaran → 100 − 80 ÷ 5 = 84.
+    assert.equal(values[2],'84');const main=await portal.textContent('main');assert.match(main,/semua baris sudah tersalin/);assert.match(main,/1 laporan menunggu verifikasi/);assert.match(main,/Per petugas penilai/);
+  });
+  await check('Verifikasi: Pengelola menyetujui laporan pelanggaran berat; guide itu gugur reward',async()=>{
+    await portal.goto(base+'/#visits-flags');await portal.waitForSelector('[data-visit="flag-approve"]');assert.match(await portal.textContent('main'),/Meminta uang parkir ke tamu\./);
+    await portal.click('[data-visit="flag-approve"]');await portal.waitForSelector('dialog [data-confirm]');await portal.click('dialog [data-confirm]');await portal.waitForSelector('text=Laporan disetujui.');
+    assert.equal(one(db,"SELECT status FROM visit_flags WHERE guide_id='G-091'").status,'disetujui');
+    await portal.goto(base+'/#visits-reports');await portal.waitForSelector('text=Ringkasan per guide');assert.match(await portal.textContent('main'),/Gugur — pelanggaran berat/);
+  });
+  await check('Aturan Nilai: rencana bulan depan disimpan dan dibatalkan; petugas dan jenis teguran ditambah',async()=>{
+    await portal.goto(base+'/#visits-scoring');await portal.waitForSelector('[data-visit="rule-edit"]');assert.match(await portal.textContent('main'),/Tanpa ID-Card/);
+    await portal.click('[data-visit="rule-edit"]');await portal.fill('dialog [name=pot_id]','30');await portal.fill('dialog [name=pot_teguran]','30');await portal.click('dialog [type=submit]');
+    await portal.waitForFunction(()=>/lebih dari 100/.test(document.querySelector('dialog .form-error')?.textContent||''));await portal.fill('dialog [name=pot_teguran]','20');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Rencana');
+    assert.equal(one(db,'SELECT pot_id FROM visit_score_rules ORDER BY berlaku_mulai DESC LIMIT 1').pot_id,30);
+    await portal.click('[data-visit="rule-delete"]');await portal.waitForSelector('dialog [data-confirm]');await portal.click('dialog [data-confirm]');await portal.waitForSelector('text=Rencana aturan dibatalkan.');
+    assert.equal(one(db,'SELECT count(*) n FROM visit_score_rules').n,1);
+    await portal.click('[data-visit="assessor-new"]');await portal.fill('dialog [name=nama]','Petugas Uji Dua');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Petugas disimpan.');
+    await portal.click('[data-visit="type-new"][data-jenis="teguran"]');await portal.fill('dialog [name=label]','Berpakaian tidak sopan di area suci');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Jenis temuan disimpan.');
+    assert.equal(one(db,"SELECT count(*) n FROM visit_finding_types WHERE jenis='teguran' AND is_active=1").n,6);
   });
   const file=resolve(dataDir,'Guides.csv');
   writeFileSync(file,'﻿guideId,guideName,kategori,regu,aktif\r\nG-001,Guide Contoh A1-01,Asing,A1,TRUE\r\nG-041,"Guide Baru, Uji",Domestik,"D1, D2",TRUE\r\nG-042,Guide Nonaktif Uji,Asing,A2,FALSE\r\n');

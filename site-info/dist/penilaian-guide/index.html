@@ -117,8 +117,10 @@
 
     <form id="formEval" autocomplete="off">
       <div class="field">
-        <span class="lbl">1. Pos Pemeriksaan</span>
+        <span class="lbl">1. Pos &amp; Petugas</span>
         <div id="posFormLabel" class="posbadge">—</div>
+        <!-- Petugas memilih namanya sekali per shift (berlaku 8 jam). Daftar dari pengelola. -->
+        <div id="petugasBox" class="petugasbox" hidden></div>
       </div>
 
       <div class="field">
@@ -163,39 +165,46 @@
       </div>
 
       <div class="field">
-        <span class="lbl">3. Penilaian</span>
+        <span class="lbl">3. Penilaian <small>— catat yang terlihat saja</small></span>
 
         <div class="criterion" data-crit="idCard">
           <div class="crit-head"><span class="crit-icon">🪪</span><span class="crit-name">ID‑Card</span></div>
-          <div class="segmented" role="group" aria-label="Penilaian ID-Card">
-            <button type="button" class="seg yes" data-val="1">Ya</button>
+          <div class="segmented" role="group" aria-label="ID-Card">
+            <button type="button" class="seg yes" data-val="1">Terpasang</button>
             <button type="button" class="seg no"  data-val="0">Tidak</button>
           </div>
+          <div id="petunjukId" class="help crit-help"></div>
         </div>
 
-        <div class="criterion" data-crit="uniform">
-          <div class="crit-head"><span class="crit-icon">👔</span><span class="crit-name">Uniform</span></div>
-          <div class="segmented tiga" role="group" aria-label="Penilaian Uniform">
-            <button type="button" class="seg no"  data-val="-1">Tidak sesuai</button>
-            <button type="button" class="seg yes" data-val="1">Sesuai</button>
-            <button type="button" class="seg plus" data-val="2">Bagus</button>
+        <div class="criterion" data-crit="seragam">
+          <div class="crit-head"><span class="crit-icon">👔</span><span class="crit-name">Seragam</span></div>
+          <div class="segmented tiga" role="group" aria-label="Seragam">
+            <button type="button" class="seg yes" data-val="lengkap">Lengkap</button>
+            <button type="button" class="seg plus" data-val="kurang">Kurang lengkap</button>
+            <button type="button" class="seg no"  data-val="tidak">Tidak berseragam</button>
           </div>
+          <div id="petunjukSeragam" class="help crit-help"></div>
         </div>
 
-        <div class="criterion" data-crit="etika">
-          <div class="crit-head"><span class="crit-icon">🤝</span><span class="crit-name">Etika</span></div>
-          <div class="stepper" role="group" aria-label="Nilai etika">
-            <button type="button" class="stepbtn" data-step="-1" aria-label="Kurangi">−</button>
-            <span id="etikaNilai" class="stepnilai" aria-live="polite">0</span>
-            <button type="button" class="stepbtn" data-step="1" aria-label="Tambah">+</button>
-          </div>
+        <div class="criterion criterion-list" data-crit="teguran">
+          <div class="crit-head"><span class="crit-icon">🤝</span><span class="crit-name">Teguran perilaku</span></div>
+          <div class="help crit-help">Biarkan kosong bila tidak ada. Pilih paling banyak 2 jenis.</div>
+          <div id="teguranList" class="chipgrid" role="group" aria-label="Jenis teguran"></div>
         </div>
-        <div class="help">Uniform: Tidak sesuai (−1), Sesuai (+1), atau Bagus (+2). Etika diisi angka −5 sampai +5; biarkan 0 bila tidak ada catatan khusus.</div>
+
+        <details id="laporanBox" class="laporan">
+          <summary>⚠️ Laporkan pelanggaran berat atau ⭐ apresiasi</summary>
+          <label class="sublbl" for="beratSelect">Pelanggaran berat</label>
+          <select id="beratSelect" class="bigselect"><option value="">Tidak ada</option></select>
+          <label class="sublbl" for="apresiasiSelect">Apresiasi</label>
+          <select id="apresiasiSelect" class="bigselect"><option value="">Tidak ada</option></select>
+          <div class="help">Wajib disertai catatan. Pengelola Kunjungan memeriksanya dulu sebelum berlaku.</div>
+        </details>
       </div>
 
       <div class="field">
-        <label class="lbl" for="catatan">Catatan <small>(boleh kosong)</small></label>
-        <textarea id="catatan" class="bigtext" rows="2" placeholder="Contoh: seragam tidak lengkap"></textarea>
+        <label class="lbl" for="catatan">Catatan <small id="catatanWajib">(boleh kosong)</small></label>
+        <textarea id="catatan" class="bigtext" rows="2" placeholder="Tulis singkat apa yang terlihat"></textarea>
       </div>
 
       <div class="draft-note" id="draftNote" hidden>💾 Draft tersimpan otomatis</div>
@@ -321,12 +330,12 @@
     <div class="about">
       <div class="logo big">🛕</div>
       <h2>Penilaian Guide Kawasan Besakih</h2>
-      <p>Formulir pencatatan kepatuhan guide di pos pemeriksaan: <strong>Uniform</strong>, <strong>ID‑Card</strong>, dan <strong>Etika</strong>. Bagian dari SPH-Portal BP Besakih.</p>
+      <p>Formulir pencatatan kepatuhan guide di pos pemeriksaan: <strong>ID‑Card</strong>, <strong>Seragam</strong>, dan <strong>teguran perilaku</strong>. Petugas hanya mencatat yang terlihat; nilainya dihitung portal (100 − potongan). Bagian dari SPH-Portal BP Besakih.</p>
       <ul class="checklist">
         <li>Bekerja penuh tanpa jaringan</li>
         <li>Data tersimpan aman di perangkat</li>
         <li>Terkirim otomatis saat sinyal tersedia</li>
-        <li>Tidak mencatat nama petugas, lokasi, atau foto</li>
+        <li>Mencatat nama petugas penilai (dipilih sekali per shift), tanpa lokasi atau foto</li>
       </ul>
       <p class="mini">Versi <span data-version></span> · Mode penyimpanan: <span id="aboutStorage">IndexedDB</span></p>
       <p class="mini">Berkas terpasang: <span id="aboutSw">memeriksa…</span></p>

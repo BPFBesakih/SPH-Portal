@@ -17,6 +17,17 @@
   const App = (window.App = window.App || {});
 
   /**
+   * Isian penilaian "100 − potongan" (sejak 2.2.0). Petugas hanya mencatat yang
+   * terlihat; besar potongan ditetapkan portal per bulan dan tidak ada di HP.
+   *   idCard   : true = terpasang & terlihat, false = tidak (wajib dipilih)
+   *   seragam  : 'lengkap' | 'kurang' | 'tidak' (wajib dipilih)
+   *   teguran  : kode jenis teguran, paling banyak 2
+   *   berat    : kode pelanggaran berat atau '' — diverifikasi Pengelola
+   *   apresiasi: kode apresiasi atau '' — diverifikasi Pengelola, tidak masuk nilai
+   */
+  function kritKosong() { return { idCard: null, seragam: null, teguran: [], berat: '', apresiasi: '' }; }
+
+  /**
    * Satu-satunya salinan state yang berubah. Sengaja dikumpulkan di sini:
    * setelah app.js dipecah, dua berkas yang masing-masing memegang salinannya
    * sendiri akan berselisih diam-diam. Semua berkas membacanya lewat App.state.
@@ -28,8 +39,7 @@
     // nyatakan "ini pengantaran berikutnya". Disimpan per formulir, dan hangus
     // begitu guide atau pos berganti — persetujuan untuk satu situasi tidak
     // boleh diam-diam berlaku untuk situasi lain.
-    form: { pos: null, guide: null, crit: { idCard: null, uniform: null, etika: 0 },
-            catatan: '', lanjutJeda: null },
+    form: { pos: null, guide: null, crit: kritKosong(), catatan: '', lanjutJeda: null },
     // Tautan pos tersimpan di HP: [{token, pos, label, dicabut}]. Pos penilaian
     // selalu diambil dari sini, bukan dipilih bebas oleh petugas.
     tautan: [],
@@ -56,7 +66,7 @@
   // beriringan: kalau APP_VERSION mandek, laporan staff ("versi berapa yang
   // muncul di layar Tentang?") tidak bisa dipakai memastikan HP mana yang
   // sudah menerima pembaruan.
-  const APP_VERSION = '2.1.1';
+  const APP_VERSION = '2.2.0';
 
   const $ = s => document.querySelector(s);
 
@@ -92,23 +102,20 @@
     return isNaN(d) ? '' : `${p(d.getHours())}.${p(d.getMinutes())}`;
   };
 
-  // Etika boleh bernilai minus: -5 (pelanggaran berat) sampai +5 (sangat baik).
+  // Penilaian cara lama (sebelum 2.2.0) masih bisa ada di HP: Uniform −1/+1/+2 dan
+  // Etika −5…+5. Dibaca untuk riwayat dan dipetakan seperti di portal.
   const ETIKA_MIN = -5;
 
   const ETIKA_MAKS = 5;
 
-  // Kriteria yang diisi angka lewat tombol - dan +, bukan Ya/Tidak
-  const KRIT_ANGKA = { etika: '#etikaNilai' };
-
-  // Uniform tiga tingkat, menggantikan Ya/Tidak. Nilainya ikut dijumlahkan ke
-  // nilai total seperti Etika, jadi "penampilan bagus" benar-benar bernilai
-  // lebih daripada sekadar "sesuai".
-  const UNIFORM_NILAI = [-1, 1, 2];
-
   const UNIFORM_LABEL = { '-1': 'Tidak sesuai', '1': 'Sesuai', '2': 'Bagus' };
 
-  // Kriteria yang nilainya angka bertingkat dari tombol, bukan Ya/Tidak
-  const KRIT_TINGKAT = { uniform: true };
+  const SERAGAM_LABEL = { lengkap: 'Lengkap', kurang: 'Kurang lengkap', tidak: 'Tidak berseragam' };
+
+  const TEGURAN_MAKS = 2;
+
+  // Jam berlaku pilihan nama petugas: sekali per shift.
+  const PETUGAS_JAM = 8;
 
   /**
    * Samakan nilai Uniform ke skala tiga tingkat.
@@ -124,6 +131,33 @@
   };
 
   const labelUniform = v => UNIFORM_LABEL[String(nilaiUniform(v))];
+
+  /** true bila isian memakai cara baru (2.2.0+). */
+  const caraBaru = c => !!c && typeof c.seragam === 'string';
+
+  /**
+   * Temuan satu penilaian, untuk cara baru dan lama sekaligus — sama dengan portal:
+   * cara lama ID 0 = tanpa ID, Uniform −1 = tidak berseragam, Etika minus dengan
+   * seragam sesuai = 1 teguran ("Bagus" dan Etika plus tidak dihitung).
+   */
+  const temuanDari = c => {
+    c = c || {};
+    if (caraBaru(c)) {
+      return { tanpaId: c.idCard ? 0 : 1, kurang: c.seragam === 'kurang' ? 1 : 0, tidak: c.seragam === 'tidak' ? 1 : 0,
+               teguran: Array.isArray(c.teguran) ? c.teguran.length : 0 };
+    }
+    const u = nilaiUniform(c.uniform), e = Number(c.etika) || 0;
+    return { tanpaId: c.idCard ? 0 : 1, kurang: 0, tidak: u === -1 ? 1 : 0, teguran: e < 0 && u >= 1 ? 1 : 0 };
+  };
+
+  /** Ringkasan singkat isian untuk pesan dan riwayat, mis. "ID Tidak, Seragam Lengkap, 1 teguran". */
+  const ringkasKriteria = c => {
+    c = c || {};
+    if (!caraBaru(c)) return `Uniform ${labelUniform(c.uniform)}, ID ${c.idCard ? 'Ya' : 'Tidak'}, Etika ${Number(c.etika) > 0 ? '+' : ''}${Number(c.etika) || 0}`;
+    const n = Array.isArray(c.teguran) ? c.teguran.length : 0;
+    return `ID ${c.idCard ? 'Terpasang' : 'Tidak'}, Seragam ${SERAGAM_LABEL[c.seragam] || '—'}` +
+      (n ? `, ${n} teguran` : '') + (c.berat ? ', pelanggaran berat dilaporkan' : '') + (c.apresiasi ? ', apresiasi' : '');
+  };
 
   /** Tautan aktif untuk pos tertentu, atau null. */
   App.tautanPos = function tautanPos(pos) {
@@ -170,7 +204,6 @@
 
   /* Diekspor supaya berkas lain bisa men-destructure-nya dari App. */
   Object.assign(App, { APP_VERSION, $, $$, TITLES, uuid, fmtTime, esc, jamLokal,
-                       ETIKA_MIN, ETIKA_MAKS, KRIT_ANGKA,
-                       UNIFORM_NILAI, UNIFORM_LABEL, KRIT_TINGKAT,
-                       nilaiUniform, labelUniform });
+                       ETIKA_MIN, ETIKA_MAKS, UNIFORM_LABEL, SERAGAM_LABEL, TEGURAN_MAKS, PETUGAS_JAM,
+                       nilaiUniform, labelUniform, caraBaru, temuanDari, ringkasKriteria, kritKosong });
 })();

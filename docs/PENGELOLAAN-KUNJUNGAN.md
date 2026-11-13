@@ -1,6 +1,6 @@
 # Pengelolaan Kunjungan — Penilaian Guide (tahap 1)
 
-Ruang kerja kelima di portal. Penilaian guide di pos pemeriksaan dicatat lewat `bpbesakih.com/penilaian-guide/` (PWA hasil pindahan NilaiGuide) dan **disimpan di basis data portal**. Setiap penilaian disalin otomatis ke **spreadsheet baru** di Google Drive portal: folder `SPH-Portal-Kunjungan`, satu file per tahun (`Penilaian Guide 2026`), satu tab per bulan (`2026-11`). Kolomnya sama dengan tab Evaluations lama: `evaluationId, timestamp, pos, guideId, guideName, uniform, idCard, review, etika, catatan, receivedAt, koreksiDari, status`.
+Ruang kerja kelima di portal. Penilaian guide di pos pemeriksaan dicatat lewat `bpbesakih.com/penilaian-guide/` (PWA hasil pindahan NilaiGuide) dan **disimpan di basis data portal**. Setiap penilaian disalin otomatis ke **spreadsheet baru** di Google Drive portal: folder `SPH-Portal-Kunjungan`, satu file per tahun (`Penilaian Guide 2026`), satu tab per bulan (`2026-11`). Kolom A–M sama dengan tab Evaluations lama: `evaluationId, timestamp, pos, guideId, guideName, uniform, idCard, review, etika, catatan, receivedAt, koreksiDari, status`. Sejak penilaian "100 − potongan" ditambah kolom N–T: `versi, seragam, teguran, pelanggaranBerat, apresiasi, petugas, nilai` (lihat [Penilaian "100 − potongan"](#penilaian-100--potongan)).
 
 **Aplikasi NilaiGuide (nilaiguide.vercel.app), Apps Script, dan spreadsheet lamanya tidak disentuh.** Repo NilaiGuide hanya dipakai sebagai acuan aturan. HP pos pindah satu per satu; HP yang belum pindah tetap memakai aplikasi lama seperti biasa, dan datanya tetap masuk spreadsheet lama.
 
@@ -29,7 +29,7 @@ HP pos ──► /api/guide-form (Pages) ──► Edge guide-form ──► bas
 | Jeda | Guide + pos yang sama < 15 menit (selisih mutlak, lintas HP dan di dalam satu kiriman) ditolak. 15–60 menit diperingatkan aplikasi. |
 | Koreksi | Hanya untuk guide, pos, dan tanggal WITA yang sama; baris lama ditandai `diganti`, tidak dihapus; satu baris hanya bisa dikoreksi sekali. |
 | Guide | Harus terdaftar di Data Guide portal. Guide nonaktif tetap diterima. Nama diambil dari Data Guide, bukan dari HP. |
-| Nilai | Uniform −1/+1/+2, ID-card Ya/Tidak, Etika −5..+5, catatan ≤ 500 huruf (disimpan apa adanya; di spreadsheet ditulis sebagai teks, tidak pernah menjadi rumus). |
+| Nilai | **Cara baru (versi 2, PWA 2.2.0):** ID-Card Terpasang/Tidak, Seragam Lengkap/Kurang lengkap/Tidak berseragam, teguran 0–2 kode berbeda dari daftar aktif, pelanggaran berat dan apresiasi masing-masing paling banyak satu kode (catatan wajib ≥ 3 huruf bila dipilih atau bila jenisnya "perlu catatan"), `petugasId` opsional (harus petugas aktif). **Cara lama (versi 1)** tetap diterima selama HP belum diperbarui: Uniform −1/+1/+2, ID-card Ya/Tidak, Etika −5..+5. Catatan ≤ 500 huruf (disimpan apa adanya; di spreadsheet ditulis sebagai teks, tidak pernah menjadi rumus). |
 | Jam HP | Jam yang lebih cepat dari server dipotong ke waktu terima, supaya penilaian tidak jatuh di tanggal yang belum terjadi. |
 | Umur kiriman | **Baru:** penilaian yang tertahan di HP lebih dari 30 hari ditolak (pesan jelas di HP). Perlu untuk retensi di bawah. |
 
@@ -47,6 +47,31 @@ Dashboard dan Laporan bisa dibuka untuk **rentang tanggal mana pun** — juga mi
 
 > Migrasi `20261104120000_visit_daily_totals_history.sql` harus dijalankan **sebelum pelipatan pertama** (paling cepat ±16 Desember 2026, 42 hari setelah penilaian portal pertama). Migrasi itu menolak berjalan bila `visit_monthly_totals` sudah berisi, supaya tidak ada bulan yang hanya punya ringkasan bulanan.
 
+## Penilaian "100 − potongan"
+
+Dasar: usulan `usulan-rumus-nilai-pengantaran.md` yang disetujui pemilik 11 November 2026. Petugas pos **hanya mencatat fakta**; nilai dihitung portal.
+
+| Yang dicatat petugas | Pilihan | Potongan awal |
+| --- | --- | --- |
+| ID-Card | Terpasang / Tidak | Tidak: −20 |
+| Seragam | Lengkap / Kurang lengkap / Tidak berseragam | 0 / −10 / −20 |
+| Teguran | 0–2 jenis dari daftar | −20 per teguran |
+| Pelanggaran berat | paling banyak 1, catatan wajib | tidak dirata-rata; bila **disetujui** Pengelola Kunjungan, guide gugur reward bulan itu |
+| Apresiasi | opsional, catatan wajib | tidak masuk nilai; bila disetujui, penentu saat nilai sama |
+
+- **Nilai pengantaran = 100 − potongan** (paling rendah 0; dengan batas aturan di bawah potongan tidak pernah melebihi 100). **Nilai bulanan = rata-rata** nilai pengantaran guide itu.
+- **Layak reward**: nilai ≥ 95, minimal 10 pengantaran, tanpa pelanggaran berat terverifikasi. Status hanya tampil untuk tepat satu bulan kalender. Urutan status: gugur → belum cukup data → di bawah ambang → layak (laporan berat yang belum diputuskan diberi keterangan).
+- **Peringkat**: nilai lebih tinggi didahulukan; bila sama, apresiasi terverifikasi lebih banyak; selebihnya setara. **Jumlah pengantaran tidak pernah menjadi penentu.**
+- **Aturan Nilai** (Pengelola Kunjungan): besar potongan, ambang, dan minimal pengantaran disimpan per bulan berlaku. Perubahan hanya untuk bulan depan atau sesudahnya (bulan berjalan dan bulan lalu tidak bisa diubah) dan diaudit. Batas: potongan 0–50, kurang lengkap ≤ tidak berseragam, potongan maksimum satu pengantaran (tanpa ID + tidak berseragam + 2 teguran) ≤ 100, ambang 50–100, minimal 1–60. Aturan awal berlaku mulai Januari 2026 (−20/−10/−20/−20, 95, 10).
+- **Daftar jenis** teguran/pelanggaran berat/apresiasi bisa ditambah, diubah namanya, atau dinonaktifkan; kodenya tetap (tidak pernah dipakai ulang) sehingga data lama tetap terbaca. Daftar awal masih **contoh** sampai pemilik mengirim daftar resmi.
+- **Petugas penilai**: dipilih sekali per shift di HP pos (berlaku 8 jam), tanpa login. Nama tersimpan bersama penilaian dan tampil di Dashboard (per petugas, hanya dari rincian 6 minggu terakhir).
+- **Petunjuk formulir**: teks patokan ID-Card dan Seragam tampil di bawah tombolnya, supaya Pos 1 dan Pos 3 menilai dengan cara yang sama. HP pos memperbarui daftar jenis, petugas, dan petunjuk bersama daftar guide.
+- **Verifikasi**: pelanggaran berat dan apresiasi masuk sebagai *menunggu*. Pengelola menyetujui atau menolak (catatan keputusan wajib), bisa dibuka kembali; semuanya diaudit. Koreksi penilaian dari HP membatalkan laporan yang masih menunggu.
+- **Data lama (versi 1)** dipetakan ke cara baru: ID 0 → tanpa ID; Uniform −1 → tidak berseragam (selain itu lengkap); Etika < 0 pada guide berseragam → 1 teguran; Etika positif dan REVIEW diabaikan. Bulan peralihan mencampur baris lama (dipetakan) dan baris baru. Riwayat NilaiGuide hasil migrasi awal dipetakan dengan aturan yang sama.
+- **Rekap harian** (`visit_daily_totals`) kini juga menyimpan jumlah temuan (`n_id`, `n_kurang`, `n_tidak`, `n_teguran`), sehingga nilai bulan lama setelah pelipatan tetap persis sama. Migrasi mengisi kolom ini untuk rekap yang sudah ada dari kolom lama.
+- **Spreadsheet**: kolom N–T ditambahkan; tab bulan lama yang masih 13 kolom dilebarkan otomatis saat ditulis. Baris versi 1 mengosongkan N–T.
+- **PWA 2.2.0**: formulir baru, riwayat HP menampilkan temuan dan petugas, CSV HP berisi temuan per pengantaran. HP yang belum diperbarui tetap mengirim cara lama dan tetap diterima.
+
 ## Isi modul
 
 | Bagian | Berkas | Keterangan |
@@ -54,12 +79,13 @@ Dashboard dan Laporan bisa dibuka untuk **rentang tanggal mana pun** — juga mi
 | Formulir lapangan | `public/penilaian-guide/` → `site-info/dist/penilaian-guide/` | PWA NilaiGuide yang dipindah: offline, tanpa login. Pos ditentukan tautan pos (token di fragmen URL). |
 | Gateway publik | `site-info/lib/guide-form.mjs`, `site-info/functions/api/guide-form/[[action]].js` | `POST /api/guide-form/{context,submit}`: origin, `CF-Connecting-IP`, badan ≤ 24 KB, lalu ke Edge `guide-form` dengan secret server. |
 | Edge publik | `supabase/functions/guide-form/index.ts` → `supabase/deploy/guide-form/index.ts` (`scripts/build-guide-form.mjs`) | Batas frekuensi, token → tautan aktif, aturan terima di bawah kunci khusus modul, salinan di latar belakang. Tanpa kunci global portal. |
-| Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap dan peringkat (aturan `05_Ringkasan.gs` dan `08_Peringkat.gs`), rekap per hari untuk rentang bebas, migrasi awal NilaiGuide. |
+| Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap "100 − potongan", peringkat dan status reward, rekap per hari untuk rentang bebas, migrasi awal NilaiGuide. |
+| Aturan nilai & verifikasi | `lib/visit-scoring.mjs` | Besar potongan per bulan (`visit_score_rules`), daftar teguran/pelanggaran berat/apresiasi (`visit_finding_types`), petugas penilai (`visit_assessors`), petunjuk formulir (`visit_form_settings`), laporan yang menunggu keputusan (`visit_flags`). |
 | Salinan & retensi | `lib/visit-sheets.mjs` | Google Sheets/Drive lewat OAuth yang sama dengan unggah berkas (`GOOGLE_DRIVE_*`), lease, tulis posisional, verifikasi, pelipatan bulanan, pemeriksaan koneksi. |
 | Rute pengelolaan | `lib/visits.mjs` → `_shared/portal/*.mjs`, disuntikkan ke snapshot `portal-api` oleh `scripts/build-visits-deploy.mjs` (snapshot sebelum Kunjungan) atau diperbarui oleh `scripts/build-visits-update.mjs` (snapshot yang sudah memuat Kunjungan, misalnya setelah Absensi) | Rute basis data di `routeOperation`; `visits/sheet/sync` dan `visits/sheet/check` dicegat sebelum transaksi permintaan. |
 | Formulir pos | `lib/guide-form.mjs` | Pemeriksaan bentuk, batas 60 `context` dan 300 penilaian per 10 menit per tautan dan per IP, catatan kiriman tanpa isi nilai (90 hari). |
-| Ruang kerja | `public/visits.js`, `public/visit-import.js` (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Tautan Pos + Salinan spreadsheet, Laporan & Ekspor (+ kartu Migrasi awal NilaiGuide). |
-| Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `…/20261104120000_visit_daily_totals_history.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_daily_totals`, `visit_history_import`, `visit_history_ids`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
+| Ruang kerja | `public/visits.js`, `public/visit-import.js` (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Verifikasi, Tautan Pos + Salinan spreadsheet, Aturan Nilai, Laporan & Ekspor (+ kartu Migrasi awal NilaiGuide). |
+| Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `…/20261104120000_visit_daily_totals_history.sql`, `…/20261113100000_visit_objective_scoring.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_daily_totals`, `visit_history_import`, `visit_history_ids`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`, `visit_score_rules`, `visit_finding_types`, `visit_assessors`, `visit_flags`, `visit_form_settings`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
 | Uji | `tests/visits.test.mjs`, `tests/visit-history.test.mjs`, `tests/guide-form-transport.test.mjs`, `scripts/verify-visits-postgres.mjs`, `scripts/verify-guide-form-ui.mjs`, `scripts/fake-google-sheets.mjs` | Google tiruan yang ketat (batas grid, galat bergaya Google); tidak pernah menghubungi Google. |
 
 ## Izin
@@ -67,7 +93,9 @@ Dashboard dan Laporan bisa dibuka untuk **rentang tanggal mana pun** — juga mi
 | Izin | Pengelola | Pimpinan |
 | --- | --- | --- |
 | `visits.dashboard.read`, `visits.guides.read`, `visits.records.read`, `visits.reports.read`, `visits.reports.export` | ya | ya |
-| `visits.guides.manage` (ubah & impor guide), `visits.forms.read`, `visits.forms.manage` (tautan pos), `visits.settings.manage` (sinkronkan, periksa koneksi, migrasi awal NilaiGuide) | ya | — |
+| `visits.guides.manage` (ubah & impor guide), `visits.forms.read`, `visits.forms.manage` (tautan pos), `visits.settings.manage` (sinkronkan, periksa koneksi, migrasi awal NilaiGuide, **Aturan Nilai**, **memutuskan Verifikasi**) | ya | — |
+
+Pimpinan dapat membuka Verifikasi dan Aturan Nilai untuk melihat saja (tanpa daftar petugas penilai). Penilaian "100 − potongan" tidak menambah izin baru.
 
 Super Admin memegang semua izin `visits.*`. Alamat file spreadsheet hanya tampil bagi pemegang `visits.settings.manage` atau `visits.reports.export`; aksesnya sendiri tetap diatur berbagi Google Drive.
 
@@ -101,6 +129,7 @@ Yang layak dicoba:
 7. Dashboard, Penilaian, Laporan: ekspor Excel.
 8. Laporan & Ekspor → **Mulai migrasi awal** → pilih unduhan .xlsx spreadsheet NilaiGuide (atau salinannya) → pratinjau per bulan → Terapkan. Pilih bulan Maret, dll. di Laporan: angka NilaiGuide ikut terhitung. **Batalkan migrasi** mengembalikan angka seperti semula. Data pratinjau tetap di `data/` dan tidak dikirim ke mana pun.
 9. Masuk sebagai `pimpinan.preview` (tanpa Tautan Pos, ubah guide, atau sinkronkan) dan `sdm.preview` (tanpa ruang kerja Kunjungan).
+10. Penilaian "100 − potongan": di HP pilih nama petugas, isi ID-Card, Seragam, teguran (paling banyak 2), dan laporan pelanggaran berat/apresiasi (catatan wajib). Lihat nilai di Penilaian (mis. tanpa ID + kurang lengkap = 70), lalu putuskan laporannya di **Verifikasi** dan lihat status reward di Laporan & Ekspor. Di **Aturan Nilai**, rencanakan potongan bulan depan, tambah petugas atau jenis teguran; HP mendapatkannya setelah Pengaturan → Tes Koneksi.
 
 Pemeriksaan otomatis:
 
@@ -145,6 +174,24 @@ Diperbarui 11 November 2026 di atas master `b739829` (Absensi PR #31): `portal-a
 
 Rollback: `portal-api` → salinan versi aktif yang disimpan di langkah 3 (`d3c7448…98b1`), `guide-form` → versi sebelumnya (`632ca9b2…`; keduanya tetap mengisi/membaca `visit_monthly_totals`), Pages → deployment sebelumnya. Tabel baru dibiarkan. Migrasi awal yang sudah diterapkan bisa dibatalkan dari kartunya kapan pun sebelum rollback.
 
+### Rilis penilaian "100 − potongan" (branch `claude/kunjungan-nilai-pengantaran`)
+
+Branch ini **sudah memuat** rekap harian + migrasi awal (PR #20) dan master `cede9c9` (E-Arsip PR #35), jadi cukup rilis branch ini; PR #20 tidak perlu dirilis terpisah. Urutan penting: formulir HP versi baru (Pages) baru boleh tayang setelah `guide-form` baru aktif, dan `guide-form` baru butuh kolom baru di basis data.
+
+1. SQL Editor, berurutan:
+   - `20261104120000_visit_daily_totals_history.sql` (bila belum pernah dijalankan). Bila muncul *"visit_monthly_totals sudah terisi"*, berhenti dan laporkan.
+   - `20261113100000_visit_objective_scoring.sql`. Aditif: kolom baru berisi nilai bawaan yang cocok untuk data lama, jadi `guide-form` dan `portal-api` lama tetap berjalan sampai langkah 2–3.
+2. Edge Function `guide-form`: simpan dulu versi aktif sebagai titik kembali, lalu deploy `supabase/deploy/guide-form/index.ts` (SHA-256 `f8a1bf9ac538abecb8c0fb2770cf21e874ddfe0579ef73d3b89c557f26e1c785`). Kerjakan segera setelah langkah 1 dan sebelum pelipatan pertama (±16 Desember), karena hanya versi ini yang mengisi jumlah temuan di rekap harian.
+3. Edge Function `portal-api`: unduh versi aktif, simpan salinannya, hitung SHA-256-nya.
+   - Bila sama dengan `bf81f3229d4b21e287849f811785ebc4f9a63493327547f11dfc656fd5b9fa48` (master `cede9c9`), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `42a806676beef3cd4c2eb3095554a03723c307be07cb28f0b66b4d9122d182a1`).
+   - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya (hanya lingkup `__visits` yang diganti).
+4. Merge ke `master`: Pages menayangkan ruang kerja (Verifikasi, Aturan Nilai) dan PWA 2.2.0. HP pos memperbarui diri saat dibuka dalam keadaan online; antrean yang belum terkirim tetap terkirim (dengan cara lama).
+5. Persiapan di portal (Pengelola Kunjungan): Aturan Nilai → **Tambah petugas** (nama petugas pos), periksa daftar teguran/pelanggaran berat/apresiasi, sesuaikan **Petunjuk di formulir pos**. Di HP pos: buka tautan, pilih nama petugas.
+
+Rollback: `portal-api` dan `guide-form` → salinan yang disimpan di langkah 2–3 (versi lama membaca kolom lama, yang tetap diisi untuk setiap penilaian baru: ID dari ID-Card, Uniform +1/−1 dari seragam, Etika = −jumlah teguran); Pages → deployment sebelumnya (HP kembali ke formulir lama saat dibuka online). Tabel dan kolom baru dibiarkan. Catatan: bila pelipatan sempat berjalan dengan `guide-form` lama, hari yang dilipat saat itu tidak punya jumlah teguran/kurang lengkap; sebelum rilis ulang jalankan lagi baris `UPDATE … SET n_id=…, n_tidak=…` dari migrasi dengan `WHERE` tanggal hari-hari tersebut saja (jangan untuk hari lain, karena `n_tidak` hari yang dilipat versi baru sudah benar) (teguran dan kurang lengkap hari itu tidak bisa dipulihkan dari rekap; rinciannya ada di spreadsheet).
+
+Bila PR #20 sudah lebih dulu dirilis dan migrasi awal NilaiGuide sudah diterapkan dengan kode lama, rekap riwayat itu belum memuat teguran dari Etika (hanya tanpa ID dan tidak berseragam yang terisi lewat migrasi). Batalkan migrasi awal lalu ulangi setelah rilis ini supaya bulan-bulan lama dihitung dengan pemetaan lengkap.
+
 ## Keputusan yang dipakai
 
 - Penyimpanan: basis data portal + salinan spreadsheet baru (keputusan pemilik, 3 November). Retensi 42 hari, umur kiriman 30 hari, rekap harian untuk periode lama (4 November; sebelumnya ringkasan bulanan).
@@ -152,6 +199,7 @@ Rollback: `portal-api` → salinan versi aktif yang disimpan di langkah 3 (`d3c7
 - Satu spreadsheet per tahun, satu tab per bulan (WITA), kolom sama dengan tab Evaluations lama (kolom `review` diisi 0).
 - Data Guide awal dari impor berkas tab Guides; ID lama dipertahankan.
 - REVIEW belum dipakai (tidak ada di Dashboard, Laporan, dan ekspor).
+- Penilaian "100 − potongan" (keputusan pemilik, 11 November): mulai segera setelah siap; bulan peralihan mencampur baris lama yang dipetakan; verifikasi oleh Pengelola Kunjungan dan diaudit; nama petugas dicatat (pilih sekali per shift di HP pos, tanpa login); besar potongan, ambang 95, dan minimal 10 bisa diubah Pengelola, berlaku bulan berikutnya, diaudit.
 - Nama kembar di regu yang sama ditolak di form satuan; di impor hanya diperingatkan.
 - Batas frekuensi formulir: 60 `context` dan 300 penilaian per 10 menit, per tautan dan per IP. Alamat `/penilaian-guide/`, nama ruang kerja "Kunjungan".
 
@@ -171,6 +219,7 @@ Aturan baca mengikuti NilaiGuide: tanggal seri Sheets dibaca sebagai jam WITA; U
 ## Tindak lanjut
 
 - Dashboard (rentang preset, pembanding, tren, cakupan), laporan mingguan dan bulanan, ekspor Excel, dan tampilan cetak A4 — PR berikutnya. Format NILAI REWARD rekap regu menunggu revisi pemilik.
+- Menunggu pemilik: daftar resmi atribut seragam (untuk petunjuk "Kurang lengkap"), daftar resmi jenis teguran/pelanggaran berat/apresiasi (daftar awal masih contoh), dan jawaban apakah Pos 3 memeriksa ID-Card dengan cara yang sama.
 - Penyalinan terjadwal (pg_cron + pg_net) bila kiriman pos jarang; sekarang penyalinan dipicu kiriman dan tombol portal.
 - Layar Pengaturan modul untuk batas frekuensi dan nama pos.
 - Kebijakan privasi portal: formulir penilaian guide, nama guide sebagai data pribadi, salinan di Google Drive portal (ATR-KM-10).

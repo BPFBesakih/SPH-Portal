@@ -14,7 +14,7 @@
   'use strict';
 
   const App = window.App;
-  const { APP_VERSION, $, $$, ETIKA_MIN, ETIKA_MAKS, KRIT_ANGKA, KRIT_TINGKAT } = App;
+  const { APP_VERSION, $, $$, TEGURAN_MAKS } = App;
 
   App.bind = function bind() {
     $('#btnMenu').addEventListener('click', App.openDrawer);
@@ -168,28 +168,45 @@
 
     $('#catatan').addEventListener('input', e => { App.state.form.catatan = e.target.value; App.saveDraft(); });
 
+    const berubah = () => { App.applyCritUI(); App.saveDraft(); App.haptic(15); $('#draftNote').hidden = false; };
     $$('.criterion').forEach(c => {
-      if (!KRIT_ANGKA[c.dataset.crit]) c.classList.add('unset');
-
       c.querySelectorAll('.seg').forEach(btn => btn.addEventListener('click', () => {
-        // Uniform menyimpan ANGKA bertingkat (-1/+1/+2); kriteria lain tetap
-        // Ya/Tidak. Tanpa pemisahan ini, "Bagus" tersimpan sebagai false.
-        App.state.form.crit[c.dataset.crit] = KRIT_TINGKAT[c.dataset.crit]
-          ? Number(btn.dataset.val)
-          : Number(btn.dataset.val) === 1;
-        App.applyCritUI(); App.saveDraft(); App.haptic(15);
-        $('#draftNote').hidden = false;
-      }));
-
-      // Penghitung Etika
-      c.querySelectorAll('.stepbtn').forEach(btn => btn.addEventListener('click', () => {
-        const kk = c.dataset.crit;
-        const n = (Number(App.state.form.crit[kk]) || 0) + Number(btn.dataset.step);
-        App.state.form.crit[kk] = Math.min(ETIKA_MAKS, Math.max(ETIKA_MIN, n));
-        App.applyCritUI(); App.saveDraft(); App.haptic(15);
-        $('#draftNote').hidden = false;
+        // ID-Card disimpan true/false; Seragam disimpan kodenya (lengkap/kurang/tidak).
+        if (c.dataset.crit === 'idCard') App.state.form.crit.idCard = btn.dataset.val === '1';
+        else if (c.dataset.crit === 'seragam') App.state.form.crit.seragam = btn.dataset.val;
+        berubah();
       }));
     });
+    // Chip teguran digambar ulang dari daftar portal, jadi ditangkap di induknya.
+    const teguranList = $('#teguranList');
+    if (teguranList) teguranList.addEventListener('click', e => {
+      const chip = e.target.closest('[data-teguran]');
+      if (!chip) return;
+      const kode = chip.dataset.teguran, list = App.state.form.crit.teguran || [];
+      if (list.includes(kode)) App.state.form.crit.teguran = list.filter(x => x !== kode);
+      else if (list.length < TEGURAN_MAKS) App.state.form.crit.teguran = [...list, kode];
+      else { App.toast(`Paling banyak ${TEGURAN_MAKS} teguran per pengantaran`, 'warn', '⚠️'); return; }
+      berubah();
+    });
+    for (const [sel, kunci] of [['#beratSelect', 'berat'], ['#apresiasiSelect', 'apresiasi']]) {
+      const el = $(sel);
+      if (el) el.addEventListener('change', () => { App.state.form.crit[kunci] = el.value; berubah(); });
+    }
+    // Nama petugas: pilih dari daftar, berlaku satu shift; "Ganti petugas" membuka daftarnya lagi.
+    const petugasBox = $('#petugasBox');
+    if (petugasBox) {
+      petugasBox.addEventListener('change', e => {
+        if (e.target.id !== 'petugasSelect') return;
+        delete petugasBox.dataset.ganti;
+        App.pilihPetugas(e.target.value);
+        if (e.target.value) App.toast('Nama petugas dipakai sampai pergantian shift', 'ok', '👤');
+      });
+      petugasBox.addEventListener('click', e => {
+        if (!e.target.closest('[data-ganti-petugas]')) return;
+        petugasBox.dataset.ganti = '1';
+        App.tampilkanPetugas();
+      });
+    }
 
     $('#formEval').addEventListener('submit', App.submitEval);
 
@@ -246,6 +263,7 @@
       }
       await App.muatTautan();
       await App.loadGuides();
+      App.renderPenilaianForm();
     });
 
     $('#btnBackup').addEventListener('click', async () => {
@@ -309,6 +327,7 @@
       App.tampilkanPos();
       App.state.guides = data.guides;
       App.fillGuideInputs();
+      App.renderPenilaianForm();
       App.toast(`Tautan ${data.label} tersimpan · ${data.guides.length} guide`, 'ok', '🔗');
       App.go('home');
       Sync.syncNow({ force: true });
@@ -398,11 +417,14 @@
     const tokenAlamat = Sync.tokenDari(location.hash) ? location.hash : null;
     if (tokenAlamat) history.replaceState(null, '', location.pathname + location.search + '#home');
 
+    App.renderPenilaianForm();
     await App.loadDraft();
     App.applyCritUI();
     App.setNet();
     await App.refreshStats();
     await App.loadGuides();
+    // Daftar jenis temuan dan petugas ikut diperbarui bersama daftar guide.
+    App.renderPenilaianForm();
     App.go((location.hash || '#home').slice(1));
     if (tokenAlamat) await App.pakaiTautan(tokenAlamat);
     App.showTutorial(false);
