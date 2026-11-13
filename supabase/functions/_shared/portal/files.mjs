@@ -6,10 +6,12 @@ import {randomUUID, createHash} from 'node:crypto';
 import {all, one, get, insert, tx, audit, assert, text, now} from './db.mjs';
 import {grants, has, can, employeeContext, postContext, reportContext, announcementsManager, documentAllowed, trainingAllowed, coachingAllowed, briefingAllowed} from './auth.mjs';
 import {purchaseFileAllowed} from './purchasing.mjs';
+import {archiveFileLinked} from './archive-files.mjs';
 const attachments = [['briefing_files', 'briefing_id', 'briefing'], ['employee_files', 'employee_id', 'employee'], ['employee_contracts', 'employee_id', 'contract'], ['document_versions', 'document_id', 'document'], ['training_materials', 'training_event_id', 'material'], ['participant_certificates', 'training_participant_id', 'certificate'], ['logbook_files', 'logbook_entry_id', 'logbook'], ['incident_files', 'incident_id', 'incident'], ['announcement_files', 'announcement_id', 'announcement'], ['purchase_attachments', 'request_id', 'purchase'], ['coaching_files', 'coaching_session_id', 'coaching']];
 export async function claimFile(db, user, id) {
   const f = await get(db, 'files', id);
   assert(f.status === 'AVAILABLE' && f.uploaded_by === user.id, 'Berkas tidak tersedia untuk dilampirkan.', 403);
+  assert(!await archiveFileLinked(db, id), 'Berkas sudah terhubung ke arsip. Unggah berkas baru untuk objek ini.', 422);
   assert(!await one(db, attachments.map(([table]) => `SELECT 1 AS linked FROM ${table} WHERE file_id=?`).join(' UNION ALL ') + ' LIMIT 1', ...attachments.map(() => id)), 'Berkas sudah terhubung. Unggah berkas baru untuk objek ini.');
   return f;
 }
@@ -20,6 +22,7 @@ export async function linkedFiles(db, type, id) {
   return await all(db, `SELECT f.id,f.original_name,f.mime_type,f.size_bytes,l.id link_id${metadata} FROM ${entry[0]} l JOIN files f ON f.id=l.file_id WHERE l.${entry[1]}=? AND f.status='AVAILABLE'`, id);
 }
 export async function fileAllowed(db, user, id) {
+  if (await archiveFileLinked(db, id)) return false;
   for (const material of await all(db, 'SELECT tm.training_event_id,v.document_id FROM training_materials tm JOIN document_versions v ON v.id=tm.document_version_id WHERE v.file_id=?', id)) if (await trainingAllowed(db, user, 'download', await get(db, 'training_events', material.training_event_id)) && await documentAllowed(db, user, 'download', await get(db, 'documents', material.document_id))) return true;
   for (const [table, key, type] of attachments) for (const link of await all(db, `SELECT * FROM ${table} WHERE file_id=?`, id)) {
     if (type === 'briefing' && await briefingAllowed(db, user, 'read', await get(db, 'morning_briefings', link.briefing_id))) return true;

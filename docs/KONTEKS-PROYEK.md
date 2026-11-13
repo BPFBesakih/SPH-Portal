@@ -6,6 +6,10 @@ Tambahan 26 Oktober: **Briefing Pagi (Wewarah Semeng) sudah dirilis ke produksi*
 
 Tambahan 5 November 2026 (diperbarui 10 November): modul **Absensi** tahap 1 **belum dirilis**. PR #23 di-merge 7 November lalu dibatalkan (PR #28) sebelum langkah server; pada 10 November dipasang ulang di cabang `claude/absensi-pasang-ulang` di atas master `187455b` beserta enam perbaikan, dengan urutan rilis dan rollback di `docs/ABSENSI.md`. Yang didaftarkan adalah HP (pribadi, bersama, atau lewat sesi pendaftaran dengan tautan WhatsApp); di HP terdaftar mana pun pegawai memilih nama lalu absen MASUK/PULANG dengan selfie dan GPS. Titik absen diatur di peta (radius bawaan 100 m); absen janggal ditandai untuk dicek atasan, bukan ditolak. Selfie di folder Drive SPH-Portal-Absensi dengan retensi 90 hari. Jam kerja/shift dan ekspor data aplikasi lama menyusul. Rincian, langkah rilis dan SHA snapshot ada di [ABSENSI.md](ABSENSI.md).
 
+Tambahan 12 November 2026: modul **E-Arsip Humas** tahap 1 dibangun di cabang `claude/humas-e-arsip-tahap-1` dari PRD Final (Q01–Q40) dan **belum dirilis**. Arsip dokumen administrasi per bagian dengan pengawasan Humas: role baru Humas dan Pengawas Arsip, petugas arsip ditunjuk administrator, klasifikasi Biasa/Rahasia dengan penyamaran di server, izin unduh terpisah. Super Admin dan IT Admin hanya menunjuk petugas dan tidak otomatis membaca arsip Rahasia. Parameter RT pada PRD dipakai sebagai bawaan dan perlu disahkan sebelum rilis. Rincian, penyimpangan, urutan rilis, dan rollback: `docs/E-ARSIP.md`.
+
+Tambahan 13 November 2026: E-Arsip dirilis lewat PR #32 dan #33 (12 November); PR #34 memperbarui kewenangan (Super Admin mengelola semua arsip, Kepala Urusan mencabut petugas bawahannya). Sesuai PRD 10.1, navigasinya dipindah dari menu bersama ke ruang kerja **Humas** (Humas → E-Arsip) di pemilih modul, termasuk Petugas Arsip.
+
 ## 1. Ringkasan terkini
 
 Pembaruan Kontrol Cuti: label kelompok izin `hr.leaves` menjadi **Kontrol Cuti**, dan tersedia role sistem Kontrol Cuti dengan izin Lihat/Ekspor/Kelola. Akses pengelolaan dibatasi ke akun yang ditetapkan secara privat dan role Super Admin; keanggotaan SDM/Pimpinan Bisnis saja tidak cukup. Pemberian role ke akun lain dan penyebaran izin cuti melalui role umum ditolak server. Hak pengajuan pribadi dan persetujuan operasional terpisah dari pengelolaan. Persetujuan mengikuti atasan langsung lalu atasan satu tingkat di atasnya; kepala bidang langsung ke Pimpinan, dan jalur berhenti setelah mencapai Pimpinan. Riwayat/notifikasi mengikuti tahap aktif; saldo dipotong atau dikembalikan sesudah tahap terakhir, termasuk pembatalan. Pengajuan lama yang masih menunggu diadopsi pada keputusan pertama tanpa mengulang pemotongan pengajuan yang sudah selesai. Identitas akun yang ditetapkan tidak dipublikasikan di source atau dokumentasi ini.
@@ -283,6 +287,7 @@ Dokumen ini sengaja mandiri. Nama berikut membantu mencari rincian saat reposito
 | Pengadaan / audit | `docs/PENGADAAN.md`, `docs/SETUP-PENGADAAN-2026-10-19.md`, `docs/PENINJAUAN-2026-10-18.md`. |
 | Formulir | `docs/LAPORAN-CEPAT-2026-10-23.md`, `docs/coaching-native.md`, arsip `integrations/coaching-google/README.md`. |
 | Absensi | `docs/ABSENSI.md` (tahap 1, belum dirilis). |
+| E-Arsip Humas | `docs/E-ARSIP.md` (tahap 1, dirilis 12 November 2026). Ruang kerja **Humas → E-Arsip**. |
 | Performa | `docs/PERFORMA-PORTAL-2026-10-19.md`, `docs/PERFORMA-PORTAL-2026-10-23.md`, `docs/PERFORMA-UNGGAHAN-2026-10-23.md`. |
 | Website lokal | `docs/BESAKIH-WEBSITE-LOCAL.md`, `docs/RISET-BESAKIH-ORG-2026-10-18.md`, `docs/BESAKIH-PHOTO-SOURCES.md`. |
 | Validasi / alternatif lokal | `docs/VERIFICATION.md`, `docs/DEPLOYMENT.md`; bukti rinci di `test-results/` yang tidak dipublikasikan ke Git. |
