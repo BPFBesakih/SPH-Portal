@@ -260,6 +260,33 @@ export async function formScoringContext(db) {
   };
 }
 export const flagStatuses = Object.freeze(['menunggu', 'disetujui', 'ditolak', 'dibatalkan']);
+export async function flagEventId(db, evaluationId) {
+  let id = evaluationId;
+  const seen = new Set();
+  for (; ; ) {
+    assert(!seen.has(id), 'Rangkaian koreksi penilaian tidak valid.', 409);
+    seen.add(id);
+    const existing = await one(db, 'SELECT event_id FROM visit_flags WHERE evaluation_id=? LIMIT 1', id);
+    if (existing?.event_id) return existing.event_id;
+    const evaluation = await one(db, 'SELECT koreksi_dari FROM visit_evaluations WHERE id=?', id);
+    if (!evaluation?.koreksi_dari) return id;
+    id = evaluation.koreksi_dari;
+  }
+}
+const flagLineage = where => `WITH RECURSIVE flag_lineage(flag_id,evaluation_id,koreksi_dari) AS (
+ SELECT f.id,f.evaluation_id,e.koreksi_dari FROM visit_flags f
+ LEFT JOIN visit_evaluations e ON e.id=f.evaluation_id WHERE f.event_id IS NULL AND ${where}
+ UNION
+ SELECT l.flag_id,e.id,e.koreksi_dari FROM flag_lineage l JOIN visit_evaluations e ON e.id=l.koreksi_dari
+), flag_roots AS (
+ SELECT l.flag_id,coalesce(l.koreksi_dari,l.evaluation_id) AS event_id FROM flag_lineage l
+ WHERE l.koreksi_dari IS NULL OR NOT EXISTS(SELECT 1 FROM visit_evaluations e WHERE e.id=l.koreksi_dari)
+)`;
+export async function resolveFlagEvents(db, through) {
+  return Number((await run(db, `${flagLineage('f.wita_date<=?')}
+  UPDATE visit_flags SET event_id=(SELECT r.event_id FROM flag_roots r WHERE r.flag_id=visit_flags.id)
+  WHERE event_id IS NULL AND id IN(SELECT flag_id FROM flag_roots)`, through)).changes);
+}
 const flagView = f => ({
   id: f.id,
   evaluationId: f.evaluation_id,
@@ -305,6 +332,14 @@ export async function flagList(db, q) {
     batas: scoringRules.flagLimit
   };
 }
+const decisionSnapshot = f => ({
+  status: f.status,
+  catatan: f.keputusan_catatan || '',
+  diputuskan_oleh: f.decided_by || null,
+  diputuskan_pada: f.decided_at || null,
+  diperbarui_pada: f.updated_at,
+  row_version: Number(f.row_version)
+});
 export async function decideFlag(db, user, b, audit) {
   assert(['setujui', 'tolak', 'buka'].includes(b?.action), 'Tindakan tidak valid.');
   const f = await one(db, 'SELECT * FROM visit_flags WHERE id=?', String(b.id || ''));
@@ -321,21 +356,31 @@ export async function decideFlag(db, user, b, audit) {
     assert(b.action === 'setujui' || note.length >= scoringRules.catatanMin, 'Tulis alasan penolakan.');
     await run(db, 'UPDATE visit_flags SET status=?,decided_by=?,decided_at=?,keputusan_catatan=?,updated_at=?,row_version=row_version+1 WHERE id=? AND row_version=?', b.action === 'setujui' ? 'disetujui' : 'ditolak', user.id, stamp, note, stamp, f.id, f.row_version);
   }
+  const saved = await one(db, `${flagSelect} WHERE f.id=?`, f.id);
   await audit(db, user, 'DECIDE', 'visit_flags', f.id, {
     tindakan: b.action,
     jenis: f.jenis,
     kode: f.kode,
     guide: f.guide_id,
-    tanggal: f.wita_date
-  });
-  return flagView(await one(db, `${flagSelect} WHERE f.id=?`, f.id));
+    tanggal: f.wita_date,
+    sebelum: decisionSnapshot(f),
+    sesudah: decisionSnapshot(saved)
+  }, note);
+  return flagView(saved);
 }
 export async function cancelPendingFlags(db, evaluationId) {
   return (await run(db, "UPDATE visit_flags SET status='dibatalkan',updated_at=?,row_version=row_version+1 WHERE evaluation_id=? AND status='menunggu'", now(), evaluationId)).changes;
 }
 export async function flagCounts(db, from, to) {
   const out = new Map();
-  for (const r of await all(db, "SELECT guide_id,jenis,status,count(*) AS n FROM visit_flags WHERE wita_date>=? AND wita_date<=? AND status IN('menunggu','disetujui') GROUP BY guide_id,jenis,status", from, to)) {
+  for (const r of await all(db, `${flagLineage("f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')")}
+ SELECT guide_id,jenis,status,count(*) AS n FROM (
+  SELECT f.guide_id,f.jenis,coalesce(f.event_id,r.event_id,f.evaluation_id) AS event_id,
+   CASE WHEN max(CASE WHEN f.status='disetujui' THEN 1 ELSE 0 END)=1 THEN 'disetujui' ELSE 'menunggu' END AS status
+  FROM visit_flags f LEFT JOIN flag_roots r ON r.flag_id=f.id
+  WHERE f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')
+  GROUP BY f.guide_id,f.jenis,coalesce(f.event_id,r.event_id,f.evaluation_id)
+ ) AS events GROUP BY guide_id,jenis,status`, from, to, from, to)) {
     let g = out.get(r.guide_id);
     if (!g) {
       g = {

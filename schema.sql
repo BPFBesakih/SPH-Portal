@@ -387,7 +387,9 @@ CREATE TABLE IF NOT EXISTS visit_history_import (
  created_by TEXT REFERENCES users(id), created_at TEXT NOT NULL, finished_at TEXT, cancelled_by TEXT REFERENCES users(id), cancelled_at TEXT,
  CHECK((status IN('menyusun','aktif') AND terbuka=1) OR (status='dibatalkan' AND terbuka IS NULL)));
 CREATE TABLE IF NOT EXISTS visit_history_ids (
- id TEXT PRIMARY KEY CHECK(length(id)=36), import_id TEXT NOT NULL REFERENCES visit_history_import(id));
+ id TEXT PRIMARY KEY CHECK(length(id)=36), import_id TEXT NOT NULL REFERENCES visit_history_import(id),
+ guide_id TEXT REFERENCES visit_guides(id), pos INTEGER CHECK(pos IN(1,3)), evaluated_at TEXT,
+ CHECK((guide_id IS NULL AND pos IS NULL AND evaluated_at IS NULL) OR (guide_id IS NOT NULL AND pos IS NOT NULL AND evaluated_at IS NOT NULL)));
 CREATE INDEX IF NOT EXISTS visit_history_ids_import ON visit_history_ids(import_id);
 -- Penilaian "100 − potongan" (sama dengan migrasi 20261113100000 di Supabase): aturan per bulan
 -- berlaku, jenis temuan, petugas penilai, pelanggaran berat & apresiasi, petunjuk formulir pos.
@@ -424,6 +426,7 @@ CREATE TABLE IF NOT EXISTS visit_assessors (
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), updated_by TEXT REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS visit_flags (
  id TEXT PRIMARY KEY CHECK(length(id)=36), evaluation_id TEXT NOT NULL CHECK(length(evaluation_id)=36), jenis TEXT NOT NULL CHECK(jenis IN('berat','apresiasi')),
+ event_id TEXT CHECK(event_id IS NULL OR length(event_id)=36),
  kode TEXT NOT NULL REFERENCES visit_finding_types(id), guide_id TEXT NOT NULL REFERENCES visit_guides(id), guide_name TEXT NOT NULL CHECK(length(guide_name) BETWEEN 1 AND 120),
  pos INTEGER NOT NULL CHECK(pos IN(1,3)), wita_date TEXT NOT NULL CHECK(length(wita_date)=10), evaluated_at TEXT NOT NULL,
  catatan TEXT NOT NULL CHECK(length(catatan) BETWEEN 1 AND 500), petugas_nama TEXT CHECK(petugas_nama IS NULL OR length(petugas_nama) BETWEEN 1 AND 120),

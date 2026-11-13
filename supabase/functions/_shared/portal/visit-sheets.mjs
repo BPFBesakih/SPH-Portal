@@ -2,8 +2,8 @@
 import {asyncMap,asyncFilter,asyncSome,asyncEvery,asyncFind,asyncForEach,asyncReduce} from './arrays.mjs';
 import {createHash, randomUUID} from 'node:crypto';
 import {all, one, run, assert, AppError, now} from './db.mjs';
-import {visitRules, witaDate, shiftDate, visitFindingSums, visitScoreOf} from './visit-data.mjs';
-import {scoreRuleFinder, seragamLabels} from './visit-scoring.mjs';
+import {visitRules, witaDate, shiftDate, visitFindingSums, visitScoreOf, lockVisitEvaluations} from './visit-data.mjs';
+import {scoreRuleFinder, seragamLabels, resolveFlagEvents} from './visit-scoring.mjs';
 export const visitSheetLegacyColumns = 13;
 export const visitSheetHeader = Object.freeze(['evaluationId', 'timestamp', 'pos', 'guideId', 'guideName', 'uniform', 'idCard', 'review', 'etika', 'catatan', 'receivedAt', 'koreksiDari', 'status', 'versi', 'seragam', 'teguran', 'pelanggaranBerat', 'apresiasi', 'petugas', 'nilai']);
 const columnLetter = n => {
@@ -754,6 +754,7 @@ async function verifyOldRows(ctx, summary, cutoff) {
 }
 async function foldVerifiedDays(db, owner, cutoff) {
   await holdSheetLease(db, owner);
+  await lockVisitEvaluations(db);
   const blocking = (await one(db, 'SELECT min(wita_date) AS d FROM visit_evaluations WHERE wita_date<? AND (sheet_row IS NULL OR sheet_dirty=1 OR sheet_verified_at IS NULL)', cutoff))?.d || null;
   const through = blocking ? shiftDate(blocking, -1) : shiftDate(cutoff, -1);
   const count = Number((await one(db, 'SELECT count(*) AS n FROM visit_evaluations WHERE wita_date<=?', through)).n);
@@ -773,6 +774,7 @@ async function foldVerifiedDays(db, owner, cutoff) {
    id_card=visit_daily_totals.id_card+excluded.id_card,review=visit_daily_totals.review+excluded.review,etika=visit_daily_totals.etika+excluded.etika,updated_at=excluded.updated_at,
    n_id=visit_daily_totals.n_id+excluded.n_id,n_kurang=visit_daily_totals.n_kurang+excluded.n_kurang,n_tidak=visit_daily_totals.n_tidak+excluded.n_tidak,n_teguran=visit_daily_totals.n_teguran+excluded.n_teguran`, g.day, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), stamp, Number(g.n_id), Number(g.n_kurang), Number(g.n_tidak), Number(g.n_teguran));
   const days = Number((await one(db, 'SELECT count(DISTINCT wita_date) AS n FROM visit_evaluations WHERE wita_date<=?', through)).n);
+  await resolveFlagEvents(db, through);
   const deleted = (await run(db, 'DELETE FROM visit_evaluations WHERE wita_date<=?', through)).changes;
   await run(db, 'UPDATE visit_sheet_state SET folded_through=?,updated_at=? WHERE id=1', through, stamp);
   return {

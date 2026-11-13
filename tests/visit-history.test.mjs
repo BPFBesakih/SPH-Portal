@@ -125,10 +125,10 @@ test('masa uji coba: bentrok 15 menit dengan penilaian portal dilewati, ID porta
 test('rekap harian portal dan migrasi awal dijumlahkan; izin dan batas bagian dijaga',t=>{
   const f=fixture(t);
   run(f.db,"INSERT INTO visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at,n_id,n_kurang,n_tidak,n_teguran) VALUES('2026-06-01','G-001',1,'portal',2,3,2,1,0,2,?,1,0,0,1)",now());
-  const id=apply(f,[row(wita('2026-06-01'),{uniform:-1,idCard:0,etika:-2}),row(wita('2026-06-01','10:00'),{uniform:1,idCard:1,etika:-1})],file(2)).import.id;finish(f,id);
-  const g=visitOverview(f.db,'2026-06-01','2026-06-01').perGuide.find(x=>x.guideId==='G-001');
+  const id=apply(f,[row(wita('2026-06-02'),{uniform:-1,idCard:0,etika:-2}),row(wita('2026-06-02','10:00'),{uniform:1,idCard:1,etika:-1})],file(2)).import.id;finish(f,id);
+  const g=visitOverview(f.db,'2026-06-01','2026-06-02').perGuide.find(x=>x.guideId==='G-001');
   // Portal: 1 tanpa ID + 1 teguran; NilaiGuide: tanpa ID + Uniform −1, lalu Etika −1 dengan seragam sesuai = 1 teguran.
-  assert.deepEqual([g.antar,g.tanpaId,g.tidakBerseragam,g.teguran,g.potongan,g.hari],[4,2,1,2,100,1]);assert.equal(g.nilai,75);
+  assert.deepEqual([g.antar,g.tanpaId,g.tidakBerseragam,g.teguran,g.potongan,g.hari],[4,2,1,2,100,2]);assert.equal(g.nilai,75);
   assert.throws(()=>preview(f,[row(wita('2026-06-02'))],file(1),0,f.users.leader),e=>e.status===403);
   assert.throws(()=>f.route(f.users.hr,'history'),e=>e.status===403);
   const many=Array.from({length:historyRules.barisPerBagian+1},()=>row(wita('2026-06-02')));

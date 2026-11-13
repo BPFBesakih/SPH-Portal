@@ -110,6 +110,7 @@ REVOKE ALL ON portal.visit_assessors FROM PUBLIC,anon,authenticated,service_role
 CREATE TABLE portal.visit_flags (
  id TEXT PRIMARY KEY CHECK(id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
  evaluation_id TEXT NOT NULL CHECK(evaluation_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+ event_id TEXT CHECK(event_id IS NULL OR event_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
  jenis TEXT NOT NULL CHECK(jenis IN('berat','apresiasi')),
  kode TEXT NOT NULL REFERENCES portal.visit_finding_types(id),
  guide_id TEXT NOT NULL REFERENCES portal.visit_guides(id),
@@ -129,6 +130,7 @@ ALTER TABLE portal.visit_flags ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON portal.visit_flags FROM PUBLIC,anon,authenticated,service_role;
 CREATE INDEX visit_flags_status_day ON portal.visit_flags(status,wita_date);
 CREATE INDEX visit_flags_guide_day ON portal.visit_flags(guide_id,wita_date);
+CREATE INDEX visit_flags_event ON portal.visit_flags(event_id);
 
 CREATE TABLE portal.visit_form_settings (
  id INTEGER PRIMARY KEY CHECK(id=1),

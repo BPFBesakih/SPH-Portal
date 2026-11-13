@@ -136,7 +136,8 @@
     const crit = caraBaru(c)
       ? { ...kritKosong(), idCard: !!c.idCard, seragam: c.seragam, teguran: [...(c.teguran || [])], berat: c.berat || '', apresiasi: c.apresiasi || '' }
       : { ...kritKosong(), idCard: !!c.idCard, seragam: nilaiUniform(c.uniform) >= 1 ? 'lengkap' : 'tidak' };
-    App.state.form = { pos: Number(asal.pos), guide: g, crit, catatan: asal.catatan || '', lanjutJeda: null };
+    App.state.form = { pos: Number(asal.pos), guide: g, crit, catatan: asal.catatan || '', lanjutJeda: null,
+      ...(!caraBaru(c) && nilaiUniform(c.uniform) >= 1 && Number(c.etika) < 0 ? { teguranLama: { guideId: g.guideId } } : {}) };
     App.tampilkanPos();
     $('#guideInput').value = g.guideName;
     $('#catatan').value = App.state.form.catatan;

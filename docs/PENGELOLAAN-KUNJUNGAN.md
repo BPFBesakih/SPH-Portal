@@ -70,7 +70,7 @@ Dasar: usulan `usulan-rumus-nilai-pengantaran.md` yang disetujui pemilik 11 Nove
 - **Data lama (versi 1)** dipetakan ke cara baru: ID 0 → tanpa ID; Uniform −1 → tidak berseragam (selain itu lengkap); Etika < 0 pada guide berseragam → 1 teguran; Etika positif dan REVIEW diabaikan. Bulan peralihan mencampur baris lama (dipetakan) dan baris baru. Riwayat NilaiGuide hasil migrasi awal dipetakan dengan aturan yang sama.
 - **Rekap harian** (`visit_daily_totals`) kini juga menyimpan jumlah temuan (`n_id`, `n_kurang`, `n_tidak`, `n_teguran`), sehingga nilai bulan lama setelah pelipatan tetap persis sama. Migrasi mengisi kolom ini untuk rekap yang sudah ada dari kolom lama.
 - **Spreadsheet**: kolom N–T ditambahkan; tab bulan lama yang masih 13 kolom dilebarkan otomatis saat ditulis. Baris versi 1 mengosongkan N–T.
-- **PWA 2.2.0**: formulir baru, riwayat HP menampilkan temuan dan petugas, CSV HP berisi temuan per pengantaran. HP yang belum diperbarui tetap mengirim cara lama dan tetap diterima.
+- **PWA 2.2.1**: formulir baru, riwayat HP menampilkan temuan dan petugas, CSV HP berisi temuan per pengantaran. HP yang belum diperbarui tetap mengirim cara lama dan tetap diterima. Koreksi cara lama meminta penentuan jenis atau konfirmasi sebelum menghapus teguran; laporan nonaktif yang sudah dipilih tetap terlihat.
 
 ## Isi modul
 
@@ -181,11 +181,12 @@ Branch ini **sudah memuat** rekap harian + migrasi awal (PR #20) dan master `ced
 1. SQL Editor, berurutan:
    - `20261104120000_visit_daily_totals_history.sql` (bila belum pernah dijalankan). Bila muncul *"visit_monthly_totals sudah terisi"*, berhenti dan laporkan.
    - `20261113100000_visit_objective_scoring.sql`. Aditif: kolom baru berisi nilai bawaan yang cocok untuk data lama, jadi `guide-form` dan `portal-api` lama tetap berjalan sampai langkah 2–3.
-2. Edge Function `guide-form`: simpan dulu versi aktif sebagai titik kembali, lalu deploy `supabase/deploy/guide-form/index.ts` (SHA-256 `f8a1bf9ac538abecb8c0fb2770cf21e874ddfe0579ef73d3b89c557f26e1c785`). Kerjakan segera setelah langkah 1 dan sebelum pelipatan pertama (±16 Desember), karena hanya versi ini yang mengisi jumlah temuan di rekap harian.
+   - `20261113034733_visit_review_integrity.sql`. Menambahkan waktu/guide/pos pada ID riwayat untuk mencegah bentrok dengan antrean offline, dan identitas kejadian lintas koreksi. Jalankan juga bila dua migrasi sebelumnya sudah diterapkan. Timestamp berkas hasil CLI lebih awal daripada timestamp rencana penilaian; berkas mendukung urutan instalasi baru maupun upgrade. Kolom baru tetap menerima nilai kosong dari Edge versi sebelumnya selama pergantian versi.
+2. Edge Function `guide-form`: simpan dulu versi aktif sebagai titik kembali, lalu deploy `supabase/deploy/guide-form/index.ts` (SHA-256 `99fa8bfeb69420240e0020c677812897431a2e604d324fa79a0ff44acef6a34b`). Kerjakan segera setelah langkah 1 dan sebelum pelipatan pertama (±16 Desember), karena hanya versi ini yang mengisi jumlah temuan di rekap harian.
 3. Edge Function `portal-api`: unduh versi aktif, simpan salinannya, hitung SHA-256-nya.
-   - Bila sama dengan `bf81f3229d4b21e287849f811785ebc4f9a63493327547f11dfc656fd5b9fa48` (master `cede9c9`), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `42a806676beef3cd4c2eb3095554a03723c307be07cb28f0b66b4d9122d182a1`).
+   - Bila sama dengan `bf81f3229d4b21e287849f811785ebc4f9a63493327547f11dfc656fd5b9fa48` (master `cede9c9`), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `00d65ac2a1e9d001f494417b0a77d7c78c2a273325e5461db495507c20a54d04`).
    - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya (hanya lingkup `__visits` yang diganti).
-4. Merge ke `master`: Pages menayangkan ruang kerja (Verifikasi, Aturan Nilai) dan PWA 2.2.0. HP pos memperbarui diri saat dibuka dalam keadaan online; antrean yang belum terkirim tetap terkirim (dengan cara lama).
+4. Merge ke `master`: Pages menayangkan ruang kerja (Verifikasi, Aturan Nilai) dan PWA 2.2.1. HP pos memperbarui diri saat dibuka dalam keadaan online; antrean yang belum terkirim tetap terkirim (dengan cara lama).
 5. Persiapan di portal (Pengelola Kunjungan): Aturan Nilai → **Tambah petugas** (nama petugas pos), periksa daftar teguran/pelanggaran berat/apresiasi, sesuaikan **Petunjuk di formulir pos**. Di HP pos: buka tautan, pilih nama petugas.
 
 Rollback: `portal-api` dan `guide-form` → salinan yang disimpan di langkah 2–3 (versi lama membaca kolom lama, yang tetap diisi untuk setiap penilaian baru: ID dari ID-Card, Uniform +1/−1 dari seragam, Etika = −jumlah teguran); Pages → deployment sebelumnya (HP kembali ke formulir lama saat dibuka online). Tabel dan kolom baru dibiarkan. Catatan: bila pelipatan sempat berjalan dengan `guide-form` lama, hari yang dilipat saat itu tidak punya jumlah teguran/kurang lengkap; sebelum rilis ulang jalankan lagi baris `UPDATE … SET n_id=…, n_tidak=…` dari migrasi dengan `WHERE` tanggal hari-hari tersebut saja (jangan untuk hari lain, karena `n_tidak` hari yang dilipat versi baru sudah benar) (teguran dan kurang lengkap hari itu tidak bisa dipulihkan dari rekap; rinciannya ada di spreadsheet).
@@ -211,10 +212,25 @@ Spreadsheet NilaiGuide lama tetap menjadi arsip dan tidak diubah. Riwayatnya mas
 2. Di spreadsheet NilaiGuide: *File → Download → Microsoft Excel (.xlsx)* (seluruh spreadsheet; portal membuka tab **Evaluations** saja). CSV tab Evaluations juga diterima.
 3. Berkas dibaca di peramban. Yang dikirim ke portal hanya `evaluationId`, `timestamp`, `pos`, `guideId`, `uniform`, `idCard`, `etika`, `status` — **tanpa catatan, nama petugas, atau jam terima**. Dikirim per bagian (≤ 800 baris, ≤ 100 KB) karena batas badan permintaan portal 128 KB.
 4. **Pratinjau** tidak menyimpan apa pun: jumlah masuk/dilewati/ditolak, tabel per bulan untuk dicocokkan dengan tab Dasbor NilaiGuide, dan nomor baris yang bermasalah.
-5. **Terapkan**: portal menyimpan rekap harian per guide per pos (`visit_daily_totals`, sumber `nilaiguide`) dan daftar ID yang sudah diimpor (`visit_history_ids`). Bila koneksi putus, bagian yang sudah diterima tersimpan; pilih **Lanjutkan** dengan berkas yang sama (dicek lewat SHA-256). Riwayat baru dihitung di Dashboard dan Laporan setelah semua bagian diterima.
+5. **Terapkan**: portal menyimpan rekap harian per guide per pos (`visit_daily_totals`, sumber `nilaiguide`) dan daftar ID beserta guide, pos, dan waktu yang sudah diimpor (`visit_history_ids`) untuk mencegah hitungan ganda ketika antrean portal menyusul. Bila koneksi putus, bagian yang sudah diterima tersimpan; pilih **Lanjutkan** dengan berkas yang sama (dicek lewat SHA-256), termasuk bila hanya tahap penyelesaian yang belum berhasil. Riwayat baru dihitung di Dashboard dan Laporan setelah semua bagian diterima.
 6. **Batalkan migrasi** menghapus seluruh rekap NilaiGuide dan ID-nya; angka kembali seperti sebelum impor, lalu migrasi bisa diulang. Hanya satu migrasi aktif pada satu waktu.
 
 Aturan baca mengikuti NilaiGuide: tanggal seri Sheets dibaca sebagai jam WITA; Uniform seperti `normalUniform_` (TRUE +1, FALSE/0/kosong −1, dibatasi −1..+2); ID-card `Number(x)` → 1/0; Etika dibatasi −5..+5; baris `diganti` dilewati. Selain itu dilewati: Pos 2, ID ganda di berkas, dan baris yang bentrok (< 15 menit, guide + pos sama) dengan penilaian portal. Ditolak: ID bukan UUID, tanggal di luar 1 Januari 2026 – hari ini, pos tidak dikenal, guide tidak ada di Data Guide, ID yang sudah tersimpan di portal. REVIEW tidak diimpor (diisi 0).
+
+Pengaman bentrok juga berlaku bila riwayat masuk lebih dulu: pengantaran portal dalam jeda 15 menit tidak ditambahkan lagi dan HP mendapat penjelasan. Selama migrasi masih disusun, kiriman yang bertumpang tindih menunggu tanpa dianggap ditolak permanen; selesaikan atau batalkan migrasi. Bila riwayat versi sebelumnya tidak memiliki waktu per ID, batalkan dan impor ulang sebelum memproses antrean untuk hari/guide/pos yang sama. Jika rincian portal sudah dilipat dan hanya ada rekap harian, impor yang bertumpang tindih ditahan dengan pesan untuk mencocokkan spreadsheet terlebih dahulu; aplikasi tidak menebak kejadian yang sama.
+
+### Perbaikan hasil assessment PR #36
+
+- Apresiasi/pelanggaran dihitung per kejadian pengantaran, sehingga koreksi berulang tidak menambah apresiasi. Keputusan lama tetap disimpan; identitas kejadian dipertahankan setelah retensi.
+- Audit keputusan menyimpan keadaan sebelum/sesudah, alasan, penentu, dan waktu, termasuk saat keputusan dibuka kembali.
+- Koreksi cara lama memperlihatkan satu teguran yang perlu ditentukan jenisnya. Menghapusnya perlu konfirmasi eksplisit, termasuk bila koreksi sempat tersimpan sebagai draf.
+- Pilihan pelanggaran/apresiasi nonaktif yang sudah ada pada draf/koreksi tetap terlihat dan dapat dihapus secara eksplisit.
+- Kelanjutan migrasi memakai bagian yang sudah tersimpan, bukan hanya jumlah baris baru pada pratinjau ulang.
+- Impor, pembatalan, penyelesaian, dan pelipatan di PostgreSQL memakai kunci transaksi modul yang sama dengan kiriman HP untuk mencegah benturan saat bersamaan.
+
+Regresi tambahan: `tests/visit-flag-corrections.test.mjs`, `tests/visit-history-overlap.test.mjs`, tambahan alur di `scripts/verify-guide-form-ui.mjs`, serta `scripts/verify-visit-resume-ui.mjs`. Semua memakai data fiktif dan layanan tiruan.
+
+Validasi ulang setelah perbaikan: 381/381 tes aplikasi, 18/18 pemeriksaan PostgreSQL (termasuk paket Edge dan upgrade skema lama), 29/29 alur formulir/ruang kerja, 5/5 alur kelanjutan migrasi, dan 5/5 pemeriksaan PWA. Isi gateway di luar lingkup Kunjungan tetap identik dengan paket sebelum perbaikan.
 
 ## Tindak lanjut
 

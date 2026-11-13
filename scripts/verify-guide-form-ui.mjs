@@ -272,6 +272,58 @@ try{
     // Setelah sinkron halaman dimuat ulang; tunggu sampai selesai, jangan membaca "Memuat data…".
     await portal.waitForFunction(()=>/Penilaian Guide \d{4}/.test(document.querySelector('main').textContent),null,{timeout:15000});
   });
+  // Regresi koreksi/draf: jalankan setelah pemeriksaan rekap yang memakai jumlah tetap.
+  // Penilaian berikut hanya berada di HP, supaya tidak menambah data server fixture.
+  await page.evaluate(()=>Sync.Settings.set({forceOffline:true}));
+  const legacyCorrection=async guideId=>page.evaluate(async id=>{
+    const g=App.state.guides.find(g=>g.guideId===id),evaluationId=App.uuid();
+    await DB.save({evaluationId,guideId:id,guideName:g.guideName,pos:1,timestamp:DB.sekarangISO(),criteria:{idCard:false,uniform:1,etika:-1},catatan:'',synced:false});
+    await App.mulaiKoreksi(evaluationId);return evaluationId;
+  },guideId);
+  await check('Koreksi cara lama: perbaikan ID saja tidak menghapus teguran; klasifikasi menghasilkan nilai 80',async()=>{
+    const id=await legacyCorrection('G-008');
+    assert(await page.isVisible('#teguranLamaNote'));assert.match(await page.textContent('#teguranLamaNote'),/1 teguran tanpa jenis/);
+    // Penanda ikut draf; pemulihan draf tidak boleh melewati pengaman ini.
+    await page.evaluate(async()=>{await DB.simpanDraftSegera(App.state.form);delete App.state.form.teguranLama;await App.loadDraft();});
+    assert.deepEqual(await page.evaluate(()=>App.state.form.teguranLama),{guideId:'G-008'});
+    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');
+    let question='';page.once('dialog',async dialog=>{question=dialog.message();await dialog.dismiss();});
+    await page.click('#btnSave');assert.match(question,/Hapus teguran lama/);
+    assert.deepEqual(await page.evaluate(async id=>(await DB.get(id)).criteria,id),{idCard:false,uniform:1,etika:-1},'membatalkan konfirmasi tidak mengubah penilaian');
+    await page.click('[data-teguran="antrean"]');assert(await page.isHidden('#teguranLamaNote'));
+    await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);
+    const corrected=await page.evaluate(async id=>{const e=await DB.get(id),f=App.temuanDari(e.criteria);return {criteria:e.criteria,nilai:100-20*f.tanpaId-10*f.kurang-20*f.tidak-20*f.teguran};},id);
+    assert.deepEqual(corrected.criteria,{idCard:true,seragam:'lengkap',teguran:['antrean'],berat:'',apresiasi:''});assert.equal(corrected.nilai,80);
+    assert.equal(await page.evaluate(()=>App.state.form.teguranLama),undefined,'reset menghapus penanda koreksi lama');
+  });
+  await check('Koreksi cara lama: teguran hanya dapat dihapus dengan konfirmasi; guard tidak terbawa ke guide baru',async()=>{
+    const id=await legacyCorrection('G-009');await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');
+    let question='';page.once('dialog',async dialog=>{question=dialog.message();await dialog.accept();});
+    await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);assert.match(question,/Hapus teguran lama/);
+    assert.deepEqual(await page.evaluate(async id=>(await DB.get(id)).criteria.teguran,id),[]);
+    await legacyCorrection('G-008');await page.evaluate(()=>App.batalKoreksi(true));assert.equal(await page.evaluate(()=>App.state.form.teguranLama),undefined);assert(await page.isHidden('#teguranLamaNote'));
+    await page.evaluate(()=>{const g=App.state.guides.find(g=>g.guideId==='G-010');App.state.form.teguranLama={guideId:'G-008'};App.state.form.guide=g;App.showPicked(g);});
+    assert.equal(await page.evaluate(()=>App.state.form.teguranLama),undefined);assert(await page.isHidden('#teguranLamaNote'));
+  });
+  await check('Laporan nonaktif tetap terlihat dalam koreksi/draf dan hanya hilang setelah dipilih Tidak ada',async()=>{
+    const id=await page.evaluate(async()=>{
+      window.__penilaianBefore=DB.getPenilaian();const k=structuredClone(window.__penilaianBefore);
+      k.berat=k.berat.filter(t=>t.kode!=='kasar');k.apresiasi=k.apresiasi.filter(t=>t.kode!=='menolong');DB.setPenilaian(k);
+      const g=App.state.guides.find(g=>g.guideId==='G-010'),evaluationId=App.uuid();
+      await DB.save({evaluationId,guideId:g.guideId,guideName:g.guideName,pos:1,timestamp:DB.sekarangISO(),criteria:{idCard:true,seragam:'lengkap',teguran:[],berat:'kasar',apresiasi:'menolong'},catatan:'Catatan laporan semula.',synced:false});
+      await App.mulaiKoreksi(evaluationId);return evaluationId;
+    });
+    for(const [sel,kode]of [['#beratSelect','kasar'],['#apresiasiSelect','menolong']]){
+      assert.equal(await page.inputValue(sel),kode);assert.match(await page.$eval(`${sel} option:checked`,e=>e.textContent),/tidak aktif/);
+    }
+    await page.evaluate(async()=>{await DB.simpanDraftSegera(App.state.form);App.state.form.crit.berat='';App.state.form.crit.apresiasi='';await App.loadDraft();});
+    assert.equal(await page.inputValue('#beratSelect'),'kasar');assert.equal(await page.inputValue('#apresiasiSelect'),'menolong');
+    await page.selectOption('#beratSelect','');await page.selectOption('#apresiasiSelect','');await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);
+    const criteria=await page.evaluate(async id=>(await DB.get(id)).criteria,id);assert.equal(criteria.berat,'');assert.equal(criteria.apresiasi,'');
+    assert.equal(await page.$('#beratSelect option[value="kasar"]'),null);assert.equal(await page.$('#apresiasiSelect option[value="menolong"]'),null,'laporan baru tidak menawarkan jenis nonaktif');
+    await page.evaluate(()=>{DB.setPenilaian(window.__penilaianBefore);delete window.__penilaianBefore;App.renderPenilaianForm();});
+  });
+  assert.deepEqual(errors,[]);
   assert.deepEqual(portalErrors,[]);
   console.log(`${checks} pemeriksaan UI penilaian guide lulus.`);
 }finally{await browser.close();app.server.close();db.close();rmSync(dataDir,{recursive:true,force:true});}

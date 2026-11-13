@@ -162,6 +162,33 @@ async function formScoringContext(db) {
   };
 }
 var flagStatuses = Object.freeze(["menunggu", "disetujui", "ditolak", "dibatalkan"]);
+async function flagEventId(db, evaluationId) {
+  let id = evaluationId;
+  const seen = /* @__PURE__ */ new Set();
+  for (; ; ) {
+    assert(!seen.has(id), "Rangkaian koreksi penilaian tidak valid.", 409);
+    seen.add(id);
+    const existing = await one(db, "SELECT event_id FROM visit_flags WHERE evaluation_id=? LIMIT 1", id);
+    if (existing?.event_id) return existing.event_id;
+    const evaluation = await one(db, "SELECT koreksi_dari FROM visit_evaluations WHERE id=?", id);
+    if (!evaluation?.koreksi_dari) return id;
+    id = evaluation.koreksi_dari;
+  }
+}
+var flagLineage = (where) => `WITH RECURSIVE flag_lineage(flag_id,evaluation_id,koreksi_dari) AS (
+ SELECT f.id,f.evaluation_id,e.koreksi_dari FROM visit_flags f
+ LEFT JOIN visit_evaluations e ON e.id=f.evaluation_id WHERE f.event_id IS NULL AND ${where}
+ UNION
+ SELECT l.flag_id,e.id,e.koreksi_dari FROM flag_lineage l JOIN visit_evaluations e ON e.id=l.koreksi_dari
+), flag_roots AS (
+ SELECT l.flag_id,coalesce(l.koreksi_dari,l.evaluation_id) AS event_id FROM flag_lineage l
+ WHERE l.koreksi_dari IS NULL OR NOT EXISTS(SELECT 1 FROM visit_evaluations e WHERE e.id=l.koreksi_dari)
+)`;
+async function resolveFlagEvents(db, through) {
+  return Number((await run(db, `${flagLineage("f.wita_date<=?")}
+  UPDATE visit_flags SET event_id=(SELECT r.event_id FROM flag_roots r WHERE r.flag_id=visit_flags.id)
+  WHERE event_id IS NULL AND id IN(SELECT flag_id FROM flag_roots)`, through)).changes);
+}
 async function cancelPendingFlags(db, evaluationId) {
   return (await run(db, "UPDATE visit_flags SET status='dibatalkan',updated_at=?,row_version=row_version+1 WHERE evaluation_id=? AND status='menunggu'", now(), evaluationId)).changes;
 }
@@ -194,6 +221,9 @@ var reguInfo = Object.freeze([{
 }]);
 var reguCodes = reguInfo.map((r) => r.kode);
 var witaOffset = 8 * 36e5;
+async function lockVisitEvaluations(db) {
+  if (typeof db.query === "function") await run(db, "SELECT pg_advisory_xact_lock(hashtextextended('portal.visits.guide_evaluations',0))");
+}
 var witaDate = (ms) => new Date(ms + witaOffset).toISOString().slice(0, 10);
 var shiftDate = (day, days) => new Date(Date.parse(day + "T00:00:00Z") + days * 864e5).toISOString().slice(0, 10);
 function newCriteriaProblem(c, catatan, petugasId, types, assessors) {
@@ -239,6 +269,17 @@ function storedValues(c, petugas) {
     petugas_nama: petugas ? petugas.nama : null
   };
 }
+async function historyClash(db, id, guideId2, pos, ms, day) {
+  const low = new Date(ms - visitRules.jedaMenit * 6e4).toISOString(), high = new Date(ms + visitRules.jedaMenit * 6e4).toISOString();
+  const clash = await one(db, `SELECT h.id,i.status FROM visit_history_ids h JOIN visit_history_import i ON i.id=h.import_id
+  WHERE i.terbuka=1 AND (h.id=? OR (h.guide_id=? AND h.pos=? AND h.evaluated_at>? AND h.evaluated_at<?)) LIMIT 1`, id, guideId2, pos, low, high);
+  assert(clash?.status !== "menyusun", "Migrasi riwayat sedang disusun. Penilaian tetap menunggu di HP; selesaikan atau batalkan migrasi lalu kirim ulang.", 503);
+  const unknown = await one(db, `SELECT h.id FROM visit_history_ids h JOIN visit_history_import i ON i.id=h.import_id
+  WHERE i.terbuka=1 AND h.evaluated_at IS NULL AND EXISTS(SELECT 1 FROM visit_daily_totals d
+   WHERE d.sumber='nilaiguide' AND d.guide_id=? AND d.pos=? AND d.day=?) LIMIT 1`, guideId2, pos, day);
+  assert(!unknown, "Riwayat lama pada tanggal ini perlu diimpor ulang oleh Pengelola Kunjungan agar pengantaran tidak dihitung ganda. Penilaian tetap menunggu di HP.", 503);
+  return clash;
+}
 async function ingestGuideEvaluations(db, link, items, nowMs = Date.now()) {
   const accepted = [], rejected = [];
   const receivedAt = new Date(nowMs).toISOString(), oldest = nowMs - visitRules.umurMaksHari * 864e5;
@@ -271,6 +312,13 @@ async function ingestGuideEvaluations(db, link, items, nowMs = Date.now()) {
     const guide = await one(db, "SELECT id,name FROM visit_guides WHERE id=?", item.guideId);
     if (!guide) {
       reject("GUIDE", `Guide ${item.guideId} tidak terdaftar di Data Guide portal. Muat ulang daftar guide di HP lalu nilai ulang.`);
+      continue;
+    }
+    if (await historyClash(db, id, guide.id, link.pos, ms, day)) {
+      reject("JEDA", "Pengantaran guide ini sudah tercatat dalam riwayat NilaiGuide di pos dan waktu yang sama (jeda kurang dari 15 menit). Tidak ditambahkan lagi; hubungi Pengelola Kunjungan bila riwayat perlu dibetulkan.", {
+        terlaluCepat: true,
+        sudahDinilai: true
+      });
       continue;
     }
     const c = item.criteria, catatan = String(item.catatan || "").slice(0, 500), petugasId = item.petugasId ? item.petugasId.toLowerCase() : null;
@@ -316,6 +364,7 @@ async function ingestGuideEvaluations(db, link, items, nowMs = Date.now()) {
    VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,'aktif',?,?,?,?,?,?,?,?)`, id, link.id, link.pos, guide.id, guide.name, v.uniform, v.id_card, v.etika, catatan, evaluatedAt, day, receivedAt, replaces, v.versi, v.seragam, v.teguran, v.teguran_n, v.berat, v.apresiasi, v.petugas_id, v.petugas_nama);
     for (const [jenis, kode] of [["berat", v.berat], ["apresiasi", v.apresiasi]]) if (kode) await insert(db, "visit_flags", {
       evaluation_id: id,
+      event_id: await flagEventId(db, replaces || id),
       jenis,
       kode,
       guide_id: guide.id,
@@ -1321,6 +1370,7 @@ async function verifyOldRows(ctx, summary, cutoff) {
 }
 async function foldVerifiedDays(db, owner, cutoff) {
   await holdSheetLease(db, owner);
+  await lockVisitEvaluations(db);
   const blocking = (await one(db, "SELECT min(wita_date) AS d FROM visit_evaluations WHERE wita_date<? AND (sheet_row IS NULL OR sheet_dirty=1 OR sheet_verified_at IS NULL)", cutoff))?.d || null;
   const through = blocking ? shiftDate(blocking, -1) : shiftDate(cutoff, -1);
   const count = Number((await one(db, "SELECT count(*) AS n FROM visit_evaluations WHERE wita_date<=?", through)).n);
@@ -1340,6 +1390,7 @@ async function foldVerifiedDays(db, owner, cutoff) {
    id_card=visit_daily_totals.id_card+excluded.id_card,review=visit_daily_totals.review+excluded.review,etika=visit_daily_totals.etika+excluded.etika,updated_at=excluded.updated_at,
    n_id=visit_daily_totals.n_id+excluded.n_id,n_kurang=visit_daily_totals.n_kurang+excluded.n_kurang,n_tidak=visit_daily_totals.n_tidak+excluded.n_tidak,n_teguran=visit_daily_totals.n_teguran+excluded.n_teguran`, g.day, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), stamp, Number(g.n_id), Number(g.n_kurang), Number(g.n_tidak), Number(g.n_teguran));
   const days = Number((await one(db, "SELECT count(DISTINCT wita_date) AS n FROM visit_evaluations WHERE wita_date<=?", through)).n);
+  await resolveFlagEvents(db, through);
   const deleted = (await run(db, "DELETE FROM visit_evaluations WHERE wita_date<=?", through)).changes;
   await run(db, "UPDATE visit_sheet_state SET folded_through=?,updated_at=? WHERE id=1", through, stamp);
   return {

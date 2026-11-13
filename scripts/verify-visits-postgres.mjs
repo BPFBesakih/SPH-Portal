@@ -23,6 +23,7 @@ import {has} from '../supabase/functions/_shared/portal/auth.mjs';
 import {visitRoutes} from '../supabase/functions/_shared/portal/visits.mjs';
 import {ingestGuideEvaluations,visitOverview,witaDate,shiftDate} from '../supabase/functions/_shared/portal/visit-data.mjs';
 import {runVisitSheetSync} from '../supabase/functions/_shared/portal/visit-sheets.mjs';
+import {resolveFlagEvents} from '../supabase/functions/_shared/portal/visit-scoring.mjs';
 import {createFakeGoogle} from './fake-google-sheets.mjs';
 
 const {PGlite}=await import(pathToFileURL(resolve(process.argv[2]||'/tmp/pglite/node_modules/@electric-sql/pglite/dist/index.js')).href);
@@ -207,8 +208,10 @@ try{
     const pos1={id:link.link.id,pos:1},oldNow=Date.now()-50*DAY,oldDay=witaDate(oldNow-DAY),base=Date.parse(`${oldDay}T08:00:00+08:00`);
     const items=[0,1,2,3].map(i=>({evaluationId:randomUUID(),guideId:i%2?'G-003':'G-001',guideName:'x',pos:1,timestamp:new Date(base+i*20*60000).toISOString(),criteria:{uniform:i?1:2,idCard:i!==1,etika:i-1},catatan:''}));
     // Satu penilaian cara baru: cacah temuannya ikut dilipat ke rekap harian.
-    items.push({evaluationId:randomUUID(),guideId:'G-003',guideName:'x',pos:1,timestamp:new Date(base+5*20*60000).toISOString(),criteria:{idCard:true,seragam:'tidak',teguran:['antrean','merokok-hp'],berat:null,apresiasi:null},catatan:''});
+    items.push({evaluationId:randomUUID(),guideId:'G-003',guideName:'x',pos:1,timestamp:new Date(base+5*20*60000).toISOString(),criteria:{idCard:true,seragam:'tidak',teguran:['antrean','merokok-hp'],berat:null,apresiasi:'menolong'},catatan:'Membantu wisatawan.'});
     const result=await atomic(()=>ingestGuideEvaluations(db,pos1,items,oldNow));assert.equal(result.accepted.length,5);
+    // Laporan yang ditulis Edge lama setelah migrasi belum punya identitas kejadian.
+    await pg.query('UPDATE portal.visit_flags SET event_id=NULL WHERE evaluation_id=$1',[items.at(-1).evaluationId]);
     // Angka per petugas hanya dari rincian 6 minggu (rekap harian sengaja tanpa identitas petugas).
     const today=witaDate(Date.now()),from=`${oldDay.slice(0,7)}-01`,figures=o=>JSON.stringify({...o,diperbarui:null,periode:null,perPetugas:null});
     const before=await atomic(()=>visitOverview(db,from,today)),beforeDay=await atomic(()=>visitOverview(db,oldDay,oldDay));
@@ -216,8 +219,10 @@ try{
     // Pengguna mengurutkan tab lama: posisi dibaca ulang (UPDATE … FROM VALUES) sebelum verifikasi.
     google.sortTab(oldDay.slice(0,7),4);
     // Retensi sudah berjalan hari ini lewat penyalinan sebelumnya, jadi dipaksa di sini.
+    statements.length=0;
     r=await runVisitSheetSync({runTx,env,trigger:'manual',retention:'force'});assert.equal(r.ok,true,r.error);
     if(r.retention_blocked)r=await runVisitSheetSync({runTx,env,trigger:'manual',retention:'force'});
+    assert(statements.some(s=>s.includes("hashtextextended('portal.visits.guide_evaluations',0)")),'pelipatan diserialkan dengan penerimaan dan migrasi');
     if(r.retention_blocked)r=await runVisitSheetSync({runTx,env,trigger:'manual',retention:'force'});
     assert.equal(r.retention_blocked,false);assert(r.status.folded_through>=oldDay);
     assert.equal((await one(db,'SELECT count(*)::int n FROM visit_evaluations WHERE wita_date<=?',r.status.folded_through)).n,0);
@@ -227,6 +232,7 @@ try{
     assert.deepEqual({...await one(db,"SELECT sum(n_id)::int n_id,sum(n_tidak)::int n_tidak,sum(n_teguran)::int n_teguran FROM visit_daily_totals WHERE sumber='portal' AND day=?",oldDay)},{n_id:1,n_tidak:1,n_teguran:2+1},'cacah temuan ikut dilipat (Etika −1 dengan seragam sesuai = 1 teguran)');
     assert.equal(figures(await atomic(()=>visitOverview(db,oldDay,oldDay))),figures(beforeDay),'satu hari yang sudah dilipat tetap bisa dihitung');
     assert.equal(google.rows(oldDay.slice(0,7)).filter(x=>x.length).length,5,'spreadsheet tetap memuat rinciannya');
+    assert.equal((await one(db,'SELECT event_id FROM visit_flags WHERE evaluation_id=?',items.at(-1).evaluationId)).event_id,items.at(-1).evaluationId,'retensi mengisi identitas laporan lama sebelum menghapus rincian');
   });
   await check('NilaiGuide history import on PostgreSQL through the patched gateway: preview, resent part, finish, once only, cancel',async()=>{
     const wita=(day,hour)=>new Date(`${day}T${hour}:00+08:00`).toISOString();
@@ -280,6 +286,112 @@ try{
       assert.equal((await fresh.query('SELECT count(*)::int n FROM portal.visit_finding_types')).rows[0].n,13);
       assert.deepEqual({...(await fresh.query('SELECT pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal FROM portal.visit_score_rules')).rows[0]},{pot_id:20,pot_kurang:10,pot_tidak:20,pot_teguran:20,ambang:95,minimal:10});
       await assert.rejects(fresh.query("INSERT INTO portal.visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_at) VALUES('2027-01',40,10,40,20,95,10,'x')"),'potongan terbesar > 100 ditolak');
+    }finally{await fresh.close();}
+  });
+
+  await check('packaged Edge corrections count one verified event; NULL legacy identities and decision reasons survive retention',async()=>{
+    await route(manager,'visits/guides/import','POST',{rows:[{guideId:'G-020',guideName:'Guide Koreksi',kategori:'Asing',regu:'A1',aktif:true}],apply:true});
+    const token=(await one(db,"SELECT share_token FROM guide_form_links WHERE pos=1 AND is_active=1")).share_token;
+    const stamp=new Date(Date.now()-2*DAY).toISOString(),day=witaDate(Date.parse(stamp)),versions=[];
+    const savedRefresh=env.GOOGLE_DRIVE_REFRESH_TOKEN;env.GOOGLE_DRIVE_REFRESH_TOKEN='';
+    try{
+      for(let i=0;i<3;i++){
+        const item=evaluation({guideId:'G-020',timestamp:stamp,criteria:{idCard:true,seragam:'lengkap',teguran:[],berat:'kasar',apresiasi:'menolong'},catatan:'Laporan dengan saksi di tangga.',...(i?{koreksiDari:versions.at(-1)}:{})});
+        const receipt=await invoke('submit',{token,evaluations:[item]},'192.0.2.180');assert.equal(receipt.status,200,JSON.stringify(receipt.data));
+        assert.deepEqual(receipt.data.result.rejected,[]);assert.equal(receipt.data.result.accepted.length,1);versions.push(item.evaluationId);
+        await Promise.all(background.splice(0));
+        for(const flag of await all(db,'SELECT * FROM visit_flags WHERE evaluation_id=?',item.evaluationId))
+          await route(manager,'visits/flags/decide','POST',{id:flag.id,row_version:flag.row_version,action:'setujui',catatan:'Dikonfirmasi saksi.'});
+      }
+    }finally{env.GOOGLE_DRIVE_REFRESH_TOKEN=savedRefresh;}
+    const q=`from=${day}&to=${day}`,guide=async()=>(await route(leader,'visits/overview','GET',{},q)).perGuide.find(g=>g.guideId==='G-020');
+    assert.deepEqual([(await guide()).antar,(await guide()).apresiasi,(await guide()).berat],[1,1,1]);
+    assert.equal((await one(db,"SELECT count(*)::int n FROM visit_flags WHERE guide_id='G-020' AND status='disetujui'")).n,6,'setiap keputusan tetap tersimpan');
+    assert.deepEqual((await all(db,"SELECT DISTINCT event_id FROM visit_flags WHERE guide_id='G-020'")).map(f=>f.event_id),[versions[0]]);
+    await pg.query("UPDATE portal.visit_flags SET event_id=NULL WHERE guide_id='G-020'");
+    assert.deepEqual([(await guide()).apresiasi,(await guide()).berat],[1,1],'gateway menelusuri identitas lama yang masih NULL');
+    const heavy=await one(db,"SELECT * FROM visit_flags WHERE evaluation_id=? AND jenis='berat'",versions[0]);
+    await route(manager,'visits/flags/decide','POST',{id:heavy.id,row_version:heavy.row_version,action:'buka',catatan:'Memeriksa ulang saksi.'});
+    const reopened=await one(db,'SELECT * FROM visit_flags WHERE id=?',heavy.id),reason='Saksi membuktikan identitas pelaku berbeda.';
+    await route(manager,'visits/flags/decide','POST',{id:heavy.id,row_version:reopened.row_version,action:'tolak',catatan:reason});
+    const rejected=await one(db,'SELECT * FROM visit_flags WHERE id=?',heavy.id);
+    await route(manager,'visits/flags/decide','POST',{id:heavy.id,row_version:rejected.row_version,action:'buka'});
+    const events=await all(db,"SELECT change_summary,reason FROM audit_events WHERE object_type='visit_flags' AND object_key=? AND action='DECIDE'",heavy.id);
+    const reopen=events.map(e=>JSON.parse(e.change_summary)).find(e=>e.tindakan==='buka'&&e.sebelum?.status==='ditolak');
+    assert(reopen);assert.deepEqual([reopen.sebelum.catatan,reopen.sebelum.diputuskan_oleh,reopen.sebelum.diputuskan_pada],[reason,manager.id,rejected.decided_at]);
+    assert.deepEqual([reopen.sesudah.status,reopen.sesudah.diputuskan_oleh,reopen.sesudah.diputuskan_pada],['menunggu',null,null]);
+    assert(events.some(e=>e.reason===reason),'alasan lama tersimpan dalam audit append-only');
+    assert.equal(await atomic(()=>resolveFlagEvents(db,day)),6);assert.equal(await atomic(()=>resolveFlagEvents(db,day)),0);
+    const before=await route(leader,'visits/overview','GET',{},q);
+    await pg.query("DELETE FROM portal.visit_evaluations WHERE guide_id='G-020'");
+    const after=await route(leader,'visits/overview','GET',{},q);
+    assert.deepEqual(after.ringkasan.berat,before.ringkasan.berat);assert.deepEqual(after.ringkasan.apresiasi,before.ringkasan.apresiasi);
+  });
+
+  await check('packaged Edge holds staged-import clashes, rejects active clashes, and accepts the queue after cancellation',async()=>{
+    await route(manager,'visits/guides/import','POST',{rows:[{guideId:'G-021',guideName:'Guide Migrasi',kategori:'Asing',regu:'A1',aktif:true}],apply:true});
+    const token=(await one(db,"SELECT share_token FROM guide_form_links WHERE pos=1 AND is_active=1")).share_token;
+    const ms=Date.now()-3*DAY,stamp=new Date(ms).toISOString(),day=witaDate(ms),historyId=randomUUID();
+    const rows=[[2,historyId,stamp,1,'G-021',1,1,0,'aktif']],file={name:'Riwayat Uji.csv',sha256:'f'.repeat(64),rows_total:1,parts_total:1};
+    const mutate=async(path,body)=>{
+      statements.length=0;const result=await route(manager,path,'POST',body);
+      assert(statements.some(s=>s.includes("hashtextextended('portal.visits.guide_evaluations',0)")),`${path} diserialkan dengan penerimaan HP`);return result;
+    };
+    statements.length=0;
+    assert.equal((await route(manager,'visits/history/import','POST',{mode:'preview',file,part:0,rows})).counts.MASUK,1);
+    assert(!statements.some(s=>s.includes("hashtextextended('portal.visits.guide_evaluations',0)")),'pratinjau tidak mengambil kunci tulis');
+    const apply=()=>mutate('visits/history/import',{mode:'apply',file,part:0,rows});
+    let id=(await apply()).import.id;
+    assert.deepEqual({...await one(db,'SELECT guide_id,pos,evaluated_at FROM visit_history_ids WHERE id=?',historyId)},{guide_id:'G-021',pos:1,evaluated_at:stamp});
+    const offline=evaluation({guideId:'G-021',timestamp:new Date(ms-10*60000).toISOString()});
+    let receipt=await invoke('submit',{token,evaluations:[offline]},'192.0.2.181');assert.equal(receipt.status,503);assert.match(receipt.data.error,/sedang disusun/);
+    assert.equal((await one(db,'SELECT count(*)::int n FROM visit_evaluations WHERE id=?',offline.evaluationId)).n,0);
+    await mutate('visits/history/finish',{import_id:id});
+    receipt=await invoke('submit',{token,evaluations:[offline]},'192.0.2.181');assert.equal(receipt.status,200);assert.equal(receipt.data.result.accepted.length,0);assert.match(receipt.data.result.rejected[0].errors[0],/riwayat NilaiGuide/);
+    const direct=await atomic(()=>ingestGuideEvaluations(db,{id:link.link.id,pos:1},[{...offline,catatan:''}]));assert.equal(direct.rejected[0].reason,'JEDA');
+    assert.equal((await route(leader,'visits/overview','GET',{},`from=${day}&to=${day}`)).perGuide.find(g=>g.guideId==='G-021').antar,1);
+    await mutate('visits/history/cancel',{import_id:id});id=(await apply()).import.id;
+    receipt=await invoke('submit',{token,evaluations:[offline]},'192.0.2.181');assert.equal(receipt.status,503);
+    await mutate('visits/history/cancel',{import_id:id});
+    const savedRefresh=env.GOOGLE_DRIVE_REFRESH_TOKEN;env.GOOGLE_DRIVE_REFRESH_TOKEN='';
+    try{receipt=await invoke('submit',{token,evaluations:[offline]},'192.0.2.181');assert.equal(receipt.status,200);assert.equal(receipt.data.result.accepted[0].evaluationId,offline.evaluationId);await Promise.all(background.splice(0));}
+    finally{env.GOOGLE_DRIVE_REFRESH_TOKEN=savedRefresh;}
+  });
+
+  await check('gateway refuses folded history ambiguity atomically without creating a staged import',async()=>{
+    const day='2026-02-15',stamp=`${day}T01:00:00.000Z`;
+    await pg.query("INSERT INTO portal.visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at) VALUES($1,'G-021',1,'portal',1,1,1,1,0,0,$2)",[day,now()]);
+    const rows=[[2,randomUUID(),stamp,1,'G-021',1,1,0,'aktif']],file={name:'Lipat Uji.csv',sha256:'e'.repeat(64),rows_total:1,parts_total:1};
+    const before=(await one(db,'SELECT count(*)::int n FROM visit_history_import')).n;
+    for(const mode of ['preview','apply'])await assert.rejects(route(manager,'visits/history/import','POST',{mode,file,part:0,rows}),e=>e instanceof api.AppError&&e.status===409&&/sudah dilipat/.test(e.message));
+    assert.equal((await one(db,'SELECT count(*)::int n FROM visit_history_import')).n,before);assert.equal((await one(db,'SELECT count(*)::int n FROM visit_history_ids')).n,0);
+    assert.equal((await route(manager,'visits/history/import','POST',{mode:'preview',file,part:0,rows:rows.map(r=>r.map((v,i)=>i===3?3:v))})).counts.MASUK,1,'pos lain tetap dapat diimpor');
+  });
+
+  await check('review migration upgrades pre-review scoring data without losing decisions or imported history',async()=>{
+    const fresh=new PGlite();
+    try{
+      await fresh.exec(bootstrapSql);
+      const reviewName='20261113034733_visit_review_integrity.sql';
+      for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n!==reviewName).sort()){
+        let sql=readFileSync(new URL(name,directory),'utf8');
+        if(name==='20261113100000_visit_objective_scoring.sql')sql=sql.replace(/^\s*event_id TEXT[^\n]*\n/m,'').replace(/^CREATE INDEX visit_flags_event[^\n]*\n/m,'');
+        await fresh.exec(pgliteSql(sql));
+      }
+      await fresh.exec("INSERT INTO portal.visit_guides(id,seq,name,kategori,regu,created_at,updated_at,row_version) VALUES('G-001',1,'Guide Uji','Asing','A1','x','x',1)");
+      const original=randomUUID(),corrected=randomUUID(),flagA=randomUUID(),flagB=randomUUID(),history=randomUUID(),historyEvaluation=randomUUID();
+      for(const [id,parent,status,replaced] of [[original,null,'diganti',corrected],[corrected,original,'aktif',null]])
+        await fresh.query("INSERT INTO portal.visit_evaluations(id,pos,guide_id,guide_name,uniform,id_card,review,etika,catatan,evaluated_at,wita_date,received_at,koreksi_dari,status,replaced_by) VALUES($1,1,'G-001','Guide Uji',1,1,0,0,'x','2026-11-11T01:00:00.000Z','2026-11-11','2026-11-11T01:00:00.000Z',$2,$3,$4)",[id,parent,status,replaced]);
+      for(const [id,evaluation] of [[flagA,original],[flagB,corrected]])
+        await fresh.query("INSERT INTO portal.visit_flags(id,evaluation_id,jenis,kode,guide_id,guide_name,pos,wita_date,evaluated_at,catatan,status,keputusan_catatan,decided_at,created_at,updated_at,row_version) VALUES($1,$2,'apresiasi','menolong','G-001','Guide Uji',1,'2026-11-11','2026-11-11T01:00:00.000Z','Membantu wisatawan','disetujui','Saksi membenarkan','2026-11-11T02:00:00.000Z','x','x',2)",[id,evaluation]);
+      await fresh.query("INSERT INTO portal.visit_history_import(id,status,terbuka,file_name,file_sha256,rows_total,parts_total,parts_done,ringkasan,created_at) VALUES($1,'aktif',1,'Riwayat.xlsx',$2,1,1,'[0]','{}','x')",[history,'a'.repeat(64)]);
+      await fresh.query('INSERT INTO portal.visit_history_ids(id,import_id) VALUES($1,$2)',[historyEvaluation,history]);
+      await fresh.exec(pgliteSql(readFileSync(new URL(reviewName,directory),'utf8')));
+      const flags=(await fresh.query('SELECT event_id,status,keputusan_catatan,row_version FROM portal.visit_flags ORDER BY id')).rows;
+      assert.equal(flags.length,2);assert(flags.every(f=>f.event_id===original&&f.status==='disetujui'&&f.keputusan_catatan==='Saksi membenarkan'&&f.row_version===2));
+      assert.deepEqual({...((await fresh.query('SELECT id,import_id,guide_id,pos,evaluated_at FROM portal.visit_history_ids')).rows[0])},{id:historyEvaluation,import_id:history,guide_id:null,pos:null,evaluated_at:null});
+      assert.equal((await fresh.query("SELECT count(*)::int n FROM pg_indexes WHERE schemaname='portal' AND indexname IN('visit_flags_event','visit_history_ids_match')")).rows[0].n,2);
+      await assert.rejects(fresh.query('UPDATE portal.visit_flags SET event_id=$1 WHERE id=$2',['not-a-uuid',flagA]));
     }finally{await fresh.close();}
   });
   console.log(`${checks} visits PostgreSQL checks passed.`);

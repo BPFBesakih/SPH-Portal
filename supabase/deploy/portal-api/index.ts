@@ -6205,6 +6205,20 @@ async function saveFormSettings(db, user, b, audit2) {
   return await formSettings(db);
 }
 var flagStatuses = Object.freeze(["menunggu", "disetujui", "ditolak", "dibatalkan"]);
+var flagLineage = (where) => `WITH RECURSIVE flag_lineage(flag_id,evaluation_id,koreksi_dari) AS (
+ SELECT f.id,f.evaluation_id,e.koreksi_dari FROM visit_flags f
+ LEFT JOIN visit_evaluations e ON e.id=f.evaluation_id WHERE f.event_id IS NULL AND ${where}
+ UNION
+ SELECT l.flag_id,e.id,e.koreksi_dari FROM flag_lineage l JOIN visit_evaluations e ON e.id=l.koreksi_dari
+), flag_roots AS (
+ SELECT l.flag_id,coalesce(l.koreksi_dari,l.evaluation_id) AS event_id FROM flag_lineage l
+ WHERE l.koreksi_dari IS NULL OR NOT EXISTS(SELECT 1 FROM visit_evaluations e WHERE e.id=l.koreksi_dari)
+)`;
+async function resolveFlagEvents(db, through) {
+  return Number((await run(db, `${flagLineage("f.wita_date<=?")}
+  UPDATE visit_flags SET event_id=(SELECT r.event_id FROM flag_roots r WHERE r.flag_id=visit_flags.id)
+  WHERE event_id IS NULL AND id IN(SELECT flag_id FROM flag_roots)`, through)).changes);
+}
 var flagView = (f) => ({
   id: f.id,
   evaluationId: f.evaluation_id,
@@ -6250,6 +6264,14 @@ async function flagList(db, q) {
     batas: scoringRules.flagLimit
   };
 }
+var decisionSnapshot = (f) => ({
+  status: f.status,
+  catatan: f.keputusan_catatan || "",
+  diputuskan_oleh: f.decided_by || null,
+  diputuskan_pada: f.decided_at || null,
+  diperbarui_pada: f.updated_at,
+  row_version: Number(f.row_version)
+});
 async function decideFlag(db, user, b, audit2) {
   assert(["setujui", "tolak", "buka"].includes(b?.action), "Tindakan tidak valid.");
   const f = await one(db, "SELECT * FROM visit_flags WHERE id=?", String(b.id || ""));
@@ -6266,18 +6288,28 @@ async function decideFlag(db, user, b, audit2) {
     assert(b.action === "setujui" || note.length >= scoringRules.catatanMin, "Tulis alasan penolakan.");
     await run(db, "UPDATE visit_flags SET status=?,decided_by=?,decided_at=?,keputusan_catatan=?,updated_at=?,row_version=row_version+1 WHERE id=? AND row_version=?", b.action === "setujui" ? "disetujui" : "ditolak", user.id, stamp, note, stamp, f.id, f.row_version);
   }
+  const saved = await one(db, `${flagSelect} WHERE f.id=?`, f.id);
   await audit2(db, user, "DECIDE", "visit_flags", f.id, {
     tindakan: b.action,
     jenis: f.jenis,
     kode: f.kode,
     guide: f.guide_id,
-    tanggal: f.wita_date
-  });
-  return flagView(await one(db, `${flagSelect} WHERE f.id=?`, f.id));
+    tanggal: f.wita_date,
+    sebelum: decisionSnapshot(f),
+    sesudah: decisionSnapshot(saved)
+  }, note);
+  return flagView(saved);
 }
 async function flagCounts(db, from, to) {
   const out = /* @__PURE__ */ new Map();
-  for (const r of await all(db, "SELECT guide_id,jenis,status,count(*) AS n FROM visit_flags WHERE wita_date>=? AND wita_date<=? AND status IN('menunggu','disetujui') GROUP BY guide_id,jenis,status", from, to)) {
+  for (const r of await all(db, `${flagLineage("f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')")}
+ SELECT guide_id,jenis,status,count(*) AS n FROM (
+  SELECT f.guide_id,f.jenis,coalesce(f.event_id,r.event_id,f.evaluation_id) AS event_id,
+   CASE WHEN max(CASE WHEN f.status='disetujui' THEN 1 ELSE 0 END)=1 THEN 'disetujui' ELSE 'menunggu' END AS status
+  FROM visit_flags f LEFT JOIN flag_roots r ON r.flag_id=f.id
+  WHERE f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')
+  GROUP BY f.guide_id,f.jenis,coalesce(f.event_id,r.event_id,f.evaluation_id)
+ ) AS events GROUP BY guide_id,jenis,status`, from, to, from, to)) {
     let g = out.get(r.guide_id);
     if (!g) {
       g = {
@@ -6325,6 +6357,9 @@ var reguInfo = Object.freeze([{
 }]);
 var reguCodes = reguInfo.map((r) => r.kode);
 var witaOffset = 8 * 36e5;
+async function lockVisitEvaluations(db) {
+  if (typeof db.query === "function") await run(db, "SELECT pg_advisory_xact_lock(hashtextextended('portal.visits.guide_evaluations',0))");
+}
 var witaDate = (ms) => new Date(ms + witaOffset).toISOString().slice(0, 10);
 var shiftDate = (day, days) => new Date(Date.parse(day + "T00:00:00Z") + days * 864e5).toISOString().slice(0, 10);
 var monthLastDay = (month) => {
@@ -6652,7 +6687,8 @@ async function evaluateHistoryRows(db, rows) {
   const candidates = [...new Set(rows.map((r) => String(r[1] ?? "").trim().toLowerCase()).filter((id) => uuidPattern.test(id)))];
   const inPortal = await idsIn(db, "visit_evaluations", candidates), inHistory = await idsIn(db, "visit_history_ids", candidates);
   const portalFrom = (await one(db, "SELECT min(wita_date) AS d FROM visit_evaluations"))?.d || null;
-  const last = today(), counts = Object.fromEntries(historyReasonKeys.map((k) => [k, 0])), months = /* @__PURE__ */ new Map(), groups = /* @__PURE__ */ new Map(), problems = [], ids = [], seen = /* @__PURE__ */ new Set();
+  const last = today(), counts = Object.fromEntries(historyReasonKeys.map((k) => [k, 0])), months = /* @__PURE__ */ new Map(), groups = /* @__PURE__ */ new Map(), problems = [], ids = [], matches = [], seen = /* @__PURE__ */ new Set();
+  const folded = new Set((await all(db, "SELECT day,guide_id,pos FROM visit_daily_totals WHERE sumber='portal'")).map((r) => `${r.day}|${r.guide_id}|${r.pos}`));
   let first = null, lastDay = null;
   const note = (reason, line) => {
     counts[reason]++;
@@ -6729,6 +6765,7 @@ async function evaluateHistoryRows(db, rows) {
       note("DUPLIKAT", line);
       continue;
     }
+    assert(!folded.has(`${day}|${guide.id}|${pos}`), `Riwayat baris ${line} bertumpang tindih dengan pengantaran portal yang sudah dilipat (${day}, ${guide.id}, Pos ${pos}). Cocokkan spreadsheet terlebih dahulu sebelum mengimpor periode tersebut; waktu rinci portal tidak lagi tersedia.`, 409);
     if (portalFrom && day >= portalFrom) {
       const low = new Date(ms - visitRules.jedaMenit * 6e4).toISOString(), high = new Date(ms + visitRules.jedaMenit * 6e4).toISOString();
       if (await one(db, "SELECT id FROM visit_evaluations WHERE guide_id=? AND pos=? AND status='aktif' AND evaluated_at>? AND evaluated_at<? LIMIT 1", guide.id, pos, low, high)) {
@@ -6740,6 +6777,12 @@ async function evaluateHistoryRows(db, rows) {
     const uniform = historyUniform(uniformValue), idCard = historyIdCard(idCardValue), etika = historyEtika(etikaValue), patuh = uniform >= 1 ? 1 : 0;
     counts.MASUK++;
     ids.push(id);
+    matches.push({
+      id,
+      guide_id: guide.id,
+      pos,
+      evaluated_at: new Date(ms).toISOString()
+    });
     if (!first || day < first) first = day;
     if (!lastDay || day > lastDay) lastDay = day;
     const m = monthOf(day);
@@ -6782,6 +6825,7 @@ async function evaluateHistoryRows(db, rows) {
     last: lastDay,
     problems,
     ids,
+    matches,
     groups: [...groups.values()]
   };
 }
@@ -6857,6 +6901,7 @@ async function importVisitHistory(db, user, b, audit2) {
     part: meta.part,
     ...publicPart(await evaluateHistoryRows(db, b.rows))
   };
+  await lockVisitEvaluations(db);
   let imp;
   if (b.import_id) {
     imp = await one(db, "SELECT * FROM visit_history_import WHERE id=?", String(b.import_id));
@@ -6883,7 +6928,7 @@ async function importVisitHistory(db, user, b, audit2) {
     import: historyView(imp)
   };
   const r = await evaluateHistoryRows(db, b.rows), stamp = now();
-  for (const id of r.ids) await run(db, "INSERT INTO visit_history_ids(id,import_id) VALUES(?,?)", id, imp.id);
+  for (const m of r.matches) await run(db, "INSERT INTO visit_history_ids(id,import_id,guide_id,pos,evaluated_at) VALUES(?,?,?,?,?)", m.id, imp.id, m.guide_id, m.pos, m.evaluated_at);
   for (const g of r.groups) await run(db, `INSERT INTO visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at,n_id,n_kurang,n_tidak,n_teguran) VALUES(?,?,?,'nilaiguide',?,?,?,?,0,?,?,?,0,?,?)
   ON CONFLICT(day,guide_id,pos,sumber) DO UPDATE SET antar=visit_daily_totals.antar+excluded.antar,uniform=visit_daily_totals.uniform+excluded.uniform,uniform_patuh=visit_daily_totals.uniform_patuh+excluded.uniform_patuh,
   id_card=visit_daily_totals.id_card+excluded.id_card,etika=visit_daily_totals.etika+excluded.etika,updated_at=excluded.updated_at,
@@ -6898,6 +6943,7 @@ async function importVisitHistory(db, user, b, audit2) {
   };
 }
 async function finishVisitHistory(db, user, b, audit2) {
+  await lockVisitEvaluations(db);
   const imp = await one(db, "SELECT * FROM visit_history_import WHERE id=?", String(b?.import_id || ""));
   assert(imp && imp.status === "menyusun", "Migrasi ini tidak sedang disusun. Muat ulang halaman.", 409);
   const done = JSON.parse(imp.parts_done || "[]");
@@ -6918,6 +6964,7 @@ async function finishVisitHistory(db, user, b, audit2) {
   };
 }
 async function cancelVisitHistory(db, user, b, audit2) {
+  await lockVisitEvaluations(db);
   const imp = await one(db, "SELECT * FROM visit_history_import WHERE id=?", String(b?.import_id || ""));
   assert(imp && imp.terbuka !== null && Number(imp.terbuka) === 1, "Migrasi ini sudah dibatalkan atau tidak ada. Muat ulang halaman.", 409);
   const totals = (await run(db, "DELETE FROM visit_daily_totals WHERE sumber='nilaiguide'")).changes;
@@ -8052,6 +8099,7 @@ async function verifyOldRows(ctx, summary, cutoff) {
 }
 async function foldVerifiedDays(db, owner, cutoff) {
   await holdSheetLease(db, owner);
+  await lockVisitEvaluations(db);
   const blocking = (await one(db, "SELECT min(wita_date) AS d FROM visit_evaluations WHERE wita_date<? AND (sheet_row IS NULL OR sheet_dirty=1 OR sheet_verified_at IS NULL)", cutoff))?.d || null;
   const through = blocking ? shiftDate(blocking, -1) : shiftDate(cutoff, -1);
   const count = Number((await one(db, "SELECT count(*) AS n FROM visit_evaluations WHERE wita_date<=?", through)).n);
@@ -8071,6 +8119,7 @@ async function foldVerifiedDays(db, owner, cutoff) {
    id_card=visit_daily_totals.id_card+excluded.id_card,review=visit_daily_totals.review+excluded.review,etika=visit_daily_totals.etika+excluded.etika,updated_at=excluded.updated_at,
    n_id=visit_daily_totals.n_id+excluded.n_id,n_kurang=visit_daily_totals.n_kurang+excluded.n_kurang,n_tidak=visit_daily_totals.n_tidak+excluded.n_tidak,n_teguran=visit_daily_totals.n_teguran+excluded.n_teguran`, g.day, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), stamp, Number(g.n_id), Number(g.n_kurang), Number(g.n_tidak), Number(g.n_teguran));
   const days = Number((await one(db, "SELECT count(DISTINCT wita_date) AS n FROM visit_evaluations WHERE wita_date<=?", through)).n);
+  await resolveFlagEvents(db, through);
   const deleted = (await run(db, "DELETE FROM visit_evaluations WHERE wita_date<=?", through)).changes;
   await run(db, "UPDATE visit_sheet_state SET folded_through=?,updated_at=? WHERE id=1", through, stamp);
   return {

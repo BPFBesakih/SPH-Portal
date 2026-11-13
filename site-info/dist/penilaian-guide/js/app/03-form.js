@@ -108,7 +108,12 @@
     }
     for (const [sel, jenis] of [['#beratSelect', 'berat'], ['#apresiasiSelect', 'apresiasi']]) {
       const el = $(sel);
-      if (el) el.innerHTML = `<option value="">Tidak ada</option>` + (k[jenis] || []).map(t => `<option value="${esc(t.kode)}">${esc(t.label)}</option>`).join('');
+      const dipilih = App.state.form.crit[jenis], aktif = k[jenis] || [];
+      // Draf/koreksi harus tetap memperlihatkan laporan yang sudah dipilih,
+      // meskipun pengelola kemudian menonaktifkan jenisnya.
+      const pilihan = [...aktif, ...(dipilih && !aktif.some(t => t.kode === dipilih)
+        ? [{ kode: dipilih, label: `${App.labelTemuan(jenis, dipilih)} (tidak aktif)`, nonaktif: true }] : [])];
+      if (el) el.innerHTML = `<option value="">Tidak ada</option>` + pilihan.map(t => `<option value="${esc(t.kode)}"${t.nonaktif ? ' data-nonaktif' : ''}>${esc(t.label)}</option>`).join('');
     }
     const pid = $('#petunjukId'), pseragam = $('#petunjukSeragam');
     if (pid) { pid.textContent = k.petunjuk?.idCard || ''; pid.hidden = !pid.textContent; }
@@ -206,9 +211,24 @@
       // Paling banyak 2 teguran per pengantaran: chip lain dikunci setelah 2 dipilih.
       b.toggleAttribute('disabled', !on && dipilih.length >= TEGURAN_MAKS);
     });
-    const berat = $('#beratSelect'), apresiasi = $('#apresiasiSelect');
-    if (berat) berat.value = c.berat || '';
-    if (apresiasi) apresiasi.value = c.apresiasi || '';
+    const list = $('#teguranList');
+    let lama = $('#teguranLamaNote');
+    if (!lama && list) {
+      lama = document.createElement('p'); lama.id = 'teguranLamaNote'; lama.className = 'help crit-help';
+      lama.setAttribute('role', 'status'); list.after(lama);
+    }
+    if (lama) {
+      lama.hidden = App.state.form.teguranLama?.guideId !== App.state.form.guide?.guideId || dipilih.length > 0 || !App.state.form.teguranLama;
+      lama.textContent = 'Penilaian lama memuat 1 teguran tanpa jenis. Pilih jenis tegurannya. Jika teguran itu keliru, konfirmasikan penghapusannya saat menyimpan.';
+    }
+    for (const [sel, jenis] of [['#beratSelect', 'berat'], ['#apresiasiSelect', 'apresiasi']]) {
+      const el = $(sel);
+      if (!el) continue;
+      // Opsi nonaktif hanya berlaku untuk isian yang sedang dibetulkan, bukan
+      // menjadi pilihan baru sesudah formulir dikosongkan atau laporannya dihapus.
+      el.querySelectorAll('option[data-nonaktif]').forEach(o => { if (o.value !== c[jenis]) o.remove(); });
+      el.value = c[jenis] || '';
+    }
     const laporan = $('#laporanBox');
     if (laporan && (c.berat || c.apresiasi)) laporan.open = true;
     const wajib = $('#catatanWajib');
@@ -216,11 +236,14 @@
   }
 
   App.showPicked = function showPicked(g) {
+    // Draf koreksi yang dibuka kembali tidak boleh membawa teguran guide lain.
+    if (App.state.form.teguranLama && App.state.form.teguranLama.guideId !== g.guideId) delete App.state.form.teguranLama;
     const el = $('#guidePicked');
     el.dataset.guideId = g.guideId;
     el.innerHTML = `✓ ${esc(g.guideName)} · ${esc(g.guideId)} · ${esc(App.labelRegu(g.regu))}`;
     el.classList.remove('hidden');
     App.tandaiKembar(g);
+    App.applyCritUI();
   }
 
   /**
@@ -336,6 +359,11 @@
         return;
       }
     }
+
+    // Jenis teguran dari Etika lama tidak bisa ditebak. Penurunan jumlahnya ke
+    // nol harus disengaja, bukan efek samping membetulkan ID-Card/seragam.
+    if (App.state.form.teguranLama?.guideId === g.guideId && !(crit.teguran || []).length &&
+        !confirm('Penilaian lama memuat 1 teguran. Anda belum memilih jenisnya. Hapus teguran lama ini? Pilih Batal untuk mempertahankannya dan mengisi jenis teguran.')) return;
 
     const evaluation = {
       evaluationId: uuid(),

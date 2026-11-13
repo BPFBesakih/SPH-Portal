@@ -186,7 +186,7 @@ function historySummary(s,reasons){
  const skipped=['DIGANTI','POS2','BENTROK','DUPLIKAT'].reduce((n,k)=>n+s.counts[k],0),rejected=['ID','TANGGAL','POS','GUIDE','ID_PORTAL'].reduce((n,k)=>n+s.counts[k],0);
  const countRows=historyReasonOrder.filter(k=>k==='MASUK'||s.counts[k]).map(k=>`<tr><td>${esc(reasons?.[k]||k)}</td><td><strong>${number(s.counts[k])}</strong></td></tr>`);
  const monthRows=s.months.filter(m=>m.antar||m.pos2||m.diganti||m.lainnya).map(m=>`<tr><td>${esc(monthName(m.month))}</td><td><strong>${number(m.antar)}</strong></td><td>${pct(m.antar?m.uniform_patuh/m.antar:null)}</td><td>${pct(m.antar?m.id_card/m.antar:null)}</td><td>${dec(m.antar?m.etika/m.antar:null)}</td><td>${number(m.pos2)}</td><td>${number(m.diganti)}</td><td>${number(m.lainnya)}</td></tr>`);
- return `<div class="notice ${rejected?'warning':''}">${icon(rejected?'incident':'check')}<div><strong>${number(s.counts.MASUK)} penilaian masuk ke rekap${s.first?`, ${esc(formatDate(s.first))} – ${esc(formatDate(s.last))}`:''}</strong><p>${number(skipped)} dilewati · ${number(rejected)} ditolak. Yang disimpan hanya rekap harian per guide; catatan, jam, dan nama petugas tetap di spreadsheet NilaiGuide.</p></div></div>
+ return `<div class="notice ${rejected?'warning':''}">${icon(rejected?'incident':'check')}<div><strong>${number(s.counts.MASUK)} penilaian masuk ke rekap${s.first?`, ${esc(formatDate(s.first))} – ${esc(formatDate(s.last))}`:''}</strong><p>${number(skipped)} dilewati · ${number(rejected)} ditolak. Penilaian diringkas per hari; catatan dan nama petugas tetap di spreadsheet NilaiGuide.</p></div></div>
   <h3 class="visit-import-title">Cocokkan dengan tab Dasbor NilaiGuide</h3>
   <p class="muted text-small">Angka per bulan dari baris yang masuk. Bandingkan dengan baris TOTAL tab Dasbor NilaiGuide bulan yang sama: selisih pengantaran seharusnya hanya kolom Pos 2 dan Lainnya (ditolak atau bentrok). Nilai REVIEW tidak diimpor.</p>
   ${table(['Bulan','Pengantaran','% Uniform','% ID-Card','Rata Etika','Pos 2','Dikoreksi','Lainnya'],monthRows,'Tidak ada baris yang masuk.')}
@@ -227,7 +227,12 @@ function historyDialog(h){
    const summary=mergeHistory(checked,read.duplicates);
    progress.textContent=`${number(read.rowsTotal)} baris dari sheet ${read.sheet?`"${read.sheet}"`:'berkas'}. Pratinjau — belum ada yang disimpan.`;
    result.innerHTML=historySummary(summary,h.reasons);
-   file=read;parts=split;applyButton.disabled=!summary.counts.MASUK;
+   // Saat melanjutkan, baris yang sudah tersimpan dibaca sebagai duplikat oleh
+   // pratinjau. Tetap izinkan bagian tersisa (meski semuanya dilewati) dan tahap
+   // selesai, berdasarkan jumlah yang sudah diterima dalam migrasi ini.
+   const saved=current?.ringkasan?.counts?.MASUK||0;
+   if(saved)result.insertAdjacentHTML('afterbegin',`<div class="notice">${icon('document')}<div><strong>${number(saved)} penilaian sudah tersimpan dari pengiriman sebelumnya.</strong><p>Lanjutkan untuk menyelesaikan migrasi. Baris tersebut tidak ditambahkan lagi.</p></div></div>`);
+   file=read;parts=split;applyButton.disabled=!(summary.counts.MASUK||saved);
   }catch(error){progress.textContent='';result.innerHTML=`<div class="notice error">${icon('incident')}<div><strong>Berkas belum dapat dipakai</strong><p>${esc(error.message)}</p></div></div>`;}
  });
  applyButton.addEventListener('click',async()=>{
