@@ -4,22 +4,24 @@ Status 13 November 2026: **E-Arsip telah dirilis melalui PR #33; kewenangan dipe
 
 Implementasi, merge, dan penerapan produksi diizinkan pemilik pada 12 November 2026. Revisi kewenangan 13 November menggantikan batasan Super Admin pada PRD awal. Role Super Admin pada lima staf Humas dilepas atas persetujuan pemilik; role Humas dan penunjukan petugas tetap tersedia. Kepala Urusan Humas dan akun pemilik tetap Super Admin.
 
+Navigasi 13 November (cabang `claude/humas-modul-e-arsip`, hanya tampilan): E-Arsip dipindah dari menu bersama ke ruang kerja **Humas** sesuai PRD 10.1 *Humas → E-Arsip*.
+
 ## Yang dibangun
 
-Menu bersama **E-Arsip** di `/app/` (seperti Cuti dan Absensi), dengan isi mengikuti hak akun:
+Ruang kerja **Humas** di pemilih modul `/app/` (sejajar SDM, Keamanan, Pengadaan, Bisnis, dan Kunjungan), sesuai PRD 10.1 *Humas → E-Arsip*. Sidebar ruang kerja ini berjudul **HUMAS · E-ARSIP**; isinya mengikuti hak akun:
 
 | Bagian | Untuk siapa | Isi |
 |---|---|---|
-| Ringkasan | Semua | Total arsip aktif, jumlah per jenis (hanya yang dapat dibaca penuh), arsip terbaru, notifikasi portal |
-| Daftar Arsip | Semua | Cari nomor agenda/nomor surat/perihal; saringan tanggal arsip, bagian, jenis, arah, klasifikasi, tanggal surat, "dibagikan kepada saya"; tabel di desktop, kartu di HP |
-| Tambah Arsip | Petugas arsip yang ditunjuk | Form Informasi Surat + Dokumen; satu dokumen utama wajib, banyak lampiran; status unggah per berkas; peringatan dugaan duplikat |
-| Detail arsip | Pembaca | Informasi surat, pratinjau (PDF di kanvas, gambar), dokumen dan versi, Riwayat, dan untuk Humas: Pengaturan Akses |
-| Laporan | Semua | Rekap periode/bagian/jenis, buku agenda masuk/keluar; XLSX dan PDF |
-| Pengajuan Hapus | Petugas dan Humas | Petugas mengajukan dan membatalkan; Humas menyetujui atau menolak |
-| Jenis Dokumen, Arsip Dihapus | Humas | Master jenis; daftar arsip yang disembunyikan dan pemulihannya |
-| Petugas Arsip | Administrator | Menunjuk/mencabut petugas per bagian dan menetapkan kode agenda bagian |
+| Ringkasan (`#archives`) | Semua | Total arsip aktif, jumlah per jenis (hanya yang dapat dibaca penuh), arsip terbaru, notifikasi portal |
+| Daftar Arsip (`#archive-list`) | Semua | Cari nomor agenda/nomor surat/perihal; saringan tanggal arsip, bagian, jenis, arah, klasifikasi, tanggal surat, "dibagikan kepada saya"; tabel di desktop, kartu di HP |
+| Tambah Arsip (`#archive-new`) | Petugas arsip yang ditunjuk, dan Super Admin | Form Informasi Surat + Dokumen; satu dokumen utama wajib, banyak lampiran; status unggah per berkas; peringatan dugaan duplikat |
+| Detail arsip (`#archive-list?id=…`) | Pembaca | Informasi surat, pratinjau (PDF di kanvas, gambar), dokumen dan versi, Riwayat, dan untuk Humas: Pengaturan Akses |
+| Laporan (`#archive-reports`) | Semua | Rekap periode/bagian/jenis, buku agenda masuk/keluar; XLSX dan PDF |
+| Pengajuan Hapus (`#archive-requests`) | Petugas dan Humas | Petugas mengajukan dan membatalkan; Humas menyetujui atau menolak |
+| Jenis Dokumen (`#archive-types`), Arsip Dihapus (`#archive-deleted`) | Humas | Master jenis; daftar arsip yang disembunyikan dan pemulihannya |
+| Petugas Arsip (`#archive-officers`) | Super Admin; Kepala Urusan untuk bawahannya | Menunjuk/mencabut petugas per bagian dan menetapkan kode agenda bagian. Ditempatkan di sidebar Humas, bukan Pengaturan Akses, karena Kepala Urusan yang bukan administrator juga mengelola petugas |
 
-Lonceng portal menampilkan notifikasi E-Arsip yang belum dibaca dan, untuk Humas, pengajuan hapus yang menunggu.
+Ruang kerja Humas tampil bagi setiap akun yang dapat memakai E-Arsip (akun yang tertaut pegawai, atau pemegang izin `archives.*`), karena petugas dan pegawai semua bagian membaca dan mengarsipkan lewat sana; menu di dalamnya mengikuti hak akun. Lonceng portal menampilkan notifikasi E-Arsip yang belum dibaca dan, untuk Humas, pengajuan hapus yang menunggu (juga sebagai angka di menu Pengajuan Hapus).
 
 ### Aturan inti
 
@@ -47,7 +49,7 @@ Lonceng portal menampilkan notifikasi E-Arsip yang belum dibaca dan, untuk Humas
 | Kepala Urusan | Jabatan utama aktif bernama Kepala Urusan; dapat melihat dan mencabut petugas dalam rantai bawahannya pada bagian yang berwenang, tanpa memerlukan role Super Admin |
 | schema `arsip`/`arsip_private`, RPC | Schema privat `portal` (RLS aktif, tanpa grant ke klien) + rute `archives/*` di Edge Function `portal-api`, sama seperti modul lain |
 | `file_objects` | Tabel `files` yang sudah ada; berkas di Drive privat, folder modul **SPH-Portal-Arsip** |
-| `notification_outbox` | `archive_notifications` (dibaca lewat menu E-Arsip dan lonceng) |
+| `notification_outbox` | `archive_notifications` (dibaca lewat Ringkasan E-Arsip dan lonceng) |
 
 Modul membaca role aktif dan izin langsung dari database. Super Admin dikenali dari kode role `SUPER_ADMIN`; administrator lain tidak memperoleh kewenangan itu secara otomatis. Kepala Urusan dikenali dari penempatan utama yang masih berlaku dan rantai atasan pegawai, sehingga dua Kepala Urusan dalam unit Sekretariat yang sama tidak menguasai staf satu sama lain. Pencabutan diperiksa di server; penunjukan ulang juga tidak boleh dipakai untuk melewati pembatasan ini. API mengirim `can_revoke` per baris agar tombol Cabut mengikuti hak sebenarnya.
 
@@ -113,7 +115,7 @@ Validasi perbaikan: Node 24.22.1 dan PGlite 0.5.16, seluruh data fiktif. Paket P
 
 ## Rilis (oleh pemilik repo)
 
-Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat urutan aman bila tertukar: menu E-Arsip baru tampil setelah `portal-api` menjawab `archives/overview`; sebelum itu rute menjawab 404 dan menu tersembunyi.
+Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat urutan aman bila tertukar: ruang kerja Humas baru tampil setelah `portal-api` menjawab `archives/overview`; sebelum itu rute menjawab 404 dan menu tersembunyi.
 
 1. **Migrasi** di SQL Editor: `supabase/migrations/20261112100000_archive_module.sql`. Aditif, satu transaksi: 14 tabel, tiga izin `archives.*`, role Humas dan Pengawas Arsip, serta izin menunjuk petugas untuk Super Admin dan IT Admin. Tidak mengubah tabel modul lain.
 2. **`portal-api`**: unduh versi yang sedang aktif, simpan sebagai titik kembali, dan hitung SHA-256-nya.
@@ -121,9 +123,9 @@ Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat uruta
    - Untuk API yang sudah memuat E-Arsip, jalankan `node scripts/build-archive-deploy.mjs <berkas-aktif.ts> <sha256> --refresh`. Hanya namespace E-Arsip yang diganti; batas integrasi dan impor diperiksa. API tanpa E-Arsip memakai perintah yang sama tanpa `--refresh`.
    - Cocokkan dan uji hasilnya sebelum deploy. Tidak ada migrasi skema tambahan untuk revisi kewenangan 13 November.
 3. **Merge** cabang ke `master`: Pages menayangkan bundel `portal-d7862f39ce76.js` + `portal-2f27fca3acb5.css` dan berkas pdf.js di `/app/assets/vendor/pdfjs/`.
-4. **Uji asap**: muat ulang `/app/`; buka Cuti, Kunjungan, Merchandise, Pengadaan, Absensi (karena `portal-api` berganti); lalu di E-Arsip:
+4. **Uji asap**: muat ulang `/app/`; buka Cuti, Kunjungan, Merchandise, Pengadaan, Absensi (karena `portal-api` berganti); lalu pilih ruang kerja **Humas**:
    - Role & Izin: beri role **Humas** kepada akun Humas;
-   - Petugas Arsip: tunjuk satu petugas dan tetapkan kode agenda bagiannya;
+   - Humas → Petugas Arsip: tunjuk satu petugas dan tetapkan kode agenda bagiannya;
    - sebagai petugas: tambah satu arsip uji (PDF + lampiran foto dari HP), buka pratinjau;
    - sebagai Humas: ubah klasifikasi, bagikan, beri izin unduh, hapus dan pulihkan;
    - pastikan folder Drive **SPH-Portal-Arsip** terbentuk dan log `portal-api` tanpa galat.
@@ -131,7 +133,7 @@ Urutan: migrasi → `portal-api` → merge (Pages). Pengaman rilis membuat uruta
 
 ## Rollback
 
-- **Hanya E-Arsip bermasalah**: deploy ulang `portal-api` versi sebelumnya (salinan dari langkah 2). Rute arsip kembali 404 dan menu hilang saat pengguna memuat ulang. Pages tidak perlu diubah.
+- **Hanya E-Arsip bermasalah**: deploy ulang `portal-api` versi sebelumnya (salinan dari langkah 2). Rute arsip kembali 404 dan ruang kerja Humas hilang saat pengguna memuat ulang. Pages tidak perlu diubah.
 - **Tampilan bermasalah**: revert merge di `master`, atau Rollback di Cloudflare ke deployment sebelumnya.
 - **Data**: jangan `DROP TABLE` dan jangan menghapus folder Drive. Tabel arsip tidak dipakai versi tanpa E-Arsip, jadi boleh dibiarkan. Arsip yang sudah tersimpan tetap utuh untuk dipasang kembali.
 

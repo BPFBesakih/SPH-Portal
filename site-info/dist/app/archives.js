@@ -7,6 +7,16 @@ import {createXlsx} from './xlsx-export.js';
 // pengarsipan, dan label Rahasia, jadi halaman ini tidak pernah menerima metadata yang
 // disamarkan. Berkas dibuka lewat rute pratinjau; berkas asli hanya lewat rute unduh.
 export const archivesTitle='E-Arsip';
+// Ruang kerja Humas → E-Arsip (PRD 10.1). Tiap bagian E-Arsip adalah rute sendiri di
+// sidebar Humas; detail arsip dibuka sebagai archive-list?id=… Petugas Arsip juga di sini,
+// karena selain Super Admin, Kepala Urusan mengelola petugas di bawah urusannya.
+export const archiveTitles={archives:'E-Arsip','archive-list':'Daftar Arsip','archive-new':'Tambah Arsip','archive-reports':'Laporan Arsip','archive-requests':'Pengajuan Hapus Arsip',
+ 'archive-types':'Jenis Dokumen Arsip','archive-deleted':'Arsip Dihapus','archive-officers':'Petugas Arsip'};
+export const archiveRoutes=Object.keys(archiveTitles);
+const routeTab={archives:'summary','archive-list':'list','archive-new':'new','archive-reports':'reports','archive-requests':'requests','archive-types':'types','archive-deleted':'deleted','archive-officers':'officers'};
+export const archiveNav=[['archives','Ringkasan','dashboard','archives:home'],['archive-list','Daftar Arsip','folder','archives:home'],['archive-new','Tambah Arsip','plus','archives:officer'],
+ ['archive-reports','Laporan','document','archives:home'],['archive-requests','Pengajuan Hapus','trash','archives:requests'],['archive-types','Jenis Dokumen','key','archives:humas'],['archive-deleted','Arsip Dihapus','trash','archives:humas'],
+ ['archive-officers','Petugas Arsip','people','archives:officers']];
 const freshFilters=()=>({q:'',from:'',to:'',unit:'',type:'',direction:'',classification:'',letter_from:'',letter_to:'',shared:false});
 const R={owner:null,overview:null,tab:'summary',id:null,detail:null,missing:false,section:'documents',dashboard:null,notifications:null,filters:freshFilters(),list:null,
  types:null,deleted:null,requests:null,requestStatus:'PENDING',officers:null,history:null,access:null,report:null,uploads:new Map(),keys:new Map()};
@@ -49,31 +59,21 @@ const area=(label,name,extra='',value='')=>`<label class="field full"><span>${es
 const operationKey=()=>globalThis.crypto?.randomUUID?globalThis.crypto.randomUUID():Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
 function saveBlob(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
 function decode(base64){const text=atob(base64),bytes=new Uint8Array(text.length);for(let i=0;i<text.length;i++)bytes[i]=text.charCodeAt(i);return bytes;}
-const go=query=>{const hash=`#archives${query?`?${query}`:''}`;if(location.hash===hash)document.dispatchEvent(new Event('refresh-app'));else location.hash=hash;};
+const go=(route,query='')=>{const hash=`#${route}${query?`?${query}`:''}`;if(location.hash===hash)document.dispatchEvent(new Event('refresh-app'));else location.hash=hash;};
+const openArchive=(id,view)=>go('archive-list',`id=${encodeURIComponent(id)}${view?`&view=${view}`:''}`);
 const typeOptions=(selected,{activeOnly=false,blank=''}={})=>`${blank?option('',blank,selected):''}${(R.overview?.types||[]).filter(t=>!activeOnly||t.active||t.id===selected).map(t=>option(t.id,t.active?t.name:`${t.name} (nonaktif)`,selected)).join('')}`;
 const unitOptions=(selected,blank='Semua bagian dalam kewenangan')=>`${option('',blank,selected)}${(R.overview?.units||[]).map(u=>option(u.id,u.name,selected)).join('')}`;
 
-function tabs(){
- const o=R.overview,list=[['summary','Ringkasan'],['list','Daftar Arsip']];
- if(o.officer_units.length)list.push(['new','Tambah Arsip']);
- list.push(['reports','Laporan']);
- if(o.humas||o.officer_units.length)list.push(['requests',`Pengajuan Hapus${o.humas&&o.pending_delete_requests?` (${o.pending_delete_requests})`:''}`]);
- if(o.humas)list.push(['types','Jenis Dokumen'],['deleted','Arsip Dihapus']);
- if(o.officer_management||o.admin)list.push(['officers','Petugas Arsip']);
- return list;
-}
-
 /* ---------- Muat halaman ---------- */
-export async function loadArchivesPage(){
+export async function loadArchivesPage(route='archives'){
  if(R.owner!==state.me)Object.assign(R,{owner:state.me,tab:'summary',filters:freshFilters(),list:null,report:null,requestStatus:'PENDING',uploads:new Map(),keys:new Map()});
  closeViewer();
- R.overview=await api('archives/overview');state.archives=R.overview;state.archivesAt=Date.now();
+ // Ringkasan hak baru saja diambil sebelum rute diputuskan (refreshArchivesForRoute); jangan ambil dua kali.
+ R.overview=state.archives&&Date.now()-(state.archivesAt||0)<3000?state.archives:await api('archives/overview');state.archives=R.overview;state.archivesAt=Date.now();
  const params=new URLSearchParams(location.hash.split('?')[1]||'');
- R.id=params.get('id');
+ R.tab=routeTab[route]||'summary';
+ R.id=R.tab==='list'?params.get('id'):null;
  if(R.id){R.section=['documents','history','access'].includes(params.get('view'))?params.get('view'):'documents';await loadDetail();return renderDetail();}
- const list=tabs(),requested=params.get('tab');
- if(requested&&list.some(([key])=>key===requested))R.tab=requested;
- if(!list.some(([key])=>key===R.tab))R.tab='summary';
  R.report=R.report||{type:'recap_period',from:monthStart(),to:localToday(),unit_id:'',document_type_id:''};
  await loadTab();
  return render();
@@ -103,21 +103,25 @@ async function loadDetail(){
  if(R.section==='history')R.history=await api(`archives/${encodeURIComponent(R.id)}/history`);
  if(R.section==='access')R.access=await api(`archives/${encodeURIComponent(R.id)}/access`);
 }
+const headings={summary:['E-Arsip','Arsip digital dokumen administrasi per bagian, dengan pengawasan Humas.'],list:['Daftar Arsip','Cari dan saring arsip dalam kewenangan Anda.'],
+ new:['Tambah Arsip','Arsipkan dokumen bagian Anda. Nomor agenda dibuat otomatis.'],reports:['Laporan Arsip','Rekap dan buku agenda sesuai hak akses Anda.'],
+ requests:['Pengajuan Hapus','Pengajuan penghapusan arsip dari petugas kepada Humas.'],types:['Jenis Dokumen','Master jenis dokumen untuk arsip baru.'],
+ deleted:['Arsip Dihapus','Arsip yang disembunyikan dan dapat dipulihkan Humas.'],officers:['Petugas Arsip','Penunjukan petugas arsip per bagian dan kode agenda bagian.']};
 function render(){
- const list=tabs(),body={summary:summaryTab,list:listTab,new:newTab,reports:reportsTab,requests:requestsTab,types:typesTab,deleted:deletedTab,officers:officersTab}[R.tab]();
- return `${head('E-Arsip','Arsip digital dokumen administrasi per bagian, dengan pengawasan Humas.',headerActions())}
- <div class="leave-tabs" role="tablist" aria-label="Bagian E-Arsip">${list.map(([key,label])=>`<button type="button" role="tab" aria-selected="${R.tab===key}" class="chip ${R.tab===key?'active':''}" data-arc="tab" data-tab="${key}">${esc(label)}</button>`).join('')}</div>
+ const body={summary:summaryTab,list:listTab,new:newTab,reports:reportsTab,requests:requestsTab,types:typesTab,deleted:deletedTab,officers:officersTab}[R.tab]();
+ const [title,note]=headings[R.tab];
+ return `${head(title,note,headerActions())}
  <div id="archive-content">${body}</div>
  <footer class="page-footer"><span>SPH Portal · E-Arsip</span><span>Waktu operasional WITA</span></footer>`;
 }
 function headerActions(){
- if(['summary','list'].includes(R.tab)&&R.overview.officer_units.length)return btn('Tambah Arsip','tab','plus','primary','data-tab="new"');
+ if(['summary','list'].includes(R.tab)&&R.overview.officer_units.length)return btn('Tambah Arsip','route','plus','primary','data-route="archive-new"');
  if(R.tab==='types')return btn('Tambah jenis','type-new');
  if(R.tab==='officers'&&R.officers?.can_assign)return btn('Tunjuk petugas','officer-new','people');
  return '';
 }
 async function rerender(){
- const main=document.querySelector('#main');if(!main||state.route!=='archives')return;
+ const main=document.querySelector('#main');if(!main||!archiveRoutes.includes(state.route))return;
  closeViewer();
  if(R.id){await loadDetail();main.innerHTML=renderDetail();afterDetail();}
  else{await loadTab();main.innerHTML=render();}
@@ -235,7 +239,7 @@ function newTab(){
   </div><div data-arc-files></div>
   <p class="form-note">Di HP, pemilih berkas dapat membuka kamera untuk memotret surat. Bila kamera menghasilkan HEIC, ubah dulu ke JPG atau PNG.</p></fieldset>
   <p class="form-error" role="alert"></p>
-  <div class="form-actions">${btn('Batal','tab','close','outlined','data-tab="list"')}<button type="submit" class="button primary">${icon('check')}<span>Simpan arsip</span></button></div>
+  <div class="form-actions">${btn('Batal','route','close','outlined','data-route="archive-list"')}<button type="submit" class="button primary">${icon('check')}<span>Simpan arsip</span></button></div>
   </div></form>`;
 }
 function formFiles(form){
@@ -276,7 +280,7 @@ async function submitCreate(form){
   }
   toast(`Arsip tersimpan dengan nomor agenda ${result.archive.agenda_number}.`);
   refreshOverview().catch(()=>{});
-  go(`id=${encodeURIComponent(result.archive.id)}`);
+  openArchive(result.archive.id);
  }catch(e){error.textContent=e.status?e.message:e.message||'Koneksi terputus. Periksa internet, lalu tekan Simpan lagi.';}
  finally{submit.disabled=false;delete form.dataset.busy;}
 }
@@ -629,10 +633,10 @@ function officersTab(){
 /* ---------- Ikatan peristiwa ---------- */
 async function handle(action,el){
  const id=R.id?encodeURIComponent(R.id):null;
- if(action==='tab'){history.replaceState(null,'',`#archives?tab=${el.dataset.tab}`);R.id=null;R.tab=el.dataset.tab;await rerender();window.scrollTo(0,0);return;}
- if(action==='open'){go(`id=${encodeURIComponent(el.dataset.id)}`);return;}
- if(action==='back'){go(`tab=${R.tab==='new'?'list':R.tab}`);return;}
- if(action==='section'){R.section=el.dataset.section;history.replaceState(null,'',`#archives?id=${id}${R.section==='documents'?'':`&view=${R.section}`}`);await rerender();return;}
+ if(action==='route'){go(el.dataset.route);return;}
+ if(action==='open'){openArchive(el.dataset.id);return;}
+ if(action==='back'){go('archive-list');return;}
+ if(action==='section'){R.section=el.dataset.section;history.replaceState(null,'',`#archive-list?id=${id}${R.section==='documents'?'':`&view=${R.section}`}`);await rerender();return;}
  if(action==='filter-reset'){R.filters=freshFilters();await rerender();return;}
  if(action==='more'){const next=await api(`archives?${listQuery(R.list.next_cursor)}`);R.list={...next,items:[...R.list.items,...next.items]};document.querySelector('#archive-content').innerHTML=listTab();return;}
  if(action==='notifications-read'){await post('archives/notifications/read',{all:true});await refreshOverview();await rerender();return;}
@@ -650,7 +654,7 @@ async function handle(action,el){
  if(action==='delete-request'){reasonDialog('Ajukan penghapusan','Alasan penghapusan',{submit:'Ajukan ke Humas',note:'Arsip tetap aktif sampai Humas memutuskan. Bila disetujui, arsip akan disembunyikan dan dapat dipulihkan Humas.',send:async reason=>{await post(`archives/${id}/delete-requests`,{reason});toast('Pengajuan penghapusan dikirim ke Humas.');await rerender();}});return;}
  if(action==='delete-cancel'||action==='request-cancel'){if(!confirm('Batalkan pengajuan penghapusan ini?'))return;await post(`archives/delete-requests/${encodeURIComponent(el.dataset.id)}/cancel`,{});toast('Pengajuan dibatalkan.');await rerender();return;}
  if(action==='delete-direct'){reasonDialog('Hapus arsip','Alasan penghapusan',{submit:'Hapus arsip',extra:input('Rujukan pengajuan (mis. pesan WhatsApp petugas, tanggal)','reference','text','','required maxlength="300" autocomplete="off"').replace('class="field"','class="field full"'),
-  note:'Arsip akan disembunyikan dan dapat dipulihkan; berkas tidak dihapus. Izin baca Rahasia dan izin unduh arsip ini berakhir.',send:async(reason,b)=>{await post(`archives/${id}/delete`,{reason,reference:b.reference.trim()});toast('Arsip dihapus dan dapat dipulihkan dari Arsip Dihapus.');await refreshOverview();go('tab=deleted');}});return;}
+  note:'Arsip akan disembunyikan dan dapat dipulihkan; berkas tidak dihapus. Izin baca Rahasia dan izin unduh arsip ini berakhir.',send:async(reason,b)=>{await post(`archives/${id}/delete`,{reason,reference:b.reference.trim()});toast('Arsip dihapus dan dapat dipulihkan dari Arsip Dihapus.');await refreshOverview();go('archive-deleted');}});return;}
  if(action==='classify'){classifyDialog();return;}
  if(action==='grant-share'){shareDialog();return;}
  if(action==='grant-rahasia'){grantDialog('RAHASIA_READ');return;}
@@ -665,7 +669,7 @@ async function handle(action,el){
  if(action==='restore'){
   const secret=el.dataset.class==='RAHASIA';
   reasonDialog(`Pulihkan arsip ${el.dataset.agenda}`,'Alasan pemulihan',{submit:'Pulihkan',note:secret?'Arsip kembali aktif sebagai Rahasia dengan nomor agenda dan versi yang sama. Izin baca Rahasia dan izin unduh lama sudah berakhir; berikan ulang yang masih diperlukan.':'Arsip kembali aktif dengan nomor agenda dan versi yang sama. Pegawai bagian pemilik dan penerima berbagi yang belum dicabut kembali dapat membacanya. Izin unduh lama sudah berakhir; berikan ulang bila perlu.',
-   send:async reason=>{const result=await post(`archives/deleted/${encodeURIComponent(el.dataset.id)}/restore`,{reason});toast(`Arsip ${result.agenda_number} dipulihkan.`);go(`id=${encodeURIComponent(result.id)}&view=access`);}});return;
+   send:async reason=>{const result=await post(`archives/deleted/${encodeURIComponent(el.dataset.id)}/restore`,{reason});toast(`Arsip ${result.agenda_number} dipulihkan.`);openArchive(result.id,'access');}});return;
  }
  if(action==='type-new'){typeDialog(null);return;}
  if(action==='type-edit'){typeDialog(R.types.find(t=>t.id===el.dataset.id));return;}
@@ -679,7 +683,7 @@ export function bindArchivesPage(){
  const root=document.querySelector('#main');if(!root||root.dataset.archivesBound)return;root.dataset.archivesBound='1';
  afterDetail();
  root.addEventListener('click',async event=>{
-  const el=event.target.closest('[data-arc]');if(!el||state.route!=='archives'||el.closest('dialog'))return;
+  const el=event.target.closest('[data-arc]');if(!el||!archiveRoutes.includes(state.route)||el.closest('dialog'))return;
   if(el.disabled)return;el.disabled=true;
   try{await handle(el.dataset.arc,el);}
   catch(error){
@@ -720,14 +724,25 @@ export function resetArchives(){closeViewer();Object.assign(R,{owner:null,overvi
 // Lonceng: notifikasi berbagi/ringkasan harian yang belum dibaca, dan pengajuan hapus yang menunggu Humas.
 export function archiveNotices(){
  const o=state.archivesReady===true?state.archives:null,items=[];if(!o)return items;
- if(o.unread)items.push({route:'archives?tab=summary',count:o.unread,title:'Notifikasi E-Arsip',note:o.humas?'Ringkasan harian atau arsip yang dibagikan':'Arsip yang dibagikan kepada Anda',ico:'folder'});
- if(o.humas&&o.pending_delete_requests)items.push({route:'archives?tab=requests',count:o.pending_delete_requests,title:'Pengajuan hapus arsip',note:'Menunggu keputusan Humas',ico:'trash'});
+ if(o.unread)items.push({route:'archives',count:o.unread,title:'Notifikasi E-Arsip',note:o.humas?'Ringkasan harian atau arsip yang dibagikan':'Arsip yang dibagikan kepada Anda',ico:'folder'});
+ if(o.humas&&o.pending_delete_requests)items.push({route:'archive-requests',count:o.pending_delete_requests,title:'Pengajuan hapus arsip',note:'Menunggu keputusan Humas',ico:'trash'});
  return items;
 }
 
 // Pengaman rilis: menu E-Arsip hanya tampil bila server sudah memiliki rute arsip (migrasi
 // + tambalan portal-api). Sebelum itu rute menjawab 404 dan menu disembunyikan. Hasilnya
 // disimpan per sesi; galat sementara tidak disimpan sehingga pemeriksaan diulang.
+// Ruang kerja Humas tampil bila rute arsip sudah siap di server dan akun dapat memakainya.
+export const archivesReadyFor=()=>state.archivesReady===true&&archivesEligible();
+export function archivesAllowed(kind){
+ const o=state.archives;if(!archivesReadyFor()||!o)return false;
+ if(kind==='home')return true;
+ if(kind==='officer')return o.officer_units.length>0;
+ if(kind==='requests')return o.humas||o.officer_units.length>0;
+ if(kind==='humas')return o.humas;
+ if(kind==='officers')return Boolean(o.officer_management||o.admin);
+ return false;
+}
 export const archivesEligible=()=>Boolean(state.me?.user.employee_id||state.permissions.some(p=>p.startsWith('archives.')));
 let probe=null;
 export function probeArchives(){
@@ -738,6 +753,15 @@ export function probeArchives(){
    .then(ready=>{if(state.me===session)state.archivesReady=ready;probe=null;return ready===true;});
  }
  return probe;
+}
+// Sebelum rute E-Arsip diputuskan: ambil hak terbaru, supaya menu dan rute mengikuti
+// perubahan sejak halaman dibuka (mis. baru ditunjuk sebagai petugas arsip).
+export async function refreshArchivesForRoute(){
+ if(!archivesEligible())return;
+ if(state.archivesReady===undefined){await probeArchives();return;}
+ if(state.archivesReady!==true)return;
+ const session=state.me,overview=await api('archives/overview');
+ if(state.me===session){state.archives=overview;state.archivesAt=Date.now();}
 }
 // Ringkasan untuk lonceng, paling sering sekali semenit.
 export async function loadArchiveSummary({background=true}={}){
