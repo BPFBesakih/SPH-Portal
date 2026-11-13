@@ -4,6 +4,7 @@ import {createHmac} from 'node:crypto';
 import {one, run, insert, assert, now} from './db.mjs';
 import {digest} from './auth.mjs';
 import {formGuideList, ingestGuideEvaluations} from './visit-data.mjs';
+import {formScoringContext, scoringRules, seragamValues, findingCode} from './visit-scoring.mjs';
 export const guidePosts = {
   1: 'Pos 1 — Pintu Masuk',
   3: 'Pos 3 — Pelataran Utama'
@@ -36,6 +37,14 @@ export async function takeGuideFormIpSlot(db, action, clientIp, b) {
   await run(db, 'DELETE FROM guide_form_rate_limits WHERE window_start<?', new Date(Date.now() - 24 * 3600000).toISOString());
   return await takeSlot(db, `guide-form\0${action}\0ip\0${clientIp}`, batchSize(action, b), guideFormLimits[action]);
 }
+const optionalCode = v => v === undefined || v === null || v === '' || typeof v === 'string' && findingCode.test(v);
+function checkNewCriteria(c, errors) {
+  if (!seragamValues.includes(c.seragam)) errors.push('criteria.seragam harus lengkap, kurang, atau tidak');
+  const teguran = c.teguran ?? [];
+  if (!Array.isArray(teguran) || teguran.length > scoringRules.teguranMaks || !teguran.every(code => typeof code === 'string' && findingCode.test(code)) || new Set(teguran).size !== teguran.length) errors.push(`criteria.teguran berisi paling banyak ${scoringRules.teguranMaks} jenis teguran yang berbeda`);
+  if (!optionalCode(c.berat)) errors.push('criteria.berat tidak valid');
+  if (!optionalCode(c.apresiasi)) errors.push('criteria.apresiasi tidak valid');
+}
 export function checkGuideItem(item, pos) {
   const errors = [];
   if (!item || typeof item !== 'object' || Array.isArray(item)) return ['penilaian tidak valid'];
@@ -47,28 +56,40 @@ export function checkGuideItem(item, pos) {
   const c = item.criteria;
   if (!c || typeof c !== 'object' || Array.isArray(c)) errors.push('criteria wajib'); else {
     if (typeof c.idCard !== 'boolean') errors.push('criteria.idCard harus Ya/Tidak');
-    if (![-1, 1, 2].includes(c.uniform)) errors.push('criteria.uniform harus -1, 1, atau 2');
-    if (c.etika !== undefined && c.etika !== null && !(Number.isInteger(c.etika) && c.etika >= -5 && c.etika <= 5)) errors.push('criteria.etika harus bilangan bulat -5 sampai 5');
+    if (c.seragam !== undefined) checkNewCriteria(c, errors); else {
+      if (![-1, 1, 2].includes(c.uniform)) errors.push('criteria.uniform harus -1, 1, atau 2');
+      if (c.etika !== undefined && c.etika !== null && !(Number.isInteger(c.etika) && c.etika >= -5 && c.etika <= 5)) errors.push('criteria.etika harus bilangan bulat -5 sampai 5');
+    }
   }
+  if (item.petugasId !== undefined && item.petugasId !== null && item.petugasId !== '' && (typeof item.petugasId !== 'string' || !uuid.test(item.petugasId))) errors.push('petugasId tidak valid');
   if (item.catatan !== undefined && item.catatan !== null && (typeof item.catatan !== 'string' || item.catatan.length > 500)) errors.push('catatan maksimal 500 huruf');
   if (item.koreksiDari !== undefined && item.koreksiDari !== null && item.koreksiDari !== '' && (typeof item.koreksiDari !== 'string' || !uuid.test(item.koreksiDari) || item.koreksiDari === item.evaluationId)) errors.push('koreksiDari tidak valid');
   return errors;
 }
 const cleanItem = item => {
+  const c = item.criteria;
+  const criteria = c.seragam !== undefined ? {
+    idCard: c.idCard,
+    seragam: c.seragam,
+    teguran: [...c.teguran || []],
+    berat: c.berat || null,
+    apresiasi: c.apresiasi || null
+  } : {
+    idCard: c.idCard,
+    uniform: c.uniform,
+    etika: c.etika ?? 0
+  };
   const out = {
     evaluationId: item.evaluationId,
     guideId: item.guideId.trim(),
     guideName: item.guideName.trim(),
     pos: Number(item.pos),
     timestamp: item.timestamp,
-    criteria: {
-      idCard: item.criteria.idCard,
-      uniform: item.criteria.uniform,
-      etika: item.criteria.etika ?? 0
-    },
+    criteria,
     catatan: typeof item.catatan === 'string' ? item.catatan : ''
   };
   if (item.koreksiDari) out.koreksiDari = item.koreksiDari;
+  if (c.seragam !== undefined && item.petugasId) out.petugasId = item.petugasId;
   return out;
 };
 export async function admitGuideForm(db, action, b) {
@@ -114,7 +135,8 @@ export const guideFormContext = async (db, link) => ({
   pos: link.pos,
   label: link.label,
   serverTime: now(),
-  guides: await formGuideList(db)
+  guides: await formGuideList(db),
+  penilaian: await formScoringContext(db)
 });
 export async function submitGuideForm(db, admitted, nowMs = Date.now()) {
   return admitted.items.length ? await ingestGuideEvaluations(db, admitted.link, admitted.items, nowMs) : {

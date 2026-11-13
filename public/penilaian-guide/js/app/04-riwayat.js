@@ -15,7 +15,7 @@
   'use strict';
 
   const App = window.App;
-  const { $, fmtTime, esc, jamLokal, nilaiUniform, labelUniform } = App;
+  const { $, fmtTime, esc, jamLokal, nilaiUniform, labelUniform, caraBaru, ringkasKriteria, SERAGAM_LABEL, kritKosong } = App;
 
   /**
    * Tiga keadaan, bukan dua:
@@ -70,9 +70,15 @@
       // saja menuduh guide yang bersangkutan tidak patuh.
       const nilai = e.corrupt
         ? '<span class="badge bad">nilai tidak terbaca di perangkat ini</span>'
-        : `${b('ID', !!c.idCard)}` +
-          `<span class="badge ${nilaiUniform(c.uniform) >= 1 ? '' : 'bad'}">Uniform ${esc(labelUniform(c.uniform))}</span>` +
-          `<span class="badge">Etika ${App.nilaiEtika(c.etika)}</span>`;
+        : caraBaru(c)
+          ? `${b('ID', !!c.idCard)}` +
+            `<span class="badge ${c.seragam === 'lengkap' ? '' : 'bad'}">Seragam ${esc(SERAGAM_LABEL[c.seragam] || c.seragam)}</span>` +
+            (c.teguran || []).map(k => `<span class="badge bad">Teguran: ${esc(App.labelTemuan('teguran', k))}</span>`).join('') +
+            (c.berat ? `<span class="badge bad">⚠️ Berat: ${esc(App.labelTemuan('berat', c.berat))} (diverifikasi pengelola)</span>` : '') +
+            (c.apresiasi ? `<span class="badge">⭐ ${esc(App.labelTemuan('apresiasi', c.apresiasi))}</span>` : '')
+          : `${b('ID', !!c.idCard)}` +
+            `<span class="badge ${nilaiUniform(c.uniform) >= 1 ? '' : 'bad'}">Uniform ${esc(labelUniform(c.uniform))}</span>` +
+            `<span class="badge">Etika ${App.nilaiEtika(c.etika)}</span>`;
       const keterangan = e.corrupt
         ? `<span class="cmeta">Sudah tersimpan di portal, kode ${esc(String(e.evaluationId).slice(0, 8))}</span>`
         : '';
@@ -93,7 +99,7 @@
         <span class="cstat">${ikon}</span>
         <span class="cbody">
           <span class="cname">${esc(e.guideName)}</span>
-          <span class="cmeta">${esc(App.labelPos(e.pos))} · ${esc(fmtTime(e.timestamp))} · ${status}</span>
+          <span class="cmeta">${esc(App.labelPos(e.pos))} · ${esc(fmtTime(e.timestamp))} · ${status}${e.petugasNama ? ` · 👤 ${esc(e.petugasNama)}` : ''}</span>
           <span class="badges">${nilai}</span>
           ${keterangan}
           ${e.catatan ? `<span class="cmeta">📝 ${esc(e.catatan)}</span>` : ''}
@@ -125,15 +131,17 @@
 
     App.state.koreksi = asal;
     const c = asal.criteria || {};
-    App.state.form = {
-      pos: Number(asal.pos), guide: g,
-      crit: { idCard: !!c.idCard, uniform: nilaiUniform(c.uniform), etika: Number(c.etika) || 0 },
-      catatan: asal.catatan || '',
-    };
+    // Penilaian cara lama dibuka dengan pemetaannya: Uniform −1 = tidak berseragam,
+    // selain itu lengkap. Teguran dari Etika lama tidak bisa ditebak jenisnya.
+    const crit = caraBaru(c)
+      ? { ...kritKosong(), idCard: !!c.idCard, seragam: c.seragam, teguran: [...(c.teguran || [])], berat: c.berat || '', apresiasi: c.apresiasi || '' }
+      : { ...kritKosong(), idCard: !!c.idCard, seragam: nilaiUniform(c.uniform) >= 1 ? 'lengkap' : 'tidak' };
+    App.state.form = { pos: Number(asal.pos), guide: g, crit, catatan: asal.catatan || '', lanjutJeda: null,
+      ...(!caraBaru(c) && nilaiUniform(c.uniform) >= 1 && Number(c.etika) < 0 ? { teguranLama: { guideId: g.guideId } } : {}) };
     App.tampilkanPos();
     $('#guideInput').value = g.guideName;
     $('#catatan').value = App.state.form.catatan;
-    App.applyCritUI();
+    App.renderPenilaianForm();
     App.showPicked(g);
     App.tampilkanKandidat(null);
     App.tampilkanBarKoreksi();
@@ -156,7 +164,7 @@
     bar.innerHTML =
       `<strong>✏️ Membetulkan penilaian ${esc(App.state.koreksi.guideName)}</strong>` +
       `<p>Tercatat pukul ${esc(jamLokal(App.state.koreksi.timestamp))} di Pos ${esc(App.state.koreksi.pos)}: ` +
-      `Uniform ${labelUniform(c.uniform)}, ID ${c.idCard ? 'Ya' : 'Tidak'}, Etika ${App.nilaiEtika(c.etika)}. ` +
+      `${esc(ringkasKriteria(c))}. ` +
       `Ubah nilainya lalu tekan SIMPAN. Guide dan pos tidak bisa diganti — ` +
       `${App.state.koreksi.synced ? 'penilaian lama akan ditandai "diganti" di portal, tidak dihapus'
                         : 'penilaian ini belum terkirim, jadi cukup ditimpa di perangkat'}.</p>` +

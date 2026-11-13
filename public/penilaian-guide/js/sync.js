@@ -28,6 +28,8 @@
   const defaults = {
     forceOffline: false, encrypt: true, haptic: true, pos: null,
     filterKategori: '', filterRegu: '',
+    // Petugas penilai shift ini: {id, nama, at}. Berlaku 8 jam (App.petugasAktif).
+    petugas: null,
   };
 
   const Settings = {
@@ -102,6 +104,8 @@
     catatWaktuServer(data, t0, Date.now());
     await DB.simpanTautan({ token, pos: Number(data.pos), label: String(data.label || `Pos ${data.pos}`) });
     if (data.guides.length) await DB.setGuides(data.guides);
+    // Portal lama tidak mengirim `penilaian`; formulir lalu memakai daftar bawaan.
+    if (data.penilaian && Array.isArray(data.penilaian.teguran)) DB.setPenilaian(data.penilaian);
     if (!Settings.get().pos) Settings.set({ pos: Number(data.pos) });
     emit('tautan', { pos: Number(data.pos) });
     return data;
@@ -141,19 +145,24 @@
   }
 
   const payloadDari = item => {
+    const c = item.criteria || {};
+    // Cara baru (2.2.0+) mengirim fakta; penilaian cara lama yang masih tertahan di HP
+    // tetap dikirim dalam bentuk lamanya dan dipetakan portal.
+    const criteria = typeof c.seragam === 'string'
+      ? { idCard: !!c.idCard, seragam: c.seragam, teguran: Array.isArray(c.teguran) ? c.teguran.slice(0, 2) : [],
+          berat: c.berat || null, apresiasi: c.apresiasi || null }
+      : { idCard: !!c.idCard, uniform: App.nilaiUniform(c.uniform),
+          etika: Math.min(5, Math.max(-5, Math.round(Number(c.etika) || 0))) };
     const p = {
       evaluationId: item.evaluationId,
       guideId: item.guideId,
       guideName: item.guideName,
       pos: Number(item.pos),
       timestamp: item.timestamp,
-      criteria: {
-        idCard: !!item.criteria.idCard,
-        uniform: App.nilaiUniform(item.criteria.uniform),
-        etika: Math.min(5, Math.max(-5, Math.round(Number(item.criteria.etika) || 0))),
-      },
+      criteria,
       catatan: String(item.catatan || '').slice(0, 500),
     };
+    if (typeof c.seragam === 'string' && item.petugasId) p.petugasId = String(item.petugasId);
     // Hanya disertakan bila entri ini memang koreksi.
     if (item.koreksiDari) p.koreksiDari = String(item.koreksiDari);
     return p;

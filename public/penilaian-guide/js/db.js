@@ -49,6 +49,8 @@
   // terkirim tidak pernah dihapus (ATR-FL-11).
   const SIMPAN_TERKIRIM_HARI = 45;
   const GUIDES_KEY = 'bpb.pg.guides';
+  // Bahan formulir "100 − potongan" dari tautan pos: jenis temuan, petugas, petunjuk.
+  const PENILAIAN_KEY = 'bpb.pg.penilaian';
   const TAUTAN_KEY = 'tautanPos';
 
   /**
@@ -737,6 +739,15 @@
       try {
         const raw = JSON.parse(localStorage.getItem(GUIDES_KEY) || 'null');
         return raw && Array.isArray(raw.list) ? raw : null;
+      } catch { return null; }
+    },
+    setPenilaian(konteks) {
+      try { localStorage.setItem(PENILAIAN_KEY, JSON.stringify({ at: Date.now(), konteks })); } catch {}
+    },
+    getPenilaian() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(PENILAIAN_KEY) || 'null');
+        return raw && raw.konteks && Array.isArray(raw.konteks.teguran) ? raw.konteks : null;
       } catch { return null; }
     },
 

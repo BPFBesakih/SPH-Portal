@@ -341,7 +341,13 @@ CREATE TABLE IF NOT EXISTS visit_evaluations (
  koreksi_dari TEXT CHECK(koreksi_dari IS NULL OR koreksi_dari<>id), status TEXT NOT NULL DEFAULT 'aktif' CHECK(status IN('aktif','diganti')), replaced_by TEXT,
  sheet_tab TEXT, sheet_row INTEGER CHECK(sheet_row IS NULL OR sheet_row>=2), sheet_dirty INTEGER NOT NULL DEFAULT 0 CHECK(sheet_dirty IN(0,1)),
  sheet_synced_at TEXT, sheet_verified_at TEXT,
- CHECK((sheet_tab IS NULL)=(sheet_row IS NULL)), CHECK(status='aktif' OR replaced_by IS NOT NULL));
+ -- Cara penilaian "100 − potongan" (versi 2). Kolom uniform/id_card/etika tetap diisi padanannya.
+ versi INTEGER NOT NULL DEFAULT 1 CHECK(versi IN(1,2)), seragam TEXT CHECK(seragam IS NULL OR seragam IN('lengkap','kurang','tidak')),
+ teguran TEXT NOT NULL DEFAULT '' CHECK(length(teguran)<=81), teguran_n INTEGER NOT NULL DEFAULT 0 CHECK(teguran_n BETWEEN 0 AND 2),
+ berat TEXT CHECK(berat IS NULL OR length(berat) BETWEEN 2 AND 40), apresiasi TEXT CHECK(apresiasi IS NULL OR length(apresiasi) BETWEEN 2 AND 40),
+ petugas_id TEXT CHECK(petugas_id IS NULL OR length(petugas_id)=36), petugas_nama TEXT CHECK(petugas_nama IS NULL OR length(petugas_nama) BETWEEN 1 AND 120),
+ CHECK((sheet_tab IS NULL)=(sheet_row IS NULL)), CHECK(status='aktif' OR replaced_by IS NOT NULL),
+ CHECK((versi=1 AND seragam IS NULL AND teguran='' AND berat IS NULL AND apresiasi IS NULL AND petugas_id IS NULL AND petugas_nama IS NULL) OR (versi=2 AND seragam IS NOT NULL AND (petugas_id IS NULL)=(petugas_nama IS NULL))));
 CREATE INDEX IF NOT EXISTS visit_evaluations_date ON visit_evaluations(wita_date);
 CREATE INDEX IF NOT EXISTS visit_evaluations_guide_pos_time ON visit_evaluations(guide_id,pos,evaluated_at);
 CREATE INDEX IF NOT EXISTS visit_evaluations_unsynced ON visit_evaluations(received_at,id) WHERE sheet_row IS NULL;
@@ -360,6 +366,83 @@ CREATE TABLE IF NOT EXISTS visit_sheet_state (
  last_error TEXT CHECK(last_error IS NULL OR length(last_error)<=300), last_error_at TEXT, last_retention_at TEXT, folded_through TEXT, updated_at TEXT NOT NULL,
  CHECK((lease_owner IS NULL)=(lease_until IS NULL)));
 INSERT OR IGNORE INTO visit_sheet_state(id,updated_at) VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+-- Rekap harian per guide per pos: hasil lipatan retensi (sumber 'portal') dan
+-- migrasi awal riwayat NilaiGuide (sumber 'nilaiguide'). Tanpa jam, catatan, atau petugas.
+CREATE TABLE IF NOT EXISTS visit_daily_totals (
+ day TEXT NOT NULL CHECK(length(day)=10), guide_id TEXT NOT NULL REFERENCES visit_guides(id), pos INTEGER NOT NULL CHECK(pos IN(1,3)),
+ sumber TEXT NOT NULL CHECK(sumber IN('portal','nilaiguide')),
+ antar INTEGER NOT NULL CHECK(antar>0), uniform INTEGER NOT NULL, uniform_patuh INTEGER NOT NULL CHECK(uniform_patuh>=0), id_card INTEGER NOT NULL CHECK(id_card>=0),
+ review INTEGER NOT NULL DEFAULT 0 CHECK(review>=0), etika INTEGER NOT NULL, updated_at TEXT NOT NULL,
+ -- Cacah temuan "100 − potongan": tanpa ID, seragam kurang lengkap, tidak berseragam, teguran.
+ n_id INTEGER NOT NULL DEFAULT 0 CHECK(n_id>=0), n_kurang INTEGER NOT NULL DEFAULT 0 CHECK(n_kurang>=0),
+ n_tidak INTEGER NOT NULL DEFAULT 0 CHECK(n_tidak>=0), n_teguran INTEGER NOT NULL DEFAULT 0 CHECK(n_teguran>=0),
+ PRIMARY KEY(day,guide_id,pos,sumber));
+-- Migrasi awal riwayat NilaiGuide: paling banyak satu yang terbuka (menyusun/aktif).
+CREATE TABLE IF NOT EXISTS visit_history_import (
+ id TEXT PRIMARY KEY CHECK(length(id)=36), status TEXT NOT NULL CHECK(status IN('menyusun','aktif','dibatalkan')),
+ terbuka INTEGER UNIQUE CHECK(terbuka IS NULL OR terbuka=1),
+ file_name TEXT NOT NULL CHECK(length(file_name) BETWEEN 1 AND 200), file_sha256 TEXT NOT NULL CHECK(length(file_sha256)=64),
+ rows_total INTEGER NOT NULL CHECK(rows_total BETWEEN 1 AND 100000), parts_total INTEGER NOT NULL CHECK(parts_total BETWEEN 1 AND 200),
+ parts_done TEXT NOT NULL DEFAULT '[]', ringkasan TEXT NOT NULL DEFAULT '{}', first_day TEXT, last_day TEXT,
+ created_by TEXT REFERENCES users(id), created_at TEXT NOT NULL, finished_at TEXT, cancelled_by TEXT REFERENCES users(id), cancelled_at TEXT,
+ CHECK((status IN('menyusun','aktif') AND terbuka=1) OR (status='dibatalkan' AND terbuka IS NULL)));
+CREATE TABLE IF NOT EXISTS visit_history_ids (
+ id TEXT PRIMARY KEY CHECK(length(id)=36), import_id TEXT NOT NULL REFERENCES visit_history_import(id),
+ guide_id TEXT REFERENCES visit_guides(id), pos INTEGER CHECK(pos IN(1,3)), evaluated_at TEXT,
+ CHECK((guide_id IS NULL AND pos IS NULL AND evaluated_at IS NULL) OR (guide_id IS NOT NULL AND pos IS NOT NULL AND evaluated_at IS NOT NULL)));
+CREATE INDEX IF NOT EXISTS visit_history_ids_import ON visit_history_ids(import_id);
+-- Penilaian "100 − potongan" (sama dengan migrasi 20261113100000 di Supabase): aturan per bulan
+-- berlaku, jenis temuan, petugas penilai, pelanggaran berat & apresiasi, petunjuk formulir pos.
+CREATE TABLE IF NOT EXISTS visit_score_rules (
+ berlaku_mulai TEXT PRIMARY KEY CHECK(length(berlaku_mulai)=7),
+ pot_id INTEGER NOT NULL CHECK(pot_id BETWEEN 0 AND 50), pot_kurang INTEGER NOT NULL CHECK(pot_kurang BETWEEN 0 AND 50),
+ pot_tidak INTEGER NOT NULL CHECK(pot_tidak BETWEEN 0 AND 50), pot_teguran INTEGER NOT NULL CHECK(pot_teguran BETWEEN 0 AND 50),
+ ambang INTEGER NOT NULL CHECK(ambang BETWEEN 50 AND 100), minimal INTEGER NOT NULL CHECK(minimal BETWEEN 1 AND 60),
+ created_by TEXT REFERENCES users(id), created_at TEXT NOT NULL,
+ CHECK(pot_kurang<=pot_tidak), CHECK(pot_id+pot_tidak+2*pot_teguran<=100));
+INSERT OR IGNORE INTO visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_at) VALUES('2026-01',20,10,20,20,95,10,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+CREATE TABLE IF NOT EXISTS visit_finding_types (
+ id TEXT PRIMARY KEY CHECK(length(id) BETWEEN 2 AND 40), jenis TEXT NOT NULL CHECK(jenis IN('teguran','berat','apresiasi')),
+ label TEXT NOT NULL CHECK(length(label) BETWEEN 2 AND 80 AND label=trim(label)), urut INTEGER NOT NULL CHECK(urut BETWEEN 0 AND 999),
+ perlu_catatan INTEGER NOT NULL DEFAULT 0 CHECK(perlu_catatan IN(0,1)), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), updated_by TEXT REFERENCES users(id));
+INSERT OR IGNORE INTO visit_finding_types(id,jenis,label,urut,perlu_catatan,created_at,updated_at,row_version) VALUES
+ ('tamu-tanpa-kain','teguran','Tamu tidak memakai kain/selendang',10,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('merokok-hp','teguran','Merokok atau bermain HP saat memandu',20,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('meninggalkan-tamu','teguran','Meninggalkan tamu',30,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('antrean','teguran','Tidak tertib antrean/giliran',40,0,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('teguran-lain','teguran','Teguran lain (tulis di catatan)',90,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('pungutan','berat','Meminta uang di luar tarif resmi atau memaksa donasi',10,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('area-terlarang','berat','Membawa tamu ke area terlarang',20,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('kasar','berat','Berkata kasar atau mengancam',30,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('alkohol','berat','Dalam pengaruh alkohol',40,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('berat-lain','berat','Pelanggaran berat lain (tulis di catatan)',90,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('dipuji','apresiasi','Dipuji wisatawan di depan petugas',10,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('menolong','apresiasi','Membantu wisatawan yang sakit atau tersesat',20,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('apresiasi-lain','apresiasi','Apresiasi lain (tulis di catatan)',90,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1);
+CREATE TABLE IF NOT EXISTS visit_assessors (
+ id TEXT PRIMARY KEY CHECK(length(id)=36), nama TEXT NOT NULL CHECK(length(nama) BETWEEN 2 AND 120 AND nama=trim(nama)),
+ keterangan TEXT NOT NULL DEFAULT '' CHECK(length(keterangan)<=80), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), updated_by TEXT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS visit_flags (
+ id TEXT PRIMARY KEY CHECK(length(id)=36), evaluation_id TEXT NOT NULL CHECK(length(evaluation_id)=36), jenis TEXT NOT NULL CHECK(jenis IN('berat','apresiasi')),
+ event_id TEXT CHECK(event_id IS NULL OR length(event_id)=36),
+ kode TEXT NOT NULL REFERENCES visit_finding_types(id), guide_id TEXT NOT NULL REFERENCES visit_guides(id), guide_name TEXT NOT NULL CHECK(length(guide_name) BETWEEN 1 AND 120),
+ pos INTEGER NOT NULL CHECK(pos IN(1,3)), wita_date TEXT NOT NULL CHECK(length(wita_date)=10), evaluated_at TEXT NOT NULL,
+ catatan TEXT NOT NULL CHECK(length(catatan) BETWEEN 1 AND 500), petugas_nama TEXT CHECK(petugas_nama IS NULL OR length(petugas_nama) BETWEEN 1 AND 120),
+ status TEXT NOT NULL DEFAULT 'menunggu' CHECK(status IN('menunggu','disetujui','ditolak','dibatalkan')),
+ keputusan_catatan TEXT NOT NULL DEFAULT '' CHECK(length(keputusan_catatan)<=500), decided_by TEXT REFERENCES users(id), decided_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ UNIQUE(evaluation_id,jenis), CHECK((status IN('disetujui','ditolak'))=(decided_at IS NOT NULL)));
+CREATE INDEX IF NOT EXISTS visit_flags_status_day ON visit_flags(status,wita_date);
+CREATE INDEX IF NOT EXISTS visit_flags_guide_day ON visit_flags(guide_id,wita_date);
+CREATE TABLE IF NOT EXISTS visit_form_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1), petunjuk_id TEXT NOT NULL CHECK(length(petunjuk_id) BETWEEN 1 AND 300),
+ petunjuk_seragam TEXT NOT NULL CHECK(length(petunjuk_seragam) BETWEEN 1 AND 500), updated_at TEXT NOT NULL, updated_by TEXT REFERENCES users(id), row_version INTEGER NOT NULL);
+INSERT OR IGNORE INTO visit_form_settings(id,petunjuk_id,petunjuk_seragam,updated_at,row_version) VALUES(1,
+ 'Terpasang = kartu ID resmi dikalungkan dan terlihat. Dicek dengan cara yang sama di Pos 1 dan Pos 3.',
+ 'Lengkap = semua atribut seragam guide sesuai aturan. Kurang lengkap = berseragam tetapi ada atribut yang kurang. Tidak berseragam = tidak memakai seragam guide (mis. baju kaos).',
+ strftime('%Y-%m-%dT%H:%M:%fZ','now'),1);
 -- Absensi (tahap 1): HP terdaftar, absen GPS + selfie, koreksi sebagai baris baru.
 CREATE TABLE IF NOT EXISTS attendance_points (
  id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80),

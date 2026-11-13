@@ -34,16 +34,19 @@ async function unzip(buffer,wanted){
 const xml=text=>new DOMParser().parseFromString(text,'application/xml');
 const byName=(node,name)=>[...node.getElementsByTagNameNS('*',name)];
 const columnOf=ref=>[...String(ref).replace(/\d+$/,'')].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0)-1;
-async function readXlsx(buffer){
- const files=await unzip(buffer,name=>/^xl\/(workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml|worksheets\/[^/]+\.xml)$/.test(name));
- const book=xml(files.get('xl/workbook.xml')||''),rels=xml(files.get('xl/_rels/workbook.xml.rels')||'');
+// Dua tahap: daftar sheet dulu, baru sheet yang dipakai — unduhan seluruh spreadsheet
+// NilaiGuide memuat puluhan tab rekap yang tidak perlu dibuka.
+async function readXlsx(buffer,wantedSheet){
+ const meta=await unzip(buffer,name=>/^xl\/(workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml)$/.test(name));
+ const book=xml(meta.get('xl/workbook.xml')||''),rels=xml(meta.get('xl/_rels/workbook.xml.rels')||'');
  const sheets=byName(book,'sheet').map(s=>({name:s.getAttribute('name'),rel:s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id')||s.getAttribute('r:id')}));
  if(!sheets.length)throw new Error('Tidak ada sheet di berkas .xlsx.');
- const chosen=sheets.find(s=>s.name.trim().toLowerCase()==='guides')||sheets[0];
+ const chosen=sheets.find(s=>s.name.trim().toLowerCase()===wantedSheet)||(wantedSheet==='guides'?sheets[0]:null);
+ if(!chosen)throw new Error(`Sheet "${wantedSheet}" tidak ditemukan. Unduh spreadsheet NilaiGuide lewat File → Download → Microsoft Excel (.xlsx), tanpa mengganti nama tabnya.`);
  const target=byName(rels,'Relationship').find(r=>r.getAttribute('Id')===chosen.rel)?.getAttribute('Target')||'';
  const path=target.startsWith('/')?target.slice(1):`xl/${target.replace(/^\.\//,'')}`;
- const sheet=files.get(path);if(!sheet)throw new Error(`Sheet "${chosen.name}" tidak dapat dibaca.`);
- const shared=byName(xml(files.get('xl/sharedStrings.xml')||'<sst/>'),'si').map(si=>byName(si,'t').map(t=>t.textContent).join(''));
+ const sheet=(await unzip(buffer,name=>name===path)).get(path);if(!sheet)throw new Error(`Sheet "${chosen.name}" tidak dapat dibaca.`);
+ const shared=byName(xml(meta.get('xl/sharedStrings.xml')||'<sst/>'),'si').map(si=>byName(si,'t').map(t=>t.textContent).join(''));
  const rows=[];
  for(const row of byName(xml(sheet),'row')){
   const line=Number(row.getAttribute('r'))||rows.length+1,cells=[];
@@ -76,7 +79,7 @@ export async function readGuideFile(file){
  if(!file)throw new Error('Pilih berkas lebih dulu.');
  if(file.size>5*1024*1024)throw new Error('Berkas lebih dari 5 MB. Unduh hanya tab Guides.');
  const name=file.name.toLowerCase(),buffer=await file.arrayBuffer();
- const table=name.endsWith('.xlsx')?await readXlsx(buffer):name.endsWith('.csv')||file.type==='text/csv'?readCsv(new TextDecoder('utf-8').decode(buffer)):null;
+ const table=name.endsWith('.xlsx')?await readXlsx(buffer,'guides'):name.endsWith('.csv')||file.type==='text/csv'?readCsv(new TextDecoder('utf-8').decode(buffer)):null;
  if(!table)throw new Error('Gunakan berkas .xlsx atau .csv.');
  const [header,...body]=table.rows.filter(r=>r.cells.some(c=>String(c??'').trim()!==''));
  if(!header)throw new Error('Berkas kosong.');
@@ -86,4 +89,48 @@ export async function readGuideFile(file){
  if(body.length>maxRows)throw new Error(`Berkas berisi ${body.length} baris; maksimal ${maxRows}.`);
  const rows=body.map(r=>{const out={line:r.line};columns.forEach((key,i)=>{if(key&&out[key]===undefined)out[key]=typeof r.cells[i]==='boolean'?r.cells[i]:String(r.cells[i]??'').trim();});return out;});
  return {sheet:table.sheet,rows};
+}
+
+/* ---------- Riwayat NilaiGuide (migrasi awal) ---------- */
+// Sheet Evaluations dari unduhan seluruh spreadsheet NilaiGuide (.xlsx), atau .csv tab
+// itu saja. Yang dikirim ke portal hanya kolom yang dihitung rekap — catatan, nama
+// petugas, dan jam terima tidak pernah meninggalkan peramban.
+const historyColumns=['evaluationId','timestamp','pos','guideId','uniform','idCard','etika','status'];
+const historyRequired=historyColumns.filter(c=>c!=='status');
+const cellValue=v=>typeof v==='boolean'?v:v==null?null:String(v).trim().slice(0,100);
+async function sha256(buffer){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',buffer))].map(b=>b.toString(16).padStart(2,'0')).join('');}
+
+export async function readHistoryFile(file){
+ if(!file)throw new Error('Pilih berkas lebih dulu.');
+ if(file.size>60*1024*1024)throw new Error('Berkas lebih dari 60 MB. Unduh ulang spreadsheet NilaiGuide sebagai .xlsx.');
+ const name=file.name.toLowerCase(),buffer=await file.arrayBuffer();
+ const table=name.endsWith('.xlsx')?await readXlsx(buffer,'evaluations'):name.endsWith('.csv')||file.type==='text/csv'?readCsv(new TextDecoder('utf-8').decode(buffer)):null;
+ if(!table)throw new Error('Gunakan berkas .xlsx (unduhan seluruh spreadsheet NilaiGuide) atau .csv tab Evaluations.');
+ const [header,...body]=table.rows.filter(r=>r.cells.some(c=>String(c??'').trim()!==''));
+ if(!header)throw new Error('Sheet Evaluations kosong.');
+ const index=Object.fromEntries(historyColumns.map(key=>[key,header.cells.findIndex(c=>String(c??'').trim().toLowerCase()===key.toLowerCase())]));
+ const missing=historyRequired.filter(key=>index[key]<0);
+ if(missing.length)throw new Error(`Kolom ${missing.join(', ')} tidak ditemukan di baris pertama sheet ${table.sheet?`"${table.sheet}"`:'berkas'}. Gunakan tab Evaluations NilaiGuide apa adanya.`);
+ if(body.length>100000)throw new Error(`Berkas berisi ${body.length} baris; maksimal 100.000.`);
+ // ID kembar di berkas: yang pertama dipakai, sisanya dihitung "dilewati".
+ const seen=new Set(),rows=[];let duplicates=0;
+ for(const r of body){
+  const id=String(r.cells[index.evaluationId]??'').trim().toLowerCase();
+  if(id&&seen.has(id)){duplicates++;continue;}
+  if(id)seen.add(id);
+  rows.push([r.line,...historyColumns.map(key=>index[key]<0?null:cellValue(r.cells[index[key]]))]);
+ }
+ return {sheet:table.sheet,fileName:file.name,sha256:await sha256(buffer),rowsTotal:body.length,duplicates,rows};
+}
+
+// Badan permintaan portal paling besar 128 KB: bagian dibatasi jumlah baris DAN ukuran.
+export function historyParts(rows,maxRows=800,maxBytes=100000){
+ const parts=[];let part=[],bytes=0;
+ for(const row of rows){
+  const size=JSON.stringify(row).length+1;
+  if(part.length&&(part.length>=maxRows||bytes+size>maxBytes)){parts.push(part);part=[];bytes=0;}
+  part.push(row);bytes+=size;
+ }
+ if(part.length)parts.push(part);
+ return parts;
 }

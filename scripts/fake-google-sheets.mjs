@@ -40,6 +40,8 @@ export function createFakeGoogle({folderId='folder-pusat-uji-0001',stateFile,exp
  function readRange(book,range,major='ROWS'){
   const a=parseA1(range);if(!a)throw Object.assign(new Error('bad range'),{status:400});
   const tab=tabOf(book,a.title);if(!tab)throw Object.assign(new Error('Unable to parse range: '+range),{status:400});
+  // Ketat seperti Google: rentang baca yang melewati jumlah kolom/baris tab ditolak.
+  if(a.c2>tab.columnCount||(Number.isFinite(a.r2)&&a.r2>tab.rowCount))throw Object.assign(new Error(`Range (${range}) exceeds grid limits. Max rows: ${tab.rowCount}, max columns: ${tab.columnCount}`),{status:400});
   const r2=Math.min(a.r2,tab.rowCount),c2=Math.min(a.c2,tab.columnCount),rows=[];
   for(let r=a.r1;r<=r2;r++){const src=tab.cells[r]||[],row=[];for(let c=a.c1;c<=c2;c++)row.push(src[c-1]??'');while(row.length&&row.at(-1)==='')row.pop();rows.push(row);}
   while(rows.length&&!rows.at(-1).length)rows.pop();
