@@ -51,14 +51,18 @@ try{
 
  await check('menu E-Arsip tampil setelah server siap; petugas menambah arsip dengan lampiran dan melihat pratinjau',async()=>{
   // E-Arsip berada di ruang kerja Humas (PRD 10.1), bukan menu bersama.
-  await officer.waitForSelector('.workspace-switch [data-action=switch-humas]');
+  await officer.waitForSelector('.workspace-switch [data-action=switch-humas]',{state:'attached'});
+  const picker = officer.locator('.workspace-disclosure');
+  assert.equal(await picker.evaluate(el => el.open), false);
+  await picker.locator('summary').click();
   assert.equal(await officer.locator('.sidebar-nav a.nav-link[href^="#archive"]').count(),0,'E-Arsip tidak tampil di sidebar modul lain');
   await officer.click('[data-action=switch-humas]');await officer.waitForSelector('#archive-content');
   assert.equal(await officer.locator('.nav-group').first().innerText(),'HUMAS · E-ARSIP');
   assert.match(await officer.locator('.breadcrumb').innerText(),/Humas/);
   assert.deepEqual(await officer.locator('.sidebar-nav a.nav-link[href^="#archive"] span:first-of-type').allTextContents(),['Ringkasan','Daftar Arsip','Tambah Arsip','Laporan','Pengajuan Hapus']);
   await officer.click('.sidebar-nav a[href="#archive-new"]');await officer.waitForSelector('.archive-form');
-  assert.equal(await officer.locator('.workspace-switch .active').innerText(),'Humas');
+  assert.equal(await officer.locator('.workspace-current').innerText(),'Humas');
+  assert.equal(await picker.evaluate(el => el.open), false);
   await officer.open('archive-new');
   assert.match(await officer.locator('.archive-form .notice').innerText(),/langsung tersimpan sebagai Biasa/);
   assert.equal(await officer.locator('[name=classification]').count(),0,'tidak ada pemilih Rahasia pada form petugas');

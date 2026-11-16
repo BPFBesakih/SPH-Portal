@@ -19,13 +19,14 @@ const check=async(name,fn)=>{await fn();console.log(`PASS ${name}`);checks++;};
 const permissions=['admin.users.read','admin.users.manage','admin.users.reset','admin.roles.read','admin.roles.manage','admin.audit.read'];
 const me={user:{id:'fixture-user',username:'itadmin',status:'ACTIVE',row_version:1,must_change_password:false,employee_id:null},name:'itadmin',permissions,csrfToken:'fixture-csrf',demo:false};
 const contexts=[];const errors=[];
-async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960},delays={},failures={},purchasingAccess=false,documentsAccess=false,documentManager=true,trainingAccess=false,initialHash=''}={}){
+async function fixture({signedIn=true,required=false,roleEditor=false,grantEditor=false,accountGrants=[],mayManage=true,employees=[],clock=false,reducedMotion='no-preference',viewport={width:1440,height:960},delays={},failures={},purchasingAccess=false,documentsAccess=false,documentManager=true,trainingAccess=false,archiveGate=null,initialHash=''}={}){
  // page.route cannot serve service-worker scripts on the synthetic origin.
  // Real worker registration and offline behavior are checked by verify-pwa-ui.mjs.
  const context=await browser.newContext({viewport,baseURL:origin,reducedMotion,serviceWorkers:'block'});contexts.push(context);const page=await context.newPage();let active=0,maximum=0;const calls=[];let authenticated=signedIn;
  if(clock)await page.clock.install({time:new Date('2026-10-18T00:00:00Z')});
  let currentPermissions=permissions.filter(p=>mayManage||p!=='admin.roles.manage');
  if(purchasingAccess)currentPermissions.push('purchasing.requests.read_all');
+ if(archiveGate)currentPermissions.push('security.roster.read','merchandise.catalog.read','visits.dashboard.read','archives.humas.manage');
  if(documentsAccess)currentPermissions.push('hr.documents.read','hr.documents.manage','hr.documents.publish','hr.documents.download');
  if(trainingAccess)currentPermissions.push('hr.training.read','hr.training.participants');
  const units=['Badan Pengelola Besakih','Bisnis & Pengembangan Usaha','Operasional & Pelayanan','Pengelolaan Lingkungan & Keamanan Kawasan Besakih','Satuan Pengawas Internal & Manajemen Risiko','Sekretariat'].map((name,index)=>({id:`document-unit-${index}`,name}));
@@ -71,7 +72,9 @@ async function fixture({signedIn=true,required=false,roleEditor=false,grantEdito
     else body={...doc,can_manage:documentManager,can_delete:documentManager,can_publish:documentManager};
    }
    else if(url.pathname==='/api/announcements')body={items:[],can_manage:true};
-   else if(url.pathname==='/api/purchasing/overview')body={capabilities:{home:true},counts:{approvals:1}};
+   else if(url.pathname==='/api/leaves/notifications')body={total:0,keys:[]};
+   else if(archiveGate&&url.pathname==='/api/archives/overview'){await archiveGate;body={officer_units:[],humas:true,unread:0};}
+   else if(url.pathname==='/api/purchasing/overview')body={capabilities:{home:true},counts:{approvals:archiveGate?0:1}};
    else if(url.pathname==='/api/roles')body={items:grantEditor?[grantRole]:roleEditor?[systemRole]:[],permissions:roleEditor?catalog:[]};
    else if(roleEditor&&url.pathname===`/api/roles/${systemRole.id}`&&req.method()==='PATCH'){const change=req.postDataJSON();assert(mayManage);systemRole.permissions=change.permissions;systemRole.row_version++;currentPermissions=[...change.permissions];body={...systemRole};}
    else if(url.pathname==='/api/settings')body={allow_gap_publication:'false'};
@@ -86,6 +89,8 @@ async function fixture({signedIn=true,required=false,roleEditor=false,grantEdito
 try{
  await check('full app boots with the six existing admin permissions and serializes session-bound API calls',async()=>{
   const f=await fixture();await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();assert.equal(f.maximum,1);
+  assert.equal(await f.page.locator('.workspace-current').innerText(),'SDM');
+  assert.equal(await f.page.locator('.workspace-disclosure').count(),0);
   assert.equal(await f.page.getByRole('link',{name:'Data Pegawai & Organisasi',exact:true}).count(),0);
   assert.equal(await f.page.getByRole('link',{name:'Informasi Internal',exact:true}).count(),1);
   await f.page.screenshot({path:resolve(output,'admin-desktop.png'),fullPage:true});
@@ -111,7 +116,12 @@ try{
   await f.page.getByRole('link',{name:'Role & Izin',exact:true}).click();await f.page.getByRole('heading',{name:'Role & Izin',exact:true}).waitFor();await f.idle();
   const paths=f.calls.map(c=>c.path);assert(paths.indexOf('/api/roles')<paths.indexOf('/api/purchasing/overview'));
   assert(paths.indexOf('/api/settings')<paths.indexOf('/api/purchasing/overview'));
-  await f.page.locator('.nav-link[href="#pr-approvals"] .badge-count').waitFor();assert.equal(f.maximum,1);
+  const bell=f.page.getByRole('button',{name:'Buka notifikasi'});
+  await bell.locator('[data-bell-count]').waitFor();
+  assert.equal(await bell.locator('[data-bell-count]').innerText(),'1');
+  if(await bell.getAttribute('aria-expanded')!=='true')await bell.click();
+  await f.page.locator('.bell-panel a[href="#pr-approvals"]').waitFor();
+  assert.equal(f.maximum,1);
  });
  await check('notification failures leave the selected menu usable and background retries are bounded',async()=>{
   const f=await fixture({failures:{'/api/announcements':503}});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();await f.idle();
@@ -131,6 +141,26 @@ try{
   await f.page.evaluate(()=>document.dispatchEvent(new Event('refresh-app')));
   await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();await f.idle();
   assert.equal(f.calls.filter(c=>c.path==='/api/users').length,2);assert.equal(f.calls.filter(c=>c.path==='/api/announcements').length,2);
+ });
+ await check('the mobile module picker keeps focus when Humas becomes available',async()=>{
+  let releaseArchives;
+  const archiveGate=new Promise(resolve=>{releaseArchives=resolve;});
+  const {page}=await fixture({purchasingAccess:true,archiveGate,initialHash:'accounts',viewport:{width:320,height:700}});
+  const picker=page.locator('.workspace-disclosure');
+  try {
+   await page.getByRole('button',{name:'Buka navigasi'}).click();
+   await picker.locator('summary').click();
+   await picker.locator('[data-action=switch-visits]').focus();
+   assert.equal(await picker.locator('[data-action=switch-humas]').count(),0);
+  } finally { releaseArchives(); }
+  await picker.locator('[data-action=switch-humas]').waitFor();
+  assert.equal(await picker.locator('button:focus').innerText(),'Kunjungan');
+  assert.deepEqual(await picker.locator('button').allInnerTexts(),['SDM','Keamanan','Pengadaan','Bisnis','Kunjungan','Humas']);
+  await page.keyboard.press('End');
+  assert.equal(await picker.locator('button:focus').innerText(),'Humas');
+  assert(await picker.locator('#workspace-options').evaluate(el=>{const box=el.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth&&box.bottom<=innerHeight;}));
+  await page.keyboard.press('Escape');
+  assert.equal(await picker.evaluate(el=>el.open),false);
  });
  await check('the mobile shell fits 320 px and opens its navigation',async()=>{
   const f=await fixture({viewport:{width:320,height:800}});await f.page.getByRole('heading',{name:'Akun Pengguna',exact:true}).waitFor();
