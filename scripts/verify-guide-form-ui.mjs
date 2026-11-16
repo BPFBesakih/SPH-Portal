@@ -18,10 +18,10 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:net';
-import {openDb,insert,one,all,now} from '../lib/db.mjs';
+import {openDb,insert,one,all,run,now} from '../lib/db.mjs';
 import {seedPermissions,digest,hashPasswordSync} from '../lib/auth.mjs';
 import {guidePosts} from '../lib/guide-form.mjs';
-import {visitDayRows} from '../lib/visit-data.mjs';
+import {visitDayRows,visitOverview} from '../lib/visit-data.mjs';
 import {createFakeGoogle} from './fake-google-sheets.mjs';
 import {createApp} from '../server.mjs';
 
@@ -323,6 +323,51 @@ try{
     assert.equal(await page.$('#beratSelect option[value="kasar"]'),null);assert.equal(await page.$('#apresiasiSelect option[value="menolong"]'),null,'laporan baru tidak menawarkan jenis nonaktif');
     await page.evaluate(()=>{DB.setPenilaian(window.__penilaianBefore);delete window.__penilaianBefore;App.renderPenilaianForm();});
   });
+  const warningContext=await page.evaluate(()=>DB.getPenilaian());
+  run(db,"UPDATE visit_finding_types SET is_active=0 WHERE id='antrean'");
+  await page.evaluate(()=>{const k=DB.getPenilaian();k.teguran=k.teguran.filter(t=>t.kode!=='antrean');DB.setPenilaian(k);});
+  const inactiveWarningCorrection=guideId=>page.evaluate(async id=>{
+    const g=App.state.guides.find(g=>g.guideId===id),evaluationId=App.uuid();
+    await DB.save({evaluationId,guideId:id,guideName:g.guideName,pos:1,timestamp:DB.sekarangISO(),criteria:{idCard:true,seragam:'lengkap',teguran:['antrean'],berat:'',apresiasi:''},catatan:'',synced:false});
+    await App.mulaiKoreksi(evaluationId);return evaluationId;
+  },guideId);
+  await check('Teguran nonaktif tidak ditawarkan lagi setelah koreksi dibatalkan atau pilihannya dilepas',async()=>{
+    await inactiveWarningCorrection('G-038');
+    await page.click('[data-batal-koreksi]');
+    assert.equal(await page.locator('[data-teguran="antrean"]').count(),0,'batal koreksi membersihkan pilihan nonaktif');
+    await inactiveWarningCorrection('G-037');
+    assert.match(await page.textContent('[data-teguran="antrean"]'),/tidak aktif/);
+    await page.click('[data-teguran="antrean"]');
+    assert.deepEqual(await page.evaluate(()=>App.state.form.crit.teguran),[]);
+    assert.equal(await page.locator('[data-teguran="antrean"]').count(),0,'teguran nonaktif yang dilepas tidak bisa dipilih lagi');
+    await page.click('[data-batal-koreksi]');
+  });
+  await check('Teguran nonaktif tetap tersimpan pada koreksi/draf asal, lalu dibersihkan setelah simpan',async()=>{
+    const id=await inactiveWarningCorrection('G-039');
+    assert.equal(await page.getAttribute('[data-teguran="antrean"]','aria-pressed'),'true');
+    assert.match(await page.textContent('[data-teguran="antrean"]'),/tidak aktif/);
+    await page.evaluate(async()=>{await DB.simpanDraftSegera(App.state.form);App.state.form.crit.teguran=[];await App.loadDraft();});
+    assert.equal(await page.getAttribute('[data-teguran="antrean"]','aria-pressed'),'true');
+    await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);
+    assert.deepEqual(await page.evaluate(async id=>(await DB.get(id)).criteria.teguran,id),['antrean'],'temuan lama tetap dipertahankan');
+    assert.equal(await page.locator('[data-teguran="antrean"]').count(),0,'simpan koreksi membersihkan pilihan nonaktif');
+  });
+  await check('Penilaian guide berikutnya hanya menawarkan teguran aktif dan tersimpan dengan nilai 100 saat tanpa temuan',async()=>{
+    await pick('Guide Contoh D2-10');
+    assert.equal(await page.locator('[data-teguran="antrean"]').count(),0);
+    // Teguran aktif tetap bisa dipilih dan dilepas seperti biasa.
+    await page.click('[data-teguran="merokok-hp"]');await page.click('[data-teguran="merokok-hp"]');
+    assert.equal(await page.locator('[data-teguran="merokok-hp"]').count(),1);
+    assert.deepEqual(await page.evaluate(()=>App.state.form.crit.teguran),[]);
+    await page.click('#btnSave');await page.waitForFunction(()=>App.state.form.guide===null);
+    await page.evaluate(async()=>{Sync.Settings.set({forceOffline:false});await Sync.syncNow();});
+    const saved=one(db,"SELECT * FROM visit_evaluations WHERE guide_id='G-040' AND status='aktif'");
+    assert(saved,'penilaian baru benar-benar tersimpan di server');assert.equal(saved.teguran,'');assert.equal(saved.teguran_n,0);
+    assert.equal(visitOverview(db,saved.wita_date,saved.wita_date).perGuide.find(g=>g.guideId==='G-040').nilai,100);
+    await settle();
+  });
+  run(db,"UPDATE visit_finding_types SET is_active=1 WHERE id='antrean'");
+  await page.evaluate(k=>{DB.setPenilaian(k);App.renderPenilaianForm();},warningContext);
   assert.deepEqual(errors,[]);
   assert.deepEqual(portalErrors,[]);
   console.log(`${checks} pemeriksaan UI penilaian guide lulus.`);

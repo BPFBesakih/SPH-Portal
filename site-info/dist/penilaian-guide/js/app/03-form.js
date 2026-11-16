@@ -103,8 +103,9 @@
     if (list) {
       const dipilih = App.state.form.crit.teguran || [];
       // Kode yang sudah dipilih (mis. dari draf) tetap tampil walau kini tidak aktif.
-      const jenis = [...k.teguran, ...dipilih.filter(kode => !k.teguran.some(t => t.kode === kode)).map(kode => ({ kode, label: App.labelTemuan('teguran', kode) }))];
-      list.innerHTML = jenis.map(t => `<button type="button" class="chip" data-teguran="${esc(t.kode)}" aria-pressed="false">${esc(t.label)}</button>`).join('');
+      const jenis = [...k.teguran, ...dipilih.filter(kode => !k.teguran.some(t => t.kode === kode))
+        .map(kode => ({ kode, label: `${App.labelTemuan('teguran', kode)} (tidak aktif)`, nonaktif: true }))];
+      list.innerHTML = jenis.map(t => `<button type="button" class="chip" data-teguran="${esc(t.kode)}"${t.nonaktif ? ' data-nonaktif' : ''} aria-pressed="false">${esc(t.label)}</button>`).join('');
     }
     for (const [sel, jenis] of [['#beratSelect', 'berat'], ['#apresiasiSelect', 'apresiasi']]) {
       const el = $(sel);
@@ -206,6 +207,9 @@
     const dipilih = c.teguran || [];
     $$('[data-teguran]').forEach(b => {
       const on = dipilih.includes(b.dataset.teguran);
+      // Pilihan lama hanya berlaku selama masih dipilih pada draf/koreksi ini.
+      // Reset formulir dan pelepasan pilihan tidak boleh menawarkannya lagi.
+      if (b.hasAttribute('data-nonaktif') && !on) { b.remove(); return; }
       b.classList.toggle('active', on);
       b.setAttribute('aria-pressed', String(on));
       // Paling banyak 2 teguran per pengantaran: chip lain dikunci setelah 2 dipilih.
