@@ -98,10 +98,30 @@ try{
     await context.close();
   });
   await check('pemilih ruang kerja tiga modul tetap di dalam batas sidebar',async()=>{
-    const {page,context}=await login('gabungan');await page.locator('.workspace-switch').waitFor({state:'visible'});
-    // Measure the current navigation in one turn while summaries may replace it.
-    assert(await page.locator('.workspace-switch').evaluate(el=>{const box=el.getBoundingClientRect(),buttons=[...el.querySelectorAll('button')];return buttons.length===3&&buttons.every(button=>{const b=button.getBoundingClientRect();return b.width>0&&b.x>=box.x-.5&&b.right<=box.right+.5&&b.bottom<=box.bottom+.5;});}),'pemilih ruang kerja keluar batas');
+    const {page,context}=await login('gabungan');await page.locator('.module-picker').waitFor({state:'visible'});
+    const picker = page.locator('.workspace-disclosure');
+    const trigger = picker.locator('summary');
+    await trigger.focus();
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await picker.evaluate(el => el.open), true);
+    assert.equal(await picker.locator('button:focus').getAttribute('aria-pressed'), 'true');
+    assert(await picker.evaluate(el => {
+      const box = el.closest('.sidebar').getBoundingClientRect();
+      const options = [...el.querySelectorAll('button')];
+      return options.length === 3 && options.every(option => {
+        const rect = option.getBoundingClientRect();
+        return rect.width > 0 && rect.left >= box.left && rect.right <= box.right && rect.bottom <= box.bottom;
+      });
+    }), 'pemilih ruang kerja keluar batas');
+    await page.keyboard.press('End');
+    assert.equal(await picker.locator('button:focus').innerText(), 'Pengadaan');
     await page.locator('.sidebar').screenshot({path:resolve(output,'07-tiga-ruang-kerja.png')});
+    await page.keyboard.press('Escape');
+    assert.equal(await picker.evaluate(el => el.open), false);
+    assert(await trigger.evaluate(el => el === document.activeElement));
+    await trigger.click();
+    await page.locator('.workspace-label').click();
+    assert.equal(await picker.evaluate(el => el.open), false);
     await context.close();
   });
   await check('atasan, Keuangan, dan Sekban menyetujui dari antrean Persetujuan',async()=>{
