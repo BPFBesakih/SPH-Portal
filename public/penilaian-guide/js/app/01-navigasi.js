@@ -37,6 +37,8 @@
     if (location.hash !== '#' + view) history.replaceState(null, '', '#' + view);
 
     if (view === 'riwayat') App.renderHistory();
+    // Pilihan nama petugas bisa habis masa berlakunya (pergantian shift).
+    if (view === 'nilai' && App.tampilkanPetugas) App.tampilkanPetugas();
     if (view === 'guides') App.renderGuideCards();
     if (view === 'home') App.refreshStats();
     if (view === 'pengaturan') { App.refreshStorage(); App.renderTautan(); App.tampilkanSelisihJam(); }

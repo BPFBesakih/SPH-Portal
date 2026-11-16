@@ -13,74 +13,38 @@
   'use strict';
 
   const App = window.App;
-  const { jamLokal, nilaiUniform } = App;
+  const { jamLokal, nilaiUniform, caraBaru, temuanDari, SERAGAM_LABEL } = App;
 
   /**
-   * Rangkuman penilaian yang tersimpan di PERANGKAT INI.
-   *
-   * Aturan penggabungannya sengaja disamakan persis dengan rekap di spreadsheet
-   * (`bangunRekap` pada server-gas/Code.gs): bila satu guide dinilai beberapa
-   * kali pada hari yang sama, UNI FORM, ID dan ETIKA diambil yang paling
-   * buruk (nilai terendah). Dengan begitu angka di berkas ini
-   * bisa langsung disandingkan dengan tab "Rekap ..." untuk cross-check —
-   * kalau berbeda, berarti memang ada yang tidak sampai ke server.
+   * Rangkuman penilaian yang tersimpan di PERANGKAT INI, untuk dicocokkan dengan
+   * Dashboard Kunjungan di portal. Tiap penilaian = satu PENGANTARAN. Yang dihitung
+   * adalah TEMUAN (tanpa ID, seragam kurang lengkap, tidak berseragam, teguran),
+   * dengan pemetaan yang sama seperti portal untuk penilaian cara lama. Nilai
+   * pengantaran (100 − potongan) tidak dihitung di HP: bobotnya ditetapkan portal.
    */
   App.rangkumPerangkat = function rangkumPerangkat(list) {
-    const harian = new Map(), perPosHari = new Map(), perTgl = new Map();
+    const harian = new Map(), perPos = new Map(), perTgl = new Map();
+    const tambah = (t, f) => { t.antar++; t.tanpaId += f.tanpaId; t.kurang += f.kurang; t.tidak += f.tidak; t.teguran += f.teguran; };
 
     for (const e of list) {
-      const c = e.criteria || {};
-      const u = nilaiUniform(c.uniform);
-      const patuh = u >= 1 ? 1 : 0;
-      const i = c.idCard ? 1 : 0;
-      const et = Math.min(5, Math.max(-5, Number(c.etika) || 0));
+      const f = temuanDari(e.criteria);
       const tgl = DB.tanggalLokal(e.timestamp);
       const pos = Number(e.pos) || 0;
 
       const kunci = `${e.guideId}|${tgl}`;
-      // Tiap penilaian adalah satu PENGANTARAN tersendiri. Dulu nilai dalam
-      // sehari digabung dan diambil yang terburuk, karena penilaian kedua pasti
-      // koreksi — sekarang keduanya sah, jadi dijumlahkan.
-      const h = harian.get(kunci);
-      if (!h) {
-        harian.set(kunci, { tgl, guideId: e.guideId, guideName: e.guideName,
-                            uniform: u, patuh, idCard: i, etika: et,
-                            pos: new Set([pos]), jml: 1 });
-      } else {
-        h.uniform += u;
-        h.patuh += patuh;
-        h.idCard += i;
-        h.etika += et;
-        h.pos.add(pos);
-        h.jml++;
-      }
+      let h = harian.get(kunci);
+      if (!h) { h = { tgl, guideId: e.guideId, guideName: e.guideName, antar: 0, tanpaId: 0, kurang: 0, tidak: 0, teguran: 0, berat: 0, apresiasi: 0, pos: new Set() }; harian.set(kunci, h); }
+      tambah(h, f); h.pos.add(pos);
+      if (e.criteria?.berat) h.berat++;
+      if (e.criteria?.apresiasi) h.apresiasi++;
 
-      const kp = `${e.guideId}|${pos}|${tgl}`;
-      const ph = perPosHari.get(kp);
-      if (!ph) perPosHari.set(kp, { pos, uniform: u, patuh, idCard: i, etika: et, antar: 1 });
-      else {
-        ph.uniform += u;
-        ph.patuh += patuh;
-        ph.idCard += i;
-        ph.etika += et;
-        ph.antar++;
-      }
+      let p = perPos.get(pos);
+      if (!p) { p = { pos, antar: 0, tanpaId: 0, kurang: 0, tidak: 0, teguran: 0 }; perPos.set(pos, p); }
+      tambah(p, f);
 
       const t = perTgl.get(tgl) || { tgl, jml: 0, guides: new Set(), hadir: 0 };
-      t.jml++; t.guides.add(e.guideId);
+      t.jml++; t.hadir++; t.guides.add(e.guideId);
       perTgl.set(tgl, t);
-    }
-
-    const perPos = new Map();
-    for (const ph of perPosHari.values()) {
-      const p = perPos.get(ph.pos) || { pos: ph.pos, hadir: 0, uniform: 0, patuh: 0, idCard: 0, etika: 0 };
-      p.hadir += ph.antar; p.uniform += ph.uniform; p.patuh += ph.patuh;
-      p.idCard += ph.idCard; p.etika += ph.etika;
-      perPos.set(ph.pos, p);
-    }
-    for (const h of harian.values()) {
-      const t = perTgl.get(h.tgl);
-      if (t) t.hadir += h.jml;
     }
 
     const urutTgl = (a, b) => String(a.tgl).localeCompare(String(b.tgl));
@@ -138,35 +102,43 @@
     if (diganti.length) out.push(barisCsv(['Dibetulkan lewat koreksi (tidak ikut rekap)', diganti.length]));
 
     judul('REKAP HARIAN PER GUIDE — cocokkan dengan Dashboard Kunjungan di portal');
-    out.push(barisCsv(['(Tiap penilaian = satu PENGANTARAN. Angka harian adalah JUMLAH seluruh pengantaran hari itu)']));
-    out.push(barisCsv(['(UNI FORM bernilai -1 tidak sesuai, +1 sesuai, +2 penampilan bagus — jadi jumlahnya bisa minus)']));
-    out.push(barisCsv(['(SERAGAM SESUAI = berapa pengantaran yang bernilai +1 atau +2)']));
-    out.push(barisCsv(['(Kolom REVIEW tidak ada di sini karena tidak diisi lewat aplikasi)']));
-    out.push(barisCsv(['Tanggal', 'Nama Guide', 'guideId', 'Regu', 'UNI FORM', 'SERAGAM SESUAI',
-                       'ID', 'ETIKA', 'ANTAR', 'Dinilai di Pos']));
+    out.push(barisCsv(['(Tiap penilaian = satu PENGANTARAN. Angka harian adalah JUMLAH temuan pada seluruh pengantaran hari itu)']));
+    out.push(barisCsv(['(Nilai pengantaran = 100 − potongan dihitung di portal; bobot potongan tidak ada di HP)']));
+    out.push(barisCsv(['(Penilaian cara lama: ID 0 = tanpa ID, Uniform −1 = tidak berseragam, Etika minus dengan seragam sesuai = 1 teguran)']));
+    out.push(barisCsv(['(Pelanggaran berat dan apresiasi baru berlaku setelah diverifikasi Pengelola Kunjungan)']));
+    out.push(barisCsv(['Tanggal', 'Nama Guide', 'guideId', 'Regu', 'ANTAR', 'TANPA ID', 'KURANG LENGKAP',
+                       'TIDAK BERSERAGAM', 'TEGURAN', 'LAPORAN BERAT', 'APRESIASI', 'Dinilai di Pos']));
     harian.forEach(h => out.push(barisCsv([
       h.tgl, h.guideName, h.guideId, reguGuide(h.guideId),
-      h.uniform, h.patuh, h.idCard, h.etika,
-      h.jml, [...h.pos].sort().join(' & '),
+      h.antar, h.tanpaId, h.kurang, h.tidak, h.teguran, h.berat, h.apresiasi,
+      [...h.pos].sort().join(' & '),
     ])));
 
     judul('REKAP PER POS PEMERIKSAAN');
     out.push(barisCsv(['(Antar = jumlah pengantaran yang dinilai di pos itu)']));
-    out.push(barisCsv(['Pos', 'Antar', 'Uniform (jumlah nilai)', 'Seragam Sesuai', 'ID Sesuai', 'Total Etika']));
-    perPos.forEach(p => out.push(barisCsv([p.pos, p.hadir, p.uniform, p.patuh, p.idCard, p.etika])));
+    out.push(barisCsv(['Pos', 'Antar', 'Tanpa ID', 'Kurang lengkap', 'Tidak berseragam', 'Teguran']));
+    perPos.forEach(p => out.push(barisCsv([p.pos, p.antar, p.tanpaId, p.kurang, p.tidak, p.teguran])));
 
     judul('REKAP PER TANGGAL');
     out.push(barisCsv(['Tanggal', 'Total Pengantaran', 'Guide Berbeda', 'Jumlah Penilaian']));
     perTgl.forEach(t => out.push(barisCsv([t.tgl, t.hadir, t.guides.size, t.jml])));
 
+    // Satu baris per penilaian; kolom cara baru dan cara lama berdampingan.
+    const rincian = e => {
+      const c = e.criteria || {}, baru = caraBaru(c);
+      return [
+        baru ? (SERAGAM_LABEL[c.seragam] || c.seragam) : '',
+        (c.teguran || []).join(', '), c.berat || '', c.apresiasi || '', e.petugasNama || '',
+        baru ? '' : nilaiUniform(c.uniform), baru ? '' : (Number(c.etika) || 0),
+      ];
+    };
     judul('RINCIAN SEMUA PENILAIAN');
-    out.push(barisCsv(['Tanggal', 'Jam', 'Pos', 'guideId', 'Nama Guide', 'Uniform', 'ID-Card',
-                       'Etika', 'Catatan', 'Status', 'Waktu (UTC, sama dgn portal)', 'evaluationId']));
+    out.push(barisCsv(['Tanggal', 'Jam', 'Pos', 'guideId', 'Nama Guide', 'ID-Card', 'Seragam', 'Teguran',
+                       'Pelanggaran berat', 'Apresiasi', 'Petugas', 'Uniform (cara lama)', 'Etika (cara lama)',
+                       'Catatan', 'Status', 'Waktu (UTC, sama dgn portal)', 'evaluationId']));
     baik.forEach(e => out.push(barisCsv([
       DB.tanggalLokal(e.timestamp), jamLokal(e.timestamp), e.pos, e.guideId, e.guideName,
-      nilaiUniform(e.criteria?.uniform),
-      e.criteria?.idCard ? 1 : 0,
-      Number(e.criteria?.etika) || 0,
+      e.criteria?.idCard ? 1 : 0, ...rincian(e),
       e.catatan || '', e.synced ? 'Terkirim' : 'Menunggu',
       e.timestamp, e.evaluationId,
     ])));
@@ -174,11 +146,12 @@
     if (diganti.length) {
       judul('PENILAIAN YANG SUDAH DIBETULKAN — tidak ikut rekap di atas');
       out.push(barisCsv(['Angka di bawah ini sempat tercatat lalu dibetulkan. Di portal barisnya berstatus "diganti".']));
-      out.push(barisCsv(['Tanggal', 'Jam', 'Pos', 'guideId', 'Nama Guide', 'Uniform', 'ID-Card',
-                         'Etika', 'Digantikan oleh', 'evaluationId']));
+      out.push(barisCsv(['Tanggal', 'Jam', 'Pos', 'guideId', 'Nama Guide', 'ID-Card', 'Seragam', 'Teguran',
+                         'Pelanggaran berat', 'Apresiasi', 'Petugas', 'Uniform (cara lama)', 'Etika (cara lama)',
+                         'Digantikan oleh', 'evaluationId']));
       diganti.forEach(e => out.push(barisCsv([
         DB.tanggalLokal(e.timestamp), jamLokal(e.timestamp), e.pos, e.guideId, e.guideName,
-        nilaiUniform(e.criteria?.uniform), e.criteria?.idCard ? 1 : 0, Number(e.criteria?.etika) || 0,
+        e.criteria?.idCard ? 1 : 0, ...rincian(e),
         e.digantikanOleh || '', e.evaluationId,
       ])));
     }

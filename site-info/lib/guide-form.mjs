@@ -4,6 +4,24 @@
 const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow'};
 const respond=(body,status=200)=>Response.json(body,{status,headers});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Hanya bahan formulir yang boleh sampai ke HP; bobot nilai dan metadata internal
+// tetap di server. Daftar kosong adalah pengaturan sah, bukan alasan memakai contoh.
+function scoringContext(s){
+ if(s?.versi!==2||!Number.isInteger(s.teguranMaks)||!Number.isInteger(s.catatanMin)||
+  !['teguran','berat','apresiasi','petugas'].every(k=>Array.isArray(s[k]))||
+  typeof s.petunjuk?.idCard!=='string'||typeof s.petunjuk?.seragam!=='string')throw new Error('Invalid scoring context');
+ const finding=t=>{
+  if(typeof t?.kode!=='string'||typeof t.label!=='string'||typeof t.perluCatatan!=='boolean')throw new Error('Invalid finding context');
+  return {kode:t.kode,label:t.label,perluCatatan:t.perluCatatan};
+ };
+ const petugas=s.petugas.map(p=>{
+  if(typeof p?.id!=='string'||typeof p.nama!=='string'||typeof p.keterangan!=='string')throw new Error('Invalid assessor context');
+  return {id:p.id,nama:p.nama,keterangan:p.keterangan};
+ });
+ return {versi:s.versi,teguranMaks:s.teguranMaks,catatanMin:s.catatanMin,
+  teguran:s.teguran.map(finding),berat:s.berat.map(finding),apresiasi:s.apresiasi.map(finding),petugas,
+  petunjuk:{idCard:s.petunjuk.idCard,seragam:s.petunjuk.seragam}};
+}
 export async function handleGuideForm(request,env,fetchImpl=globalThis.fetch.bind(globalThis)){
  try{
   const url=new URL(request.url),action=url.pathname.split('/').at(-1);
@@ -34,7 +52,8 @@ export async function handleGuideForm(request,env,fetchImpl=globalThis.fetch.bin
   const r=data.result;
   if(action==='context'){
    if(!Array.isArray(r.guides)||![1,2,3].includes(r.pos)||typeof r.label!=='string')throw new Error('Invalid context');
-   return respond({pos:r.pos,label:r.label,serverTime:r.serverTime,guides:r.guides.map(g=>({guideId:String(g.guideId),guideName:String(g.guideName),kategori:String(g.kategori||''),regu:String(g.regu||'')}))});
+   return respond({pos:r.pos,label:r.label,serverTime:r.serverTime,guides:r.guides.map(g=>({guideId:String(g.guideId),guideName:String(g.guideName),kategori:String(g.kategori||''),regu:String(g.regu||'')})),
+    ...(r.penilaian!==undefined?{penilaian:scoringContext(r.penilaian)}:{})});
   }
   if(!Array.isArray(r.accepted)||!Array.isArray(r.rejected))throw new Error('Invalid receipt');
   return respond({serverTime:r.serverTime,

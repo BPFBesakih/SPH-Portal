@@ -7,6 +7,7 @@ import {seedPermissions,hashPasswordSync,grants} from '../lib/auth.mjs';
 import {visitRoutes,isVisitSheetAction} from '../lib/visits.mjs';
 import {takeGuideFormIpSlot,admitGuideForm,checkGuideItem,guideFormLimits} from '../lib/guide-form.mjs';
 import {ingestGuideEvaluations,visitOverview,witaDate,shiftDate,monthLastDay,visitRules} from '../lib/visit-data.mjs';
+import {scoringRules} from '../lib/visit-scoring.mjs';
 import {runVisitSheetSync,checkVisitSheetConnection,visitSheetHeader} from '../lib/visit-sheets.mjs';
 import {createFakeGoogle} from '../scripts/fake-google-sheets.mjs';
 import {createApp} from '../server.mjs';
@@ -29,7 +30,12 @@ function fixture(t,{guides=baseGuides}={}){
   return {db,users,route,link,ingest,runTx};
 }
 // Bentuk setelah checkGuideItem (guide-form.mjs) — dipakai langsung oleh ingest.
-const clean=i=>({evaluationId:i.evaluationId,guideId:i.guideId,guideName:i.guideName,pos:i.pos,timestamp:i.timestamp,criteria:{idCard:i.criteria.idCard,uniform:i.criteria.uniform,etika:i.criteria.etika??0},catatan:i.catatan||'',...(i.koreksiDari?{koreksiDari:i.koreksiDari}:{})});
+const clean=i=>{
+  const c=i.criteria,criteria=c.seragam!==undefined?{idCard:c.idCard,seragam:c.seragam,teguran:c.teguran||[],berat:c.berat||null,apresiasi:c.apresiasi||null}:{idCard:c.idCard,uniform:c.uniform,etika:c.etika??0};
+  return {evaluationId:i.evaluationId,guideId:i.guideId,guideName:i.guideName,pos:i.pos,timestamp:i.timestamp,criteria,catatan:i.catatan||'',...(i.koreksiDari?{koreksiDari:i.koreksiDari}:{}),...(i.petugasId?{petugasId:i.petugasId}:{})};
+};
+// Isian cara baru ("100 − potongan").
+const fakta=(extra={})=>({idCard:true,seragam:'lengkap',teguran:[],berat:null,apresiasi:null,...extra});
 const evaluation=(pos=1,extra={})=>({evaluationId:crypto.randomUUID(),guideId:'G-001',guideName:'Nama dari HP',pos,timestamp:iso(-30),criteria:{uniform:2,idCard:true,etika:1},catatan:'',...extra});
 const at=(ms,extra={})=>evaluation(extra.pos||1,{timestamp:new Date(ms).toISOString(),...extra});
 const sync=(f,google,options={})=>runVisitSheetSync({runTx:f.runTx,env:google.env,fetchImpl:google.fetch,trigger:'manual',...options});
@@ -144,33 +150,173 @@ test('guide registry: import from the old Guides tab, previews, errors, twins, a
   assert.deepEqual(all(f.db,"SELECT action FROM audit_events WHERE object_type='visit_guides' ORDER BY occurred_at,rowid").map(a=>a.action),['IMPORT','IMPORT','CREATE','CREATE','UPDATE']);
 });
 
-test('overview and records follow the NilaiGuide rekap and ranking rules',t=>{
+test('overview: penilaian cara lama dipetakan ke 100 − potongan; daftar penilaian berhalaman',t=>{
   const f=fixture(t),pos1=f.link(1),pos3=f.link(3);
   const day=witaDate(Date.now()-2*DAY),base=Date.parse(`${day}T09:00:00+08:00`),slot=i=>base+i*20*60000;
   const series=(link,guideId,values)=>f.ingest(link,values.map(([uniform,idCard,etika],i)=>at(slot(i),{guideId,pos:link.admitted.pos,criteria:{uniform,idCard:Boolean(idCard),etika}})));
+  // G-001: satu tanpa ID, satu Uniform −1 (Etika −1 di baris itu = hukuman ganda, tidak dihitung).
   series(pos1,'G-001',[[2,1,1],[1,1,0],[1,0,2],[-1,1,-1],[2,1,0],[1,1,1]]);
-  series(pos3,'G-003',[[1,1,0],[1,1,0],[1,1,0],[1,1,0],[1,1,0]]);
+  series(pos3,'G-003',[[1,1,0],[1,1,-2],[1,1,0],[1,1,0],[1,1,0]]);   // Etika minus dengan seragam sesuai = 1 teguran
   series(pos1,'G-004',[[-1,0,-2],[-1,0,-1]]);
   series(pos3,'G-002',[[2,1,5]]);
   const o=f.route(f.users.leader,'overview','GET',{},`from=${shiftDate(day,-3)}&to=${witaDate(Date.now())}`);
-  assert.deepEqual(o.ringkasan,{pengantaran:14,persenUniform:11/14,persenId:11/14,mutuUniform:11/14,rataEtika:5/14,guideDinilai:4,hariDinilai:1,guideAktif:4});
-  assert.deepEqual(o.perPos.map(p=>[p.pos,p.pengantaran,p.persenUniform,p.guideDinilai]),[[1,8,5/8,2],[3,6,1,2]]);
+  const potongan=(1+2)*20+(1+2)*20+1*20;
+  assert.deepEqual(o.ringkasan,{pengantaran:14,nilai:100-potongan/14,persenId:1-3/14,persenSeragam:1-3/14,tanpaId:3,kurangLengkap:0,tidakBerseragam:3,teguran:1,potongan,
+    guideDinilai:4,hariDinilai:1,guideAktif:4,berat:{disetujui:0,menunggu:0},apresiasi:{disetujui:0,menunggu:0},layak:null});
+  assert.deepEqual(o.perPos.map(p=>[p.pos,p.pengantaran,p.nilai,p.guideDinilai]),[[1,8,100-120/8,2],[3,6,100-20/6,2]]);
   assert.deepEqual(o.perRegu.map(r=>[r.regu,r.pengantaran]),[['A1',6],['A2',1],['D1',7],['D2',2]]);
-  assert.deepEqual([o.diperingkat,o.belumCukup],[2,1]);
+  // Minimal pengantaran mengikuti aturan bulan (bawaan 10): semua masih "belum cukup".
+  assert.deepEqual([o.minimalPengantaran,o.diperingkat,o.belumCukup],[10,0,3]);
   const ids=list=>list.map(x=>x.guideId);
-  assert.deepEqual(ids(o.peringkat.totalTertinggi),['G-001','G-003']);assert.deepEqual(ids(o.peringkat.totalTerendah),['G-003','G-001']);
-  assert.deepEqual(ids(o.peringkat.taatTertinggi),['G-003','G-001']);assert.deepEqual(ids(o.peringkat.etikaTertinggi),['G-001','G-003']);
-  assert.deepEqual(ids(o.peringkat.belumCukup),['G-004']);assert.deepEqual(ids(o.perGuide),['G-001','G-003','G-004'],'guide nonaktif tidak diperingkat');
-  const g1=o.perGuide[0];assert.deepEqual([g1.antar,g1.hari,g1.uniform,g1.uniformPatuh,g1.idCard,g1.etika,g1.total],[6,1,6,5,5,3,14]);assert.equal(g1.taat,10/12);
+  assert.deepEqual(ids(o.peringkat.belumCukup),['G-001','G-003','G-004']);assert.deepEqual(ids(o.perGuide),['G-003','G-001','G-004'],'guide nonaktif tidak diperingkat');
+  const g1=o.perGuide.find(g=>g.guideId==='G-001');assert.deepEqual([g1.antar,g1.hari,g1.tanpaId,g1.tidakBerseragam,g1.teguran,g1.potongan],[6,1,1,1,0,40]);
+  assert.equal(g1.status,undefined,'status reward hanya untuk satu bulan kalender');
   assert.equal(o.peringkat.review,undefined,'REVIEW belum dipakai');
   assert.throws(()=>f.route(f.users.it,'overview'),e=>e.status===403);
-  // Daftar penilaian: terbaru dulu, berhalaman, dan bisa disaring.
+  // Daftar penilaian: terbaru dulu, berhalaman, bisa disaring, dan memuat nilai pengantaran.
   const q=extra=>f.route(f.users.leader,'records','GET',{},`from=${day}&to=${day}&${extra}`);
   let page=q('limit=5');assert.deepEqual([page.items.length,page.total,page.more],[5,14,true]);assert(page.items[0].timestamp>=page.items[1].timestamp);
   assert.equal(q('limit=5&offset=10').items.length,4);
   assert.equal(q('pos=3').total,6);assert.equal(q('regu=D2').total,2);assert.equal(q('guide=G-001').total,6);assert.equal(q('status=diganti').total,0);
-  assert.deepEqual(Object.keys(page.items[0]).sort(),['catatan','digantiOleh','etika','evaluationId','guideId','guideName','idCard','koreksiDari','pos','receivedAt','regu','review','status','tanggal','timestamp','uniform']);
+  assert.deepEqual(Object.keys(page.items[0]).sort(),['apresiasi','berat','catatan','digantiOleh','etika','evaluationId','guideId','guideName','idCard','koreksiDari','nilai','petugas','pos','receivedAt','regu','review','seragam','status','tanggal','teguran','teguranN','timestamp','uniform','versi']);
+  assert.deepEqual(q('guide=G-004').items.map(r=>[r.versi,r.seragam,r.nilai]),[[1,'tidak',60],[1,'tidak',60]]);
+  assert.deepEqual(q('guide=G-003').items.map(r=>r.nilai).sort((a,b)=>a-b),[80,100,100,100,100]);
   assert.throws(()=>q('pos=2'),e=>e.status===422);assert.throws(()=>f.route(f.users.hr,'records'),e=>e.status===403);
+});
+
+test('nilai 100 − potongan: contoh usulan 97,5, layak reward, pelanggaran berat, dan apresiasi sebagai penentu',t=>{
+  const f=fixture(t,{guides:[...baseGuides,['G-006','Guide Fiktif Enam','Domestik','D2']]}),pos1=f.link(1),pos3=f.link(3);
+  const petugas=f.route(f.users.manager,'scoring/assessors','POST',{nama:'Petugas Pos Satu',keterangan:'Pos 1',aktif:true});
+  // Bulan lalu, supaya bulan itu utuh; kiriman diterima tepat setelah dibuat.
+  const today=new Date(Date.now()+8*3600000),month=new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth()-1,1)).toISOString().slice(0,7);
+  const base=Date.parse(`${month}-10T07:00:00+08:00`);
+  const send=(link,guideId,list,offset=0)=>list.forEach((criteria,i)=>{const ms=base+(offset+i)*20*60000;
+    const r=f.ingest(link,[at(ms,{guideId,pos:link.admitted.pos,criteria,petugasId:link.admitted.pos===1?petugas.id:undefined,catatan:criteria.berat||criteria.apresiasi?'Disaksikan petugas pos.':''})],ms+60000);
+    assert.equal(r.accepted.length,1,JSON.stringify(r.rejected));});
+  // Contoh di usulan: 20 pengantaran, 2 kali tanpa ID, 1 kali kurang lengkap → 100 − (40 + 10) ÷ 20 = 97,5.
+  send(pos1,'G-001',Array.from({length:20},(_,i)=>fakta({idCard:i>1,seragam:i===2?'kurang':'lengkap'})));
+  // 12 pengantaran, satu dengan 1 teguran dan satu dengan 2 teguran → 100 − 60 ÷ 12 = 95 (tepat ambang).
+  send(pos3,'G-003',Array.from({length:12},(_,i)=>fakta({teguran:i===0?['merokok-hp']:i===1?['tamu-tanpa-kain','antrean']:[]})));
+  send(pos1,'G-004',Array.from({length:10},(_,i)=>fakta({berat:i===4?'pungutan':null})),100);
+  send(pos3,'G-005',Array.from({length:10},(_,i)=>fakta({apresiasi:i===3?'dipuji':null})),100);
+  send(pos1,'G-006',Array.from({length:10},()=>fakta()),200);
+  const saved=one(f.db,"SELECT * FROM visit_evaluations WHERE guide_id='G-003' AND teguran_n=2");
+  assert.deepEqual([saved.versi,saved.seragam,saved.uniform,saved.etika,saved.teguran],[2,'lengkap',1,-2,'tamu-tanpa-kain,antrean'],'kolom lama diisi padanannya');
+  assert.equal(one(f.db,"SELECT petugas_nama FROM visit_evaluations WHERE guide_id='G-001' LIMIT 1").petugas_nama,'Petugas Pos Satu');
+  const overview=()=>f.route(f.users.leader,'overview','GET',{},`from=${month}-01&to=${monthLastDay(month)}`);
+  let o=overview(),g=id=>o.perGuide.find(x=>x.guideId===id);
+  assert.equal(g('G-001').nilai,97.5);assert.equal(g('G-003').nilai,95);
+  assert.deepEqual(['G-001','G-003','G-004','G-005','G-006'].map(id=>g(id).status),['layak','layak','layak','layak','layak']);
+  assert.match(g('G-004').alasan,/belum diputuskan/,'laporan berat yang menunggu tidak menggugurkan, tetapi ditandai');
+  assert.deepEqual(o.ringkasan.berat,{disetujui:0,menunggu:1});assert.equal(o.ringkasan.layak,5);
+  // Pengelola memutuskan: berat disetujui → gugur; apresiasi disetujui → penentu bila nilai sama.
+  const flags=f.route(f.users.manager,'flags','GET',{},`from=${month}-01&to=${monthLastDay(month)}&status=menunggu`);
+  assert.deepEqual(flags.items.map(x=>[x.jenis,x.guideId,x.kode,x.petugas]).sort(),[['apresiasi','G-005','dipuji',''],['berat','G-004','pungutan','Petugas Pos Satu']]);
+  for(const item of flags.items)f.route(f.users.manager,'flags/decide','POST',{id:item.id,row_version:item.row_version,action:'setujui'});
+  o=overview();
+  assert.deepEqual([g('G-004').status,g('G-004').alasan],['gugur','Pelanggaran berat terverifikasi']);assert.equal(o.ringkasan.layak,4);
+  assert.deepEqual(o.peringkat.nilaiTertinggi.map(x=>[x.guideId,x.peringkat]),[['G-005',1],['G-004',2],['G-006',2],['G-001',4],['G-003',5]],'nilai sama: apresiasi penentu, lalu setara');
+  assert.deepEqual(o.peringkat.beratTerverifikasi.map(x=>x.guideId),['G-004']);
+  assert.deepEqual(o.peringkat.tanpaIdTerbanyak.map(x=>x.guideId),['G-001']);assert.deepEqual(o.peringkat.teguranTerbanyak.map(x=>x.guideId),['G-003']);
+  assert.deepEqual(o.perPetugas.map(p=>[p.petugas,p.pengantaran]),[[null,22],['Petugas Pos Satu',40]].sort((a,b)=>b[1]-a[1]));
+  // Ambang dan bobot mengikuti aturan BULAN itu: aturan baru untuk bulan sesudahnya tidak mengubahnya.
+  run(f.db,"INSERT INTO visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_at) VALUES(?,10,10,20,20,98,10,?)",month,now());
+  o=overview();assert.equal(g('G-001').nilai,98.5);assert.equal(g('G-001').status,'layak');assert.deepEqual([g('G-003').status,g('G-003').alasan],['bawah','Nilai di bawah ambang 98']);
+  assert.equal(o.aturan.ambang,98);
+});
+
+test('isian cara baru diperiksa: jenis temuan, catatan wajib, petugas terdaftar, dan koreksi membatalkan laporan yang menunggu',t=>{
+  const f=fixture(t),link=f.route(f.users.manager,'links','POST',{action:'create',pos:1}),pos1=f.link(3),t0=Date.now()-3*3600000;
+  const item=(criteria,extra={})=>evaluation(1,{criteria,timestamp:new Date(t0).toISOString(),...extra});
+  // Bentuk: seragam, paling banyak 2 teguran berbeda, kode valid, petugasId UUID.
+  assert.deepEqual(checkGuideItem(item(fakta({seragam:'bagus'})),1),['criteria.seragam harus lengkap, kurang, atau tidak']);
+  assert.match(checkGuideItem(item(fakta({teguran:['antrean','merokok-hp','meninggalkan-tamu']})),1).join(),/paling banyak 2/);
+  assert.match(checkGuideItem(item(fakta({teguran:['antrean','antrean']})),1).join(),/berbeda/);
+  assert.deepEqual(checkGuideItem(item(fakta({berat:'Bukan Kode!'})),1),['criteria.berat tidak valid']);
+  assert.deepEqual(checkGuideItem(item(fakta(),{petugasId:'x'}),1),['petugasId tidak valid']);
+  assert.deepEqual(checkGuideItem(item(fakta()),1),[]);assert.deepEqual(checkGuideItem(item({uniform:1,idCard:true,etika:0}),1),[],'cara lama tetap diterima');
+  const admitted=admitGuideForm(f.db,'submit',{token:link.token,evaluations:[item(fakta({teguran:['antrean']}),{petugasId:crypto.randomUUID().toUpperCase()})]});
+  assert.deepEqual(admitted.items[0].criteria,{idCard:true,seragam:'lengkap',teguran:['antrean'],berat:null,apresiasi:null});assert(admitted.items[0].petugasId);
+  // Aturan terima: jenis harus dikenal portal dan sesuai golongannya; catatan wajib.
+  const p1={admitted:{id:link.link.id,pos:1}};
+  const rejected=(criteria,extra={})=>f.ingest(p1,[at(t0,{criteria,...extra})]).rejected[0];
+  assert.match(rejected(fakta({teguran:['tidak-ada']})).errors[0],/Jenis teguran "tidak-ada" tidak dikenal/);
+  assert.match(rejected(fakta({teguran:['pungutan']})).errors[0],/tidak dikenal/,'kode pelanggaran berat bukan teguran');
+  assert.match(rejected(fakta({berat:'pungutan'})).errors[0],/Catatan wajib/);
+  assert.match(rejected(fakta({teguran:['teguran-lain']})).errors[0],/Catatan wajib/);
+  assert.match(rejected(fakta(),{petugasId:crypto.randomUUID()}).errors[0],/Petugas penilai tidak terdaftar/);
+  assert.equal(rejected(fakta({berat:'pungutan'})).reason,'VALIDASI');
+  // Jenis yang kini nonaktif tetap diterima: penilaiannya mungkin dibuat sebelum dinonaktifkan.
+  const type=f.route(f.users.manager,'scoring','GET').jenis.find(x=>x.kode==='antrean');
+  f.route(f.users.manager,'scoring/types','POST',{kode:'antrean',label:type.label,aktif:false,row_version:type.row_version});
+  const a=at(t0,{criteria:fakta({teguran:['antrean'],berat:'pungutan'}),catatan:'Meminta uang parkir ke tamu.'});
+  assert.equal(f.ingest(p1,[a]).accepted.length,1);
+  let flag=one(f.db,'SELECT * FROM visit_flags WHERE evaluation_id=?',a.evaluationId);assert.deepEqual([flag.jenis,flag.kode,flag.status,flag.catatan],['berat','pungutan','menunggu','Meminta uang parkir ke tamu.']);
+  // Koreksi penilaian itu: laporan yang belum diputuskan ikut batal dan tidak bisa diputuskan lagi.
+  const fix=at(t0,{koreksiDari:a.evaluationId,criteria:fakta({teguran:['antrean']})});assert.equal(f.ingest(p1,[fix]).accepted.length,1);
+  flag=one(f.db,'SELECT * FROM visit_flags WHERE evaluation_id=?',a.evaluationId);assert.equal(flag.status,'dibatalkan');
+  assert.throws(()=>f.route(f.users.manager,'flags/decide','POST',{id:flag.id,row_version:flag.row_version,action:'setujui'}),e=>e.status===409&&/dikoreksi/.test(e.message));
+  assert.equal(pos1.admitted.pos,3);
+});
+
+test('aturan nilai: hanya untuk bulan depan, dijaga ≤ 100, diaudit; jenis temuan, petugas, petunjuk, dan verifikasi hanya Pengelola',t=>{
+  const f=fixture(t),m=f.users.manager,leader=f.users.leader;
+  const state=f.route(leader,'scoring','GET');
+  assert.equal(state.can_manage,false);assert.deepEqual(state.petugas,[],'daftar petugas hanya untuk Pengelola');
+  assert.deepEqual(state.aturan.berlaku,{berlaku_mulai:'2026-01',pot_id:20,pot_kurang:10,pot_tidak:20,pot_teguran:20,ambang:95,minimal:10,created_at:state.aturan.berlaku.created_at});
+  assert.equal(state.jenis.filter(x=>x.jenis==='teguran').length,5);assert(state.jenis.filter(x=>x.jenis!=='teguran').every(x=>x.perlu_catatan));
+  const rule={pot_id:25,pot_kurang:10,pot_tidak:25,pot_teguran:20,ambang:96,minimal:12};
+  assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_ini}),e=>e.status===409&&/bulan depan/.test(e.message));
+  assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan,pot_teguran:26}),e=>e.status===422&&/lebih dari 100/.test(e.message));
+  assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan,pot_kurang:30,pot_tidak:20}),e=>e.status===422);
+  assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan,minimal:''}),e=>e.status===422);
+  assert.throws(()=>f.route(leader,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan}),e=>e.status===403);
+  const saved=f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan});assert.equal(saved.pot_id,25);
+  let after=f.route(m,'scoring','GET');assert.equal(after.aturan.berlaku.pot_id,20,'bulan berjalan tidak berubah');assert.equal(after.aturan.bulan_depan_aturan.pot_id,25);
+  assert.deepEqual(after.aturan.rencana.map(r=>r.berlaku_mulai),[state.aturan.bulan_depan]);
+  assert.throws(()=>f.route(m,'scoring/rule-delete','POST',{berlaku_mulai:'2026-01'}),e=>e.status===409);
+  f.route(m,'scoring/rule-delete','POST',{berlaku_mulai:state.aturan.bulan_depan});
+  assert.equal(f.route(m,'scoring','GET').aturan.rencana.length,0);
+  // Jenis temuan: kode dibentuk dari nama, tidak dipakai ulang, tidak bisa dihapus (hanya nonaktif).
+  const created=f.route(m,'scoring/types','POST',{jenis:'teguran',label:'Tidak memakai alas kaki sesuai aturan',aktif:true});assert.equal(created.kode,'tidak-memakai-alas-kaki-sesuai-atura','kode paling panjang 36 huruf, sisa ruang untuk akhiran -2');assert.equal(created.perlu_catatan,false);
+  assert.throws(()=>f.route(m,'scoring/types','POST',{jenis:'teguran',label:'tidak memakai alas kaki sesuai aturan',aktif:true}),e=>e.status===409);
+  const berat=f.route(m,'scoring/types','POST',{jenis:'berat',label:'Menjual barang di area suci',aktif:true,perlu_catatan:false});assert.equal(berat.perlu_catatan,true,'pelanggaran berat selalu wajib catatan');
+  const off=f.route(m,'scoring/types','POST',{kode:created.kode,label:created.label,aktif:false,row_version:created.row_version});assert.equal(off.aktif,false);
+  assert.throws(()=>f.route(m,'scoring/types','POST',{kode:created.kode,label:'X lain',aktif:true,row_version:created.row_version}),e=>e.status===409);
+  // Petugas: nama aktif tidak boleh kembar; petunjuk formulir wajib diisi.
+  const p=f.route(m,'scoring/assessors','POST',{nama:'Made Petugas',keterangan:'Pos 3',aktif:true});
+  assert.throws(()=>f.route(m,'scoring/assessors','POST',{nama:'made petugas',aktif:true}),e=>e.status===409);
+  assert.equal(f.route(m,'scoring','GET').petugas[0].nama,'Made Petugas');
+  const form=f.route(m,'scoring','GET').petunjuk;
+  assert.throws(()=>f.route(m,'scoring/form','POST',{petunjuk_id:'',petunjuk_seragam:'x',row_version:form.row_version}),e=>e.status===422);
+  const changed=f.route(m,'scoring/form','POST',{petunjuk_id:'Kartu ID resmi terlihat di dada.',petunjuk_seragam:'Kemeja, udeng, kamen.',row_version:form.row_version});assert.equal(changed.petunjuk_seragam,'Kemeja, udeng, kamen.');
+  for(const [path,body] of [['scoring/types',{jenis:'teguran',label:'X',aktif:true}],['scoring/assessors',{nama:'X Y',aktif:true}],['scoring/form',{}],['flags/decide',{}]])
+    assert.throws(()=>f.route(leader,path,'POST',body),e=>e.status===403,path);
+  for(const user of [f.users.it,f.users.hr])for(const path of ['scoring','flags'])assert.throws(()=>f.route(user,path),e=>e.status===403);
+  assert.deepEqual(all(f.db,"SELECT object_type,action FROM audit_events WHERE object_type IN('visit_score_rules','visit_finding_types','visit_assessors','visit_form_settings') ORDER BY occurred_at,rowid").map(a=>`${a.object_type}:${a.action}`),
+    ['visit_score_rules:CREATE','visit_score_rules:DELETE','visit_finding_types:CREATE','visit_finding_types:CREATE','visit_finding_types:UPDATE','visit_assessors:CREATE','visit_form_settings:UPDATE']);
+  assert.equal(p.aktif,true);assert.equal(scoringRules.teguranMaks,2);
+});
+
+test('verifikasi pelanggaran berat: setujui, tolak dengan alasan, buka kembali; semua diaudit',t=>{
+  const f=fixture(t),pos1=f.link(1),t0=Date.now()-3*3600000,m=f.users.manager;
+  f.ingest(pos1,[at(t0,{criteria:fakta({berat:'kasar'}),catatan:'Membentak tamu di tangga.'}),at(t0+30*60000,{guideId:'G-003',criteria:fakta({apresiasi:'menolong'}),catatan:'Membantu tamu lansia.'})]);
+  const list=()=>f.route(m,'flags','GET',{},`from=${witaDate(t0)}&to=${witaDate(Date.now())}`);
+  let l=list();assert.deepEqual([l.items.length,l.counts.menunggu,l.menunggu_semua,l.can_decide],[2,2,2,true]);
+  assert.equal(f.route(f.users.leader,'flags','GET',{},`from=${witaDate(t0)}&to=${witaDate(Date.now())}`).can_decide,false,'pimpinan hanya melihat');
+  const berat=l.items.find(x=>x.jenis==='berat'),apr=l.items.find(x=>x.jenis==='apresiasi');
+  assert.throws(()=>f.route(m,'flags/decide','POST',{id:berat.id,row_version:berat.row_version,action:'tolak'}),e=>e.status===422&&/alasan/.test(e.message));
+  const rejected=f.route(m,'flags/decide','POST',{id:berat.id,row_version:berat.row_version,action:'tolak',catatan:'Tidak ada saksi lain.'});
+  assert.deepEqual([rejected.status,rejected.keputusanCatatan,rejected.diputuskanOleh],['ditolak','Tidak ada saksi lain.','kunjungan']);
+  assert.throws(()=>f.route(m,'flags/decide','POST',{id:berat.id,row_version:berat.row_version,action:'setujui'}),e=>e.status===409,'versi lama');
+  const reopened=f.route(m,'flags/decide','POST',{id:berat.id,row_version:rejected.row_version,action:'buka'});assert.equal(reopened.status,'menunggu');
+  const approved=f.route(m,'flags/decide','POST',{id:berat.id,row_version:reopened.row_version,action:'setujui'});assert.equal(approved.status,'disetujui');
+  f.route(m,'flags/decide','POST',{id:apr.id,row_version:apr.row_version,action:'setujui'});
+  l=list();assert.deepEqual([l.counts.disetujui,l.counts.menunggu,l.menunggu_semua],[2,0,0]);
+  assert.equal(f.route(m,'flags','GET',{},`from=${witaDate(t0)}&to=${witaDate(Date.now())}&jenis=berat`).items.length,1);
+  assert.equal(one(f.db,"SELECT count(*) n FROM audit_events WHERE object_type='visit_flags' AND action='DECIDE'").n,4);
+  // Laporan tetap ada setelah rincian penilaian dihapus (retensi 6 minggu).
+  run(f.db,'DELETE FROM visit_evaluations');assert.equal(list().items.length,2);
 });
 
 test('sheet copy: yearly spreadsheet in SPH-Portal-Kunjungan, monthly tabs, positional rows, corrections rewritten, formulas kept as text',async t=>{
@@ -230,15 +376,19 @@ test('sheet copy survives failures without duplicates: lost network, crash befor
   assert.equal(r.status.pending,0);assert(google.tab(month).rowCount>rowsBefore);assert.equal(sheetIds(google,month).length,1108);
 });
 
-test('retention: rows older than 6 weeks are verified cell by cell, folded into monthly totals, then deleted — figures stay identical',async t=>{
+test('retention: rows older than 6 weeks are verified cell by cell, folded into daily totals, then deleted — figures stay identical for any day range',async t=>{
   const f=fixture(t),google=createFakeGoogle(),pos1=f.link(1),pos3=f.link(3);
   const oldNow=Date.now()-50*DAY,oldDay=witaDate(oldNow-DAY),base=Date.parse(`${oldDay}T08:00:00+08:00`);
   f.ingest(pos1,[0,1,2,3,4,5].map(i=>at(base+i*20*60000,{criteria:{uniform:i%3?1:2,idCard:i!==2,etika:i-2}})),oldNow);
   f.ingest(pos3,[at(base,{pos:3,guideId:'G-003'}),at(base+DAY,{pos:3,guideId:'G-003',criteria:{uniform:-1,idCard:false,etika:-3}})],oldNow+DAY+3600000);
   const recent=Date.now()-41*DAY;f.ingest(pos1,[at(recent,{guideId:'G-004'})],recent+60000);
   const today=witaDate(Date.now()),from=`${oldDay.slice(0,7)}-01`;
-  const figures=o=>JSON.stringify({...o,diperbarui:null,periode:null});
+  // Angka per petugas hanya dari rincian 6 minggu (rekap harian sengaja tanpa identitas petugas).
+  const figures=o=>JSON.stringify({...o,diperbarui:null,periode:null,perPetugas:null});
   const before=visitOverview(f.db,from,today);
+  // Rentang harian yang memotong hari-hari yang akan dilipat: dulu harus bulan penuh.
+  let cut=shiftDate(shiftDate(shiftDate(today,-visitRules.retensiHari),-1),-1);if(cut.endsWith('-01'))cut=shiftDate(cut,-1);
+  const beforeCut=visitOverview(f.db,cut,today),beforeOldDay=visitOverview(f.db,oldDay,oldDay);
   // Tersalin tanpa retensi, lalu satu sel diubah orang di spreadsheet.
   let r=await sync(f,google,{retention:'skip'});assert.equal(r.ok,true,r.error);
   const victim=one(f.db,"SELECT * FROM visit_evaluations WHERE guide_id='G-003' ORDER BY wita_date DESC LIMIT 1");
@@ -255,10 +405,51 @@ test('retention: rows older than 6 weeks are verified cell by cell, folded into 
   const allIds=google.spreadsheets().flatMap(b=>b.tabs.filter(x=>x.title!=='Petunjuk').flatMap(x=>sheetIds(google,x.title)));
   assert.equal(allIds.length,9,'spreadsheet tetap memuat semuanya');
   assert.equal(f.route(f.users.leader,'records','GET',{},`from=${from}&to=${today}`).items.length,1);
-  let cut=shiftDate(r.status.folded_through,-1);if(cut.endsWith('-01'))cut=shiftDate(cut,-1);
-  assert.throws(()=>f.route(f.users.leader,'overview','GET',{},`from=${cut}&to=${today}`),e=>e.status===422&&/bulan penuh/.test(e.message));
+  assert.equal(figures(f.route(f.users.leader,'overview','GET',{},`from=${cut}&to=${today}`)),figures(beforeCut),'rentang harian di atas hari yang dilipat');
+  assert.equal(figures(visitOverview(f.db,oldDay,oldDay)),figures(beforeOldDay),'satu hari yang sudah dilipat');
+  const daily=all(f.db,"SELECT * FROM visit_daily_totals WHERE sumber='portal' ORDER BY day,guide_id,pos");
+  assert.equal(daily.reduce((n,d)=>n+Number(d.antar),0),8,'rekap harian memuat semua pengantaran aktif yang dilipat');
+  assert(daily.every(d=>d.day<=r.status.folded_through));
   // Kiriman ulang penilaian yang sudah dilipat ditolak karena umurnya, bukan tersimpan ganda.
   assert.equal(f.ingest(pos1,[at(base)]).rejected[0].reason,'WAKTU');
+});
+
+test('sheet copy: kolom N–T untuk cara baru; tab 13 kolom dilebarkan saat ditulis dan dicocokkan sesuai lebarnya saat retensi',async t=>{
+  const f=fixture(t),google=createFakeGoogle(),pos1=f.link(1),pos3=f.link(3);
+  const petugas=f.route(f.users.manager,'scoring/assessors','POST',{nama:'Ketut Petugas',aktif:true});
+  // Penilaian cara lama 50 hari lalu, tersalin ke tab yang lalu "dikembalikan" ke 13 kolom seperti sebelum rilis.
+  const oldNow=Date.now()-50*DAY,oldBase=oldNow-3600000,oldMonth=witaDate(oldBase).slice(0,7);
+  f.ingest(pos3,[at(oldBase,{pos:3,guideId:'G-003',criteria:{uniform:-1,idCard:false,etika:-2}})],oldNow);
+  let r=await sync(f,google,{retention:'skip'});assert.equal(r.ok,true,r.error);
+  const oldTab=google.tab(oldMonth);oldTab.columnCount=13;for(const row of Object.values(oldTab.cells))row.length=Math.min(row.length,13);
+  // Cara baru hari ini: kolom versi, seragam, teguran, pelanggaranBerat, apresiasi, petugas, nilai.
+  const t0=Date.now()-2*3600000,month=witaDate(t0).slice(0,7);
+  const a=at(t0,{criteria:fakta({seragam:'kurang',teguran:['antrean'],idCard:false}),petugasId:petugas.id});
+  const b=at(t0,{guideId:'G-004',criteria:fakta({berat:'pungutan'}),catatan:'Meminta uang di gerbang.'});
+  f.ingest(pos1,[a,b]);
+  r=await sync(f,google,{retention:'skip'});assert.equal(r.ok,true,r.error);
+  assert.deepEqual(google.tab(month).cells[1],[...visitSheetHeader]);assert.equal(visitSheetHeader.length,20);
+  const rowOf=id=>google.rows(month).find(x=>x[0]===id);
+  assert.deepEqual(rowOf(a.evaluationId).slice(5,9),[-1,0,0,-1],'kolom lama berisi padanannya');
+  assert.deepEqual(rowOf(a.evaluationId).slice(13),[2,'Kurang lengkap','antrean','','','Ketut Petugas',100-20-10-20]);
+  assert.deepEqual(rowOf(b.evaluationId).slice(13),[2,'Lengkap','','pungutan','','',100]);
+  // Koreksi penilaian cara lama di tab 13 kolom: tab dilebarkan, kepala N–T ditulis, baris ditulis ulang utuh.
+  if(oldMonth!==month){
+   const old=one(f.db,"SELECT * FROM visit_evaluations WHERE guide_id='G-003'");
+   run(f.db,'UPDATE visit_evaluations SET sheet_dirty=1 WHERE id=?',old.id);
+   r=await sync(f,google,{retention:'skip'});assert.equal(r.ok,true,r.error);assert.equal(r.widened,1);
+   assert.equal(google.tab(oldMonth).columnCount,20);assert.deepEqual(google.tab(oldMonth).cells[1].slice(13),visitSheetHeader.slice(13));
+   oldTab.columnCount=13;for(const row of Object.values(oldTab.cells))row.length=Math.min(row.length,13);
+  }
+  // Retensi: tab 13 kolom dibaca A–M saja (Google menolak rentang di luar grid) dan barisnya cocok.
+  r=await sync(f,google,{retention:'force'});assert.equal(r.ok,true,r.error);assert.equal(r.verified,1);assert.equal(r.deleted,1);
+  const daily=one(f.db,"SELECT * FROM visit_daily_totals WHERE guide_id='G-003'");
+  assert.deepEqual([daily.antar,daily.n_id,daily.n_kurang,daily.n_tidak,daily.n_teguran],[1,1,0,1,0],'temuan cara lama ikut dilipat');
+  // Baris cara baru yang dilipat membawa cacah temuannya.
+  const fold=Date.now()-45*DAY,c=at(fold,{guideId:'G-005',criteria:fakta({seragam:'tidak',teguran:['antrean','merokok-hp']}),petugasId:petugas.id});
+  f.ingest(pos1,[c],fold+60000);r=await sync(f,google,{retention:'force'});assert.equal(r.ok,true,r.error);
+  const daily5=one(f.db,"SELECT * FROM visit_daily_totals WHERE guide_id='G-005'");assert.deepEqual([daily5.n_tidak,daily5.n_teguran,daily5.n_id],[1,2,0]);
+  const day=witaDate(fold),o=visitOverview(f.db,day,day);assert.equal(o.ringkasan.nilai,100-20-40,'nilai hari yang sudah dilipat');
 });
 
 test('nothing is deleted while the Google copy is unavailable, and the connection check explains why without creating files',async t=>{
@@ -304,14 +495,22 @@ test('public form over HTTP: context from Data Guide, receipts, outcome log with
   assert.equal((await fetch(`${s.origin}/api/guide-form/context`,{method:'GET'})).status,404);
   const context=await (await s.form('context',{token:link.token})).json();
   assert.deepEqual([context.pos,context.label],[1,'Pos 1 — Pintu Masuk']);assert.deepEqual(context.guides.map(g=>g.guideId).sort(),['G-001','G-003','G-004','G-005'],'hanya guide aktif');
+  // Bahan formulir cara baru: jenis temuan aktif, petugas aktif, petunjuk — tanpa bobot potongan.
+  assert.deepEqual([context.penilaian.versi,context.penilaian.teguranMaks,context.penilaian.teguran.length,context.penilaian.berat.length,context.penilaian.apresiasi.length],[2,2,5,5,3]);
+  assert.match(context.penilaian.petunjuk.idCard,/Terpasang/);assert.equal(JSON.stringify(context.penilaian).includes('pot_'),false);
   const page=await fetch(`${s.origin}/penilaian-guide/`);assert.equal(page.headers.get('referrer-policy'),'no-referrer');assert.match(page.headers.get('x-robots-tag'),/noindex/);
   const good=evaluation(1),unknown=evaluation(1,{guideId:'G-999'}),wrong=evaluation(3);
   let r=await s.form('submit',{token:link.token,evaluations:[good,unknown,wrong]});assert.equal(r.status,200);let receipt=await r.json();
   assert.deepEqual(receipt.accepted,[{evaluationId:good.evaluationId,synced:true,duplicate:false}]);assert.equal(receipt.rejected.length,2);assert(!JSON.stringify(receipt).includes('"reason"'));
   await Promise.all([...s.app.sheetTasks]);assert.deepEqual(sheetIds(s.google,witaDate(Date.parse(good.timestamp)).slice(0,7)),[good.evaluationId],'tersalin di latar belakang');
   r=await s.form('submit',{token:link.token,evaluations:[good]});receipt=await r.json();assert.equal(receipt.accepted[0].duplicate,true);
+  // Formulir cara baru lewat HTTP: diterima bersama kiriman cara lama dari HP lain.
+  const fresh=evaluation(1,{guideId:'G-003',criteria:fakta({teguran:['antrean']})});
+  receipt=await (await s.form('submit',{token:link.token,evaluations:[fresh]})).json();assert.equal(receipt.accepted[0].evaluationId,fresh.evaluationId);
+  assert.equal(one(s.db,'SELECT versi FROM visit_evaluations WHERE id=?',fresh.evaluationId).versi,2);
+  await Promise.all([...s.app.sheetTasks]);
   const log=all(s.db,'SELECT * FROM guide_form_submissions ORDER BY outcome,reason');
-  assert.deepEqual(log.map(l=>[l.outcome,l.reason]),[['ACCEPTED',null],['DUPLICATE',null],['REJECTED','GUIDE'],['REJECTED','POS']]);
+  assert.deepEqual(log.map(l=>[l.outcome,l.reason]),[['ACCEPTED',null],['ACCEPTED',null],['DUPLICATE',null],['REJECTED','GUIDE'],['REJECTED','POS']]);
   assert(log.every(l=>l.ip_hmac===null));assert(!JSON.stringify(log).includes('Guide Fiktif'));
   assert.equal((await s.form('submit',{token:link.token,evaluations:'x'})).status,400);
   assert.equal((await s.form('submit',{token:link.token,evaluations:[evaluation(1,{catatan:'x'.repeat(30000)})]})).status,413);
@@ -341,7 +540,8 @@ test('generated cloud modules await every permission check (a pending promise ne
   const deny={has:async()=>false,audit:async()=>{}},user={id:crypto.randomUUID(),must_change_password:false},db={inTransaction:true,query:async()=>[]};
   await assert.rejects(cloud.authorizeVisitSheetAction({db,user},deny),e=>e.status===403);
   for(const [path,method,body] of [['links','GET'],['links','POST',{action:'create',pos:1}],['activity','GET'],['exports','POST',{kind:'records',from:'2026-11-01',to:'2026-11-02',rows:1}],
-    ['overview','GET'],['records','GET'],['guides','GET'],['guides','POST',{guideName:'X',kategori:'Asing',regu:'A1',aktif:true}],['guides/import','POST',{rows:[{}]}],['sheet','GET']])
+    ['overview','GET'],['records','GET'],['guides','GET'],['guides','POST',{guideName:'X',kategori:'Asing',regu:'A1',aktif:true}],['guides/import','POST',{rows:[{}]}],['sheet','GET'],
+    ['scoring','GET'],['scoring/rule','POST',{berlaku_mulai:'2099-01'}],['scoring/types','POST',{}],['scoring/assessors','POST',{}],['scoring/form','POST',{}],['flags','GET'],['flags/decide','POST',{}]])
     await assert.rejects(cloud.visitRoutes({db,user,p:['visits',...path.split('/')],method,body:body||{},url:new URL('https://portal.test/?')},deny),e=>e.status===403,`${method} visits/${path}`);
 });
 

@@ -37,6 +37,9 @@ if(!one(db,'SELECT id FROM visit_guides LIMIT 1')){
   let seq=0;
   for(const regu of ['A1','A2','D1','D2'])for(let i=1;i<=10;i++){seq++;insert(db,'visit_guides',{id:`G-${String(seq).padStart(3,'0')}`,seq,name:`Guide Contoh ${regu}-${String(i).padStart(2,'0')}`,kategori:regu.startsWith('A')?'Asing':'Domestik',regu,is_active:i===10?0:1});}
 }
+// Petugas penilai fiktif (dipilih sekali per shift di formulir pos), bila daftarnya masih kosong.
+if(!one(db,'SELECT id FROM visit_assessors LIMIT 1'))for(const [nama,keterangan] of [['Petugas Contoh Satu','Pos 1'],['Petugas Contoh Dua','Pos 1'],['Petugas Contoh Tiga','Pos 3']])
+  insert(db,'visit_assessors',{nama,keterangan,is_active:1});
 const google=createFakeGoogle({stateFile:resolve(dir,'google.json'),exportDir:resolve(dir,'google')});
 const {server}=createApp({db,dataDir:dir,origin,sheetEnv:google.env,sheetFetch:google.fetch,sheetAuto:true});
 const links=[1,3].map(pos=>one(db,'SELECT share_token FROM guide_form_links WHERE pos=? AND is_active=1',pos)?.share_token);

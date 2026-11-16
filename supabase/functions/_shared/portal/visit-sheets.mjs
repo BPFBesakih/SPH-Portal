@@ -2,8 +2,16 @@
 import {asyncMap,asyncFilter,asyncSome,asyncEvery,asyncFind,asyncForEach,asyncReduce} from './arrays.mjs';
 import {createHash, randomUUID} from 'node:crypto';
 import {all, one, run, assert, AppError, now} from './db.mjs';
-import {visitRules, witaDate, shiftDate} from './visit-data.mjs';
-export const visitSheetHeader = Object.freeze(['evaluationId', 'timestamp', 'pos', 'guideId', 'guideName', 'uniform', 'idCard', 'review', 'etika', 'catatan', 'receivedAt', 'koreksiDari', 'status']);
+import {visitRules, witaDate, shiftDate, visitFindingSums, visitScoreOf, lockVisitEvaluations} from './visit-data.mjs';
+import {scoreRuleFinder, seragamLabels, resolveFlagEvents} from './visit-scoring.mjs';
+export const visitSheetLegacyColumns = 13;
+export const visitSheetHeader = Object.freeze(['evaluationId', 'timestamp', 'pos', 'guideId', 'guideName', 'uniform', 'idCard', 'review', 'etika', 'catatan', 'receivedAt', 'koreksiDari', 'status', 'versi', 'seragam', 'teguran', 'pelanggaranBerat', 'apresiasi', 'petugas', 'nilai']);
+const columnLetter = n => {
+  let out = '';
+  for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) out = String.fromCharCode(65 + (x - 1) % 26) + out;
+  return out;
+};
+const lastColumn = columnLetter(visitSheetHeader.length);
 export const visitSheetLimits = Object.freeze({
   batchRows: 500,
   dirtyRows: 200,
@@ -23,13 +31,13 @@ export const visitSheetLimits = Object.freeze({
     }
   })
 });
-const columnWidths = [290, 190, 50, 90, 200, 80, 70, 70, 70, 240, 190, 290, 80];
+const columnWidths = [290, 190, 50, 90, 200, 80, 70, 70, 70, 240, 190, 290, 80, 60, 120, 220, 160, 140, 180, 60];
 const sheetsApi = 'https://sheets.googleapis.com/v4/spreadsheets', driveApi = 'https://www.googleapis.com/drive/v3/files', tokenApi = 'https://oauth2.googleapis.com/token';
 const folderMime = 'application/vnd.google-apps.folder', spreadsheetMime = 'application/vnd.google-apps.spreadsheet';
 const kunjunganFolder = 'SPH-Portal-Kunjungan', driveIdPattern = /^[A-Za-z0-9_-]{8,200}$/;
 const evaluationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const sheetAccessTokens = new Map();
-const guideNotes = ['Penilaian Guide — salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).', 'Satu tab per bulan, tanggal menurut WITA. Kolomnya sama dengan tab Evaluations aplikasi NilaiGuide lama.', 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', 'Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.', 'Untuk mengolah data, gunakan Data → Tampilan filter, atau salin tab ke spreadsheet lain.', `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
+const guideNotes = ['Penilaian Guide — salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).', 'Satu tab per bulan, tanggal menurut WITA. Kolom A–M sama dengan tab Evaluations aplikasi NilaiGuide lama.', 'Kolom N–T: penilaian "100 − potongan" (versi 2). nilai = 100 − potongan menurut aturan bulan itu. Baris cara lama (versi kosong) dihitung portal dengan pemetaan: ID 0 = tanpa ID, Uniform −1 = tidak berseragam, Etika minus dengan seragam sesuai = satu teguran.', 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', 'Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.', 'Untuk mengolah data, gunakan Data → Tampilan filter, atau salin tab ke spreadsheet lain.', `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
 export function visitSheetConfig(env = {}) {
   const value = name => typeof env[name] === 'string' ? env[name].trim() : '';
   const config = {
@@ -43,7 +51,11 @@ export function visitSheetConfig(env = {}) {
     configured: Boolean(config.clientId && config.clientSecret && config.refreshToken && driveIdPattern.test(config.folder))
   };
 }
-export const visitSheetValues = r => [r.id, r.evaluated_at, Number(r.pos), r.guide_id, r.guide_name, Number(r.uniform), Number(r.id_card), Number(r.review), Number(r.etika), r.catatan || '', r.received_at, r.koreksi_dari || '', r.status];
+export function visitSheetValues(r, ruleOf) {
+  const base = [r.id, r.evaluated_at, Number(r.pos), r.guide_id, r.guide_name, Number(r.uniform), Number(r.id_card), Number(r.review), Number(r.etika), r.catatan || '', r.received_at, r.koreksi_dari || '', r.status];
+  if (Number(r.versi) !== 2) return [...base, '', '', '', '', '', '', ''];
+  return [...base, 2, seragamLabels[r.seragam] || r.seragam, r.teguran || '', r.berat || '', r.apresiasi || '', r.petugas_nama || '', visitScoreOf(r, ruleOf)];
+}
 const sameSheetRow = (cells, expected) => Array.isArray(cells) && expected.every((v, i) => typeof v === 'number' ? Number(cells[i]) === v && cells[i] !== '' && cells[i] !== undefined : String(cells[i] ?? '') === v);
 const quoteTab = title => `'${title}'`;
 const monthOfDay = day => day.slice(0, 7);
@@ -364,7 +376,8 @@ async function sheetTabs(ctx, spreadsheetId) {
   return (meta.sheets || []).map(s => ({
     sheetId: Number(s.properties?.sheetId),
     title: String(s.properties?.title || ''),
-    rowCount: Number(s.properties?.gridProperties?.rowCount || 0)
+    rowCount: Number(s.properties?.gridProperties?.rowCount || 0),
+    columnCount: Number(s.properties?.gridProperties?.columnCount || 0)
   }));
 }
 function monthTabRequests(title, sheetId, rows) {
@@ -433,6 +446,58 @@ function monthTabRequests(title, sheetId, rows) {
     }
   }];
 }
+function widenTabRequests(sheet) {
+  const start = sheet.columnCount, add = visitSheetHeader.length - start;
+  if (add <= 0) return [];
+  return [{
+    appendDimension: {
+      sheetId: sheet.sheetId,
+      dimension: 'COLUMNS',
+      length: add
+    }
+  }, {
+    updateCells: {
+      range: {
+        sheetId: sheet.sheetId,
+        startRowIndex: 0,
+        endRowIndex: 1,
+        startColumnIndex: start,
+        endColumnIndex: visitSheetHeader.length
+      },
+      rows: [{
+        values: visitSheetHeader.slice(start).map(h => ({
+          userEnteredValue: {
+            stringValue: h
+          },
+          userEnteredFormat: {
+            textFormat: {
+              bold: true
+            },
+            backgroundColor: {
+              red: 0.93,
+              green: 0.95,
+              blue: 0.97
+            }
+          }
+        }))
+      }],
+      fields: 'userEnteredValue,userEnteredFormat(textFormat,backgroundColor)'
+    }
+  }, ...columnWidths.slice(start).map((pixelSize, i) => ({
+    updateDimensionProperties: {
+      range: {
+        sheetId: sheet.sheetId,
+        dimension: 'COLUMNS',
+        startIndex: start + i,
+        endIndex: start + i + 1
+      },
+      properties: {
+        pixelSize
+      },
+      fields: 'pixelSize'
+    }
+  }))];
+}
 async function addMonthTabs(ctx, file, meta, titles, pendingByTab) {
   const {runTx} = ctx, used = new Set(meta.map(s => s.sheetId)), requests = [], added = [];
   for (const title of titles) {
@@ -490,12 +555,14 @@ async function copyRound(ctx, summary) {
     pending: await all(db, 'SELECT * FROM visit_evaluations WHERE sheet_row IS NULL ORDER BY received_at,id LIMIT ?', visitSheetLimits.batchRows),
     dirty: await all(db, 'SELECT * FROM visit_evaluations WHERE sheet_dirty=1 ORDER BY sheet_tab,sheet_row LIMIT ?', visitSheetLimits.dirtyRows),
     files: await all(db, 'SELECT * FROM visit_sheet_files'),
-    tabs: await all(db, 'SELECT * FROM visit_sheet_tabs')
+    tabs: await all(db, 'SELECT * FROM visit_sheet_tabs'),
+    ruleOf: await scoreRuleFinder(db)
   }));
   if (!work.pending.length && !work.dirty.length) return {
     more: false,
     structural: false
   };
+  const sheetRow = r => visitSheetValues(r, work.ruleOf);
   const pendingByTab = groupBy(work.pending, r => monthOfDay(r.wita_date)), dirtyByTab = groupBy(work.dirty, r => r.sheet_tab);
   const tabRows = new Map(work.tabs.map(t => [t.title, t])), files = new Map(work.files.map(f => [Number(f.year), f]));
   const titles = [...new Set([...pendingByTab.keys(), ...dirtyByTab.keys()])].sort();
@@ -503,7 +570,7 @@ async function copyRound(ctx, summary) {
   for (const year of [...new Set(titles.map(t => Number(t.slice(0, 4))))]) {
     const file = files.get(year) || await yearSpreadsheet(ctx, year);
     const meta = await sheetTabs(ctx, file.spreadsheet_id), yearTitles = titles.filter(t => t.startsWith(`${year}-`));
-    const missing = [], grow = [];
+    const missing = [], grow = [], widen = [];
     let changed = false;
     for (const title of yearTitles) {
       const sheet = meta.find(s => s.title === title), known = tabRows.get(title);
@@ -527,6 +594,7 @@ async function copyRound(ctx, summary) {
         add: Math.max(visitSheetLimits.growRows, needed - sheet.rowCount),
         rowCount: sheet.rowCount
       });
+      if (sheet.columnCount < visitSheetHeader.length) widen.push(sheet);
     }
     if (missing.length) {
       await addMonthTabs(ctx, file, meta, missing, pendingByTab);
@@ -560,20 +628,21 @@ async function copyRound(ctx, summary) {
         continue;
       }
     }
-    if (grow.length) {
+    if (grow.length || widen.length) {
       await google.write(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}:batchUpdate`, {
-        requests: grow.map(g => ({
+        requests: [...grow.map(g => ({
           appendDimension: {
             sheetId: g.sheetId,
             dimension: 'ROWS',
             length: g.add
           }
-        }))
+        })), ...widen.flatMap(widenTabRequests)]
       }, 'sheet-structure');
-      await runTx(async db => {
+      if (grow.length) await runTx(async db => {
         await holdSheetLease(db, ctx.owner);
         for (const g of grow) await run(db, 'UPDATE visit_sheet_tabs SET row_count=?,updated_at=? WHERE title=?', g.rowCount + g.add, now(), g.title);
       });
+      summary.widened += widen.length;
     }
     const data = [], placed = [], nextRows = [];
     for (const title of yearTitles) {
@@ -581,9 +650,9 @@ async function copyRound(ctx, summary) {
       if (!rows.length) continue;
       const start = Number(tabRows.get(title).next_row);
       data.push({
-        range: `${quoteTab(title)}!A${start}:M${start + rows.length - 1}`,
+        range: `${quoteTab(title)}!A${start}:${lastColumn}${start + rows.length - 1}`,
         majorDimension: 'ROWS',
-        values: rows.map(visitSheetValues)
+        values: rows.map(sheetRow)
       });
       rows.forEach((r, i) => placed.push({
         id: r.id,
@@ -594,9 +663,9 @@ async function copyRound(ctx, summary) {
       nextRows.push([title, start + rows.length]);
     }
     for (const r of rewrites) data.push({
-      range: `${quoteTab(r.sheet_tab)}!A${r.sheet_row}:M${r.sheet_row}`,
+      range: `${quoteTab(r.sheet_tab)}!A${r.sheet_row}:${lastColumn}${r.sheet_row}`,
       majorDimension: 'ROWS',
-      values: [visitSheetValues(r)]
+      values: [sheetRow(r)]
     });
     ctx.writing = true;
     await google.write(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}/values:batchUpdate`, {
@@ -624,14 +693,17 @@ async function verifyOldRows(ctx, summary, cutoff) {
   const {google, runTx} = ctx;
   const work = await runTx(async db => ({
     rows: await all(db, 'SELECT * FROM visit_evaluations WHERE wita_date<? AND sheet_row IS NOT NULL AND sheet_dirty=0 AND sheet_verified_at IS NULL ORDER BY sheet_tab,sheet_row LIMIT ?', cutoff, visitSheetLimits.verifyRows),
-    files: await all(db, 'SELECT * FROM visit_sheet_files')
+    files: await all(db, 'SELECT * FROM visit_sheet_files'),
+    ruleOf: await scoreRuleFinder(db)
   }));
   if (!work.rows.length) return;
   const files = new Map(work.files.map(f => [Number(f.year), f]));
-  const verified = [], stale = [], moved = new Set();
+  const verified = [], stale = [], moved = new Set(), widths = new Map();
   for (const [title, rows] of groupBy(work.rows, r => r.sheet_tab)) {
     const file = files.get(Number(title.slice(0, 4)));
     if (!file) continue;
+    if (!widths.has(file.year)) widths.set(file.year, new Map((await sheetTabs(ctx, file.spreadsheet_id)).map(t => [t.title, t.columnCount])));
+    const width = Math.min(visitSheetHeader.length, Math.max(visitSheetLegacyColumns, widths.get(file.year).get(title) || visitSheetLegacyColumns)), readTo = columnLetter(width);
     const runs = [];
     for (const r of rows) {
       const last = runs.at(-1);
@@ -646,13 +718,14 @@ async function verifyOldRows(ctx, summary, cutoff) {
     }
     for (const part of chunked(runs, visitSheetLimits.rangesPerRead)) {
       const url = new URL(`${sheetsApi}/${encodeURIComponent(file.spreadsheet_id)}/values:batchGet`);
-      for (const span of part) url.searchParams.append('ranges', `${quoteTab(title)}!A${span.start}:M${span.end}`);
+      for (const span of part) url.searchParams.append('ranges', `${quoteTab(title)}!A${span.start}:${readTo}${span.end}`);
       url.searchParams.set('valueRenderOption', 'UNFORMATTED_VALUE');
       url.searchParams.set('majorDimension', 'ROWS');
       const data = await google.read(url.href, 'sheet-read');
       part.forEach((span, i) => span.rows.forEach((r, j) => {
         const cells = data.valueRanges?.[i]?.values?.[j];
-        if (sameSheetRow(cells, visitSheetValues(r))) verified.push(r); else if (String(cells?.[0] ?? '').trim().toLowerCase() === r.id) stale.push(r); else moved.add(title);
+        const expected = visitSheetValues(r, work.ruleOf);
+        if (sameSheetRow(cells, expected.slice(0, width)) && expected.slice(width).every(v => v === '')) verified.push(r); else if (String(cells?.[0] ?? '').trim().toLowerCase() === r.id) stale.push(r); else moved.add(title);
       }));
     }
   }
@@ -681,6 +754,7 @@ async function verifyOldRows(ctx, summary, cutoff) {
 }
 async function foldVerifiedDays(db, owner, cutoff) {
   await holdSheetLease(db, owner);
+  await lockVisitEvaluations(db);
   const blocking = (await one(db, 'SELECT min(wita_date) AS d FROM visit_evaluations WHERE wita_date<? AND (sheet_row IS NULL OR sheet_dirty=1 OR sheet_verified_at IS NULL)', cutoff))?.d || null;
   const through = blocking ? shiftDate(blocking, -1) : shiftDate(cutoff, -1);
   const count = Number((await one(db, 'SELECT count(*) AS n FROM visit_evaluations WHERE wita_date<=?', through)).n);
@@ -695,7 +769,12 @@ async function foldVerifiedDays(db, owner, cutoff) {
   for (const g of groups) await run(db, `INSERT INTO visit_monthly_totals(month,guide_id,pos,antar,uniform,uniform_patuh,id_card,review,etika,hari,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(month,guide_id,pos) DO UPDATE SET antar=visit_monthly_totals.antar+excluded.antar,uniform=visit_monthly_totals.uniform+excluded.uniform,uniform_patuh=visit_monthly_totals.uniform_patuh+excluded.uniform_patuh,
   id_card=visit_monthly_totals.id_card+excluded.id_card,review=visit_monthly_totals.review+excluded.review,etika=visit_monthly_totals.etika+excluded.etika,hari=visit_monthly_totals.hari+excluded.hari,updated_at=excluded.updated_at`, g.month, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), Number(g.hari), stamp);
+  for (const g of await all(db, `SELECT wita_date AS day,guide_id,pos,count(*) AS antar,sum(uniform) AS uniform,sum(CASE WHEN uniform>=1 THEN 1 ELSE 0 END) AS uniform_patuh,sum(id_card) AS id_card,sum(review) AS review,sum(etika) AS etika,${visitFindingSums} FROM visit_evaluations WHERE status='aktif' AND wita_date<=? GROUP BY wita_date,guide_id,pos`, through)) await run(db, `INSERT INTO visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at,n_id,n_kurang,n_tidak,n_teguran) VALUES(?,?,?,'portal',?,?,?,?,?,?,?,?,?,?,?)
+   ON CONFLICT(day,guide_id,pos,sumber) DO UPDATE SET antar=visit_daily_totals.antar+excluded.antar,uniform=visit_daily_totals.uniform+excluded.uniform,uniform_patuh=visit_daily_totals.uniform_patuh+excluded.uniform_patuh,
+   id_card=visit_daily_totals.id_card+excluded.id_card,review=visit_daily_totals.review+excluded.review,etika=visit_daily_totals.etika+excluded.etika,updated_at=excluded.updated_at,
+   n_id=visit_daily_totals.n_id+excluded.n_id,n_kurang=visit_daily_totals.n_kurang+excluded.n_kurang,n_tidak=visit_daily_totals.n_tidak+excluded.n_tidak,n_teguran=visit_daily_totals.n_teguran+excluded.n_teguran`, g.day, g.guide_id, Number(g.pos), Number(g.antar), Number(g.uniform), Number(g.uniform_patuh), Number(g.id_card), Number(g.review), Number(g.etika), stamp, Number(g.n_id), Number(g.n_kurang), Number(g.n_tidak), Number(g.n_teguran));
   const days = Number((await one(db, 'SELECT count(DISTINCT wita_date) AS n FROM visit_evaluations WHERE wita_date<=?', through)).n);
+  await resolveFlagEvents(db, through);
   const deleted = (await run(db, 'DELETE FROM visit_evaluations WHERE wita_date<=?', through)).changes;
   await run(db, 'UPDATE visit_sheet_state SET folded_through=?,updated_at=? WHERE id=1', through, stamp);
   return {
@@ -744,6 +823,7 @@ export async function runVisitSheetSync({runTx, env, fetchImpl, trigger = 'manua
     written: 0,
     rewritten: 0,
     rescanned: 0,
+    widened: 0,
     verified: 0,
     rewrite_queued: 0,
     folded_days: 0,

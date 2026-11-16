@@ -164,12 +164,11 @@
     $('#aboutStorage').textContent = DB.isEncryptionActive() ? 'IndexedDB (terenkripsi AES-256)' : 'IndexedDB';
   }
 
-  // Teks Uniform tiga tingkat (NG-S4). Etika bawaan 0 sesuai aplikasi sekarang —
-  // keputusan 0 atau +1 masih terbuka di PRD; ubah teks di sini bila diputuskan lain.
+  // Cara penilaian "100 − potongan" (2.2.0): petugas mencatat fakta, portal menghitung nilainya.
   const TUT = [
     { i: '👋', t: 'Selamat Datang', b: 'Formulir ini untuk menilai guide di pos pemeriksaan Kawasan Besakih. Tidak perlu login — pos Anda sudah ditentukan tautan dari pengelola.' },
-    { i: '📝', t: 'Langkah 1 — Pilih', b: 'Tekan tombol hijau “Penilaian Baru”, lalu pilih nama guide.' },
-    { i: '✅', t: 'Langkah 2 — Nilai', b: 'ID‑Card: Ya atau Tidak. Uniform: Tidak sesuai, Sesuai, atau Bagus. Etika: tekan − atau + (−5 sampai +5); biarkan 0 bila biasa saja. Lalu tekan SIMPAN.' },
+    { i: '📝', t: 'Langkah 1 — Pilih', b: 'Tekan tombol hijau “Penilaian Baru”. Pilih nama Anda sekali per shift, lalu pilih nama guide.' },
+    { i: '✅', t: 'Langkah 2 — Catat yang terlihat', b: 'ID‑Card: Terpasang atau Tidak. Seragam: Lengkap, Kurang lengkap, atau Tidak berseragam. Teguran hanya bila ada (pilih jenisnya). Pelanggaran berat atau apresiasi: pilih jenisnya dan tulis catatan. Lalu tekan SIMPAN.' },
     { i: '📶', t: 'Langkah 3 — Tenang', b: 'Tanpa sinyal pun data tetap tersimpan. Saat sinyal ada, data terkirim sendiri (⏳ menjadi ✅).' },
   ];
 

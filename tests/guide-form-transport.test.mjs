@@ -13,7 +13,31 @@ test('guide form proxy calls only the fixed function with the server secret and 
   return Response.json({ok:true,result:{pos:1,label:'Pos 1 — Pintu Masuk',serverTime:'2026-11-03T00:00:00.000Z',guides:[{guideId:'G-001',guideName:'Guide Fiktif',kategori:'Asing',regu:'A1',secret:'must-not-leak'}],token_hash:'must-not-leak'}});
  });
  assert.equal(calls,1);assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');assert.equal(response.headers.get('Referrer-Policy'),'no-referrer');
- const text=await response.text();assert(!text.includes('must-not-leak'));assert.equal(JSON.parse(text).guides[0].guideId,'G-001');
+ const text=await response.text();assert(!text.includes('must-not-leak'));assert.equal(JSON.parse(text).guides[0].guideId,'G-001');assert.equal(JSON.parse(text).penilaian,undefined,'backend lama tetap didukung');
+});
+
+test('context carries scoring choices, assessors and instructions through the production proxy without internal fields',async()=>{
+ const penilaian={versi:2,teguranMaks:2,catatanMin:3,
+  teguran:[{kode:'antrean',label:'Tidak tertib antrean',perluCatatan:false}],
+  berat:[{kode:'kasar',label:'Berkata kasar',perluCatatan:true}],apresiasi:[],
+  petugas:[{id,nama:'Petugas Uji',keterangan:'Pos 1'}],petunjuk:{idCard:'Kartu terlihat.',seragam:'Atribut lengkap.'}};
+ const internal={...structuredClone(penilaian),pot_id:20,secret:'must-not-leak'};
+ internal.teguran[0].created_by='must-not-leak';internal.petugas[0].private_note='must-not-leak';internal.petunjuk.private_note='must-not-leak';
+ const response=await handleGuideForm(request(),env,async()=>Response.json({ok:true,result:{pos:1,label:'Pos 1',guides:[],penilaian:internal}}));
+ assert.equal(response.status,200);const data=await response.json();assert.deepEqual(data.penilaian,penilaian);
+ assert(!JSON.stringify(data).includes('must-not-leak'));assert.equal(data.penilaian.pot_id,undefined);
+ // Daftar aktif kosong harus tetap kosong; HP tidak boleh beralih ke contoh bawaan.
+ const empty={...penilaian,teguran:[],berat:[],petugas:[]};
+ const responseEmpty=await handleGuideForm(request(),env,async()=>Response.json({ok:true,result:{pos:3,label:'Pos 3',guides:[],penilaian:empty}}));
+ assert.equal(responseEmpty.status,200);assert.deepEqual((await responseEmpty.json()).penilaian,empty);
+});
+
+test('malformed scoring context is retryable instead of silently dropping configured choices',async()=>{
+ const valid={versi:2,teguranMaks:2,catatanMin:3,teguran:[],berat:[],apresiasi:[],petugas:[],petunjuk:{idCard:'ID',seragam:'Seragam'}};
+ for(const patch of [{versi:1},{teguran:null},{berat:{}},{apresiasi:'secret'},{petugas:null},{petunjuk:null},{teguran:[null]},{petugas:[{id}]},{teguranMaks:'2'},{catatanMin:'3'}]){
+  const response=await handleGuideForm(request(),env,async()=>Response.json({ok:true,result:{pos:1,label:'Pos 1',guides:[],penilaian:{...valid,...patch}}}));
+  assert.equal(response.status,503,JSON.stringify(patch));assert(!JSON.stringify(await response.json()).includes('secret'));
+ }
 });
 test('submit receipt keeps only confirmation fields',async()=>{
  const response=await handleGuideForm(request('submit',{evaluations:[{evaluationId:id}]}),env,async()=>Response.json({ok:true,result:{serverTime:'x',accepted:[{evaluationId:id,duplicate:false,row:12},{evaluationId:'bukan'}],rejected:[{evaluationId:id,errors:['jeda'],terlaluCepat:true,internal:'must-not-leak'}]}}));

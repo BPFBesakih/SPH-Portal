@@ -182,6 +182,23 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
 .segmented.tiga .seg{font-size:.92rem;padding-left:.35rem;padding-right:.35rem}
 .seg.plus.on{background:var(--emas);color:#fff}
 .criterion.unset .segmented{border-color:var(--emas)}
+/* Penilaian "100 − potongan": petunjuk di bawah tombol, chip teguran yang bisa
+   dipilih (paling banyak 2), laporan berat/apresiasi yang dilipat, dan nama petugas. */
+.crit-help{flex-basis:100%;margin-top:2px}
+.criterion-list{flex-direction:column;align-items:stretch}
+.chipgrid{display:flex;flex-wrap:wrap;gap:8px}
+.chipgrid .chip{white-space:normal;text-align:left;min-height:48px;padding:8px 16px;line-height:1.25}
+.chipgrid .chip.active{background:var(--merah);border-color:var(--merah);color:#fff}
+.chipgrid .chip[disabled]{opacity:.45}
+.laporan{margin-top:12px;border:2px solid var(--garis);border-radius:14px;padding:10px 14px;background:var(--putih)}
+.laporan summary{min-height:44px;display:flex;align-items:center;font-weight:700;cursor:pointer;color:var(--teks)}
+.laporan[open] summary{margin-bottom:6px}
+.laporan .bigselect{margin-bottom:10px}
+.petugasbox{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;
+  background:var(--hijau-muda);border-radius:12px;padding:8px 12px;color:var(--hijau-tua)}
+.petugasbox .sublbl{flex-basis:100%;margin:0}
+.petugasbox .bigselect{flex:1 1 100%}
+.petugasbox .chip{min-height:44px}
 
 /* Penghitung Review — tombol besar, tanpa mengetik */
 .stepper{display:flex;align-items:center;gap:0;border:2px solid var(--garis);
@@ -204,7 +221,7 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
 .card .cstat{font-size:24px;flex:0 0 auto}
 .card .cbody{flex:1;min-width:0}
 .card .cname{font-weight:700;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.card .cmeta{font-size:14px;color:var(--abu);margin-top:2px}
+.card .cmeta{display:block;font-size:14px;color:var(--abu);margin-top:2px}
 .badges{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
 .badge{font-size:13px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--hijau-muda);color:var(--hijau-tua)}
 .badge.bad{background:var(--merah-muda);color:var(--merah)}
