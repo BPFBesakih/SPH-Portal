@@ -217,6 +217,14 @@
         const kurang = el.querySelector('[data-step="-1"]'), tambah = el.querySelector('[data-step="1"]');
         if (kurang) kurang.toggleAttribute('disabled', n <= ETIKA_MIN);
         if (tambah) tambah.toggleAttribute('disabled', n >= ETIKA_MAKS);
+        // Patokan: 0 = standar, minus hanya perilaku yang perlu ditegur, plus hanya yang
+        // menonjol. Baris yang sesuai angka sekarang disorot supaya terbaca saat menekan.
+        const arah = n < 0 ? 'minus' : n > 0 ? 'plus' : 'nol';
+        el.querySelectorAll('[data-patokan]').forEach(li => li.classList.toggle('aktif', li.dataset.patokan === arah));
+        // Seragam dan ID-Card sudah dipotong sendiri: Etika minus untuk hal yang sama
+        // berarti hukuman ganda. Hanya pengingat; perilaku lain tetap boleh ditegur.
+        const ganda = $('#etikaGanda');
+        if (ganda) ganda.hidden = !(n < 0 && (c.idCard === false || c.seragam === 'kurang' || c.seragam === 'tidak'));
       }
     });
     for (const [sel, jenis] of [['#beratSelect', 'berat'], ['#apresiasiSelect', 'apresiasi']]) {

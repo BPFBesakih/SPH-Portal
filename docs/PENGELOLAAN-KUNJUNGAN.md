@@ -49,7 +49,15 @@ Dashboard dan Laporan bisa dibuka untuk **rentang tanggal mana pun** — juga mi
 
 ## Penilaian "100 − potongan + Etika"
 
-Dasar: usulan `usulan-rumus-nilai-pengantaran.md` yang disetujui pemilik 11 November 2026. ID-Card dan seragam dicatat sebagai **fakta**; nilai dihitung portal. Sejak 17 November 2026, atas permintaan pemilik, bagian "Teguran perilaku" diganti **Etika −10 … +10** seperti di aplikasi lama. Berbeda dengan ID-Card dan seragam, Etika adalah penilaian petugas, jadi patokannya perlu disamakan antarpetugas (lihat Etika rata-rata per petugas di Dashboard).
+Dasar: usulan `usulan-rumus-nilai-pengantaran.md` yang disetujui pemilik 11 November 2026. ID-Card dan seragam dicatat sebagai **fakta**; nilai dihitung portal. Sejak 17 November 2026, atas permintaan pemilik, bagian "Teguran perilaku" diganti **Etika −10 … +10** seperti di aplikasi lama. Berbeda dengan ID-Card dan seragam, Etika adalah penilaian petugas, jadi patokannya disamakan untuk semua pos.
+
+**Patokan Etika** (disetujui pemilik 18 November 2026), tampil di bawah penghitung Etika di HP, di panduan HP, dan di Aturan Nilai → Petunjuk di formulir pos:
+
+- **0 = standar**: tertib dan tidak ada catatan khusus.
+- **Minus** hanya untuk perilaku yang perlu ditegur (mis. meninggalkan tamu, main HP saat memandu). Seragam dan ID-Card sudah dinilai sendiri, jadi tidak dikurangi lagi lewat Etika.
+- **Plus** hanya untuk yang benar-benar menonjol (mis. menolong wisatawan). Rapi dan tertib termasuk standar.
+
+Alasannya dari data lama (evaluasi 4 November): Pos 1 sebelum pukul 15.00 umumnya mengisi +1, sesudahnya lebih sering 0, dan Pos 3 hampir selalu 0; 97 dari 99 Etika minus jatuh pada penilaian yang seragamnya sudah tidak sesuai. Karena Etika kini langsung masuk nilai, kebiasaan seperti itu bisa mengubah status reward (mis. 10 pengantaran dengan 3 kali tanpa ID = 94, tetapi menjadi 95 bila setiap pengantaran diberi +1). Dashboard menampilkan Etika rata-rata per petugas untuk memantau patokan ini.
 
 | Yang dicatat petugas | Pilihan | Pengaruh pada nilai (aturan awal) |
 | --- | --- | --- |
@@ -70,7 +78,7 @@ Dasar: usulan `usulan-rumus-nilai-pengantaran.md` yang disetujui pemilik 11 Nove
 - **Data lama** dihitung dengan rumus yang sama. Cara lama (versi 1): ID 0 → tanpa ID; Uniform −1 → tidak berseragam (selain itu lengkap); Etika −5..+5 apa adanya; REVIEW diabaikan. Formulir 2.2: tiap teguran = Etika −1 (kolom `etika` sudah berisi −jumlah teguran sejak rilis sebelumnya). Riwayat NilaiGuide hasil migrasi awal dihitung dengan aturan yang sama.
 - **Rekap harian** (`visit_daily_totals`) menyimpan jumlah temuan (`n_id`, `n_kurang`, `n_tidak`) dan jumlah Etika (`etika`), sehingga nilai bulan lama setelah pelipatan tetap persis sama. `n_teguran` masih diisi supaya versi sebelumnya tetap benar bila rollback, tetapi tidak dipakai lagi untuk nilai.
 - **Spreadsheet**: kolom N–T ditambahkan; tab bulan lama yang masih 13 kolom dilebarkan otomatis saat ditulis. Kolom I (`etika`) berisi Etika; kolom `teguran` hanya terisi pada formulir 2.2; kolom `nilai` = 100 − potongan + Etika. Baris versi 1 mengosongkan N–T.
-- **PWA 2.3.0**: kartu Etika dengan tombol − / + (−10 … +10, bawaan 0), riwayat dan CSV HP menampilkan Etika (CSV: kolom JUMLAH ETIKA dan rincian Etika per penilaian). Koreksi dan draf dari versi sebelumnya dibuka sebagai formulir Etika: formulir 2.2 membawa Etika −1 per teguran, cara lama membawa Etika apa adanya — tanpa pertanyaan tambahan. **Pengaman urutan rilis:** HP hanya mengirim penilaian Etika bila server `guide-form` menyatakan menyimpan Etika (tanda `penilaian.etika` pada konteks). Selama belum, penilaian itu menunggu di HP (tidak hilang dan tidak dihitung ditolak), Beranda menampilkan "N penilaian menunggu portal diperbarui", dan HP memeriksa ulang setiap 10 menit atau lewat Tes Koneksi. Penilaian 2.2/cara lama yang masih di antrean tetap terkirim.
+- **PWA 2.3.0**: kartu Etika dengan tombol − / + (−10 … +10, bawaan 0) dan patokan di bawahnya; baris patokan yang sesuai angka sekarang disorot, dan pengingat muncul bila Etika minus diberikan pada pengantaran yang seragam atau ID-Card-nya sudah dipotong (hanya pengingat, tetap bisa disimpan). Riwayat dan CSV HP menampilkan Etika (CSV: kolom JUMLAH ETIKA dan rincian Etika per penilaian). Koreksi dan draf dari versi sebelumnya dibuka sebagai formulir Etika: formulir 2.2 membawa Etika −1 per teguran, cara lama membawa Etika apa adanya — tanpa pertanyaan tambahan. **Pengaman urutan rilis:** HP hanya mengirim penilaian Etika bila server `guide-form` menyatakan menyimpan Etika (tanda `penilaian.etika` pada konteks). Selama belum, penilaian itu menunggu di HP (tidak hilang dan tidak dihitung ditolak), Beranda menampilkan "N penilaian menunggu portal diperbarui", dan HP memeriksa ulang setiap 10 menit atau lewat Tes Koneksi. Penilaian 2.2/cara lama yang masih di antrean tetap terkirim.
 - PWA 2.2.2 (rilis sebelumnya) memakai daftar teguran; HP yang belum diperbarui tetap mengirim formulir 2.2 dan tetap diterima.
 
 ## Isi modul
@@ -223,6 +231,7 @@ Rollback:
 - REVIEW belum dipakai (tidak ada di Dashboard, Laporan, dan ekspor).
 - Penilaian "100 − potongan" (keputusan pemilik, 11 November): mulai segera setelah siap; bulan peralihan mencampur baris lama yang dipetakan; verifikasi oleh Pengelola Kunjungan dan diaudit; nama petugas dicatat (pilih sekali per shift di HP pos, tanpa login); besar potongan, ambang 95, dan minimal 10 bisa diubah Pengelola, berlaku bulan berikutnya, diaudit.
 - Etika −10…+10 menggantikan "Teguran perilaku" di formulir pos (permintaan pemilik, 17 November). Rincian penerapan yang dipilih saat implementasi dan **perlu dikonfirmasi pemilik**: Etika ditambahkan 1:1 ke nilai pengantaran (nilai 0–110), bawaan 0 dan tanpa catatan wajib, batas tanpa ID + tidak berseragam ≤ 90, penilaian formulir 2.2 dihitung Etika −1 per teguran, Etika cara lama dihitung apa adanya. Data tetap versi 2 sehingga rollback tidak memerlukan perubahan skema.
+- Patokan Etika untuk petugas (pemilik, 18 November): 0 = standar; minus hanya untuk perilaku yang perlu ditegur, bukan seragam atau ID-Card; plus hanya untuk yang benar-benar menonjol. Ditekankan di formulir HP (disorot, dengan pengingat hukuman ganda), di panduan HP, dan di Aturan Nilai; tanpa catatan wajib.
 - Nama kembar di regu yang sama ditolak di form satuan; di impor hanya diperingatkan.
 - Batas frekuensi formulir: 60 `context` dan 300 penilaian per 10 menit, per tautan dan per IP. Alamat `/penilaian-guide/`, nama ruang kerja "Kunjungan".
 
@@ -259,7 +268,7 @@ Validasi rilis Etika (18 November): 385/385 tes aplikasi (termasuk `tests/visit-
 ## Tindak lanjut
 
 - Dashboard (rentang preset, pembanding, tren, cakupan), laporan mingguan dan bulanan, ekspor Excel, dan tampilan cetak A4 — PR berikutnya. Format NILAI REWARD rekap regu menunggu revisi pemilik.
-- Menunggu pemilik: daftar resmi atribut seragam (untuk petunjuk "Kurang lengkap"), daftar resmi jenis pelanggaran berat/apresiasi (daftar awal masih contoh), jawaban apakah Pos 3 memeriksa ID-Card dengan cara yang sama, konfirmasi rincian Etika (lihat Keputusan), dan patokan Etika bersama untuk petugas (kapan −, kapan +) supaya Etika antarpetugas sebanding.
+- Menunggu pemilik: daftar resmi atribut seragam (untuk petunjuk "Kurang lengkap"), daftar resmi jenis pelanggaran berat/apresiasi (daftar awal masih contoh), jawaban apakah Pos 3 memeriksa ID-Card dengan cara yang sama, dan konfirmasi rincian Etika (lihat Keputusan). Setelah pilot, periksa Etika rata-rata per petugas di Dashboard: rata-rata yang jauh dari 0 berarti patokan petugas itu perlu disamakan lagi.
 - Penyalinan terjadwal (pg_cron + pg_net) bila kiriman pos jarang; sekarang penyalinan dipicu kiriman dan tombol portal.
 - Layar Pengaturan modul untuk batas frekuensi dan nama pos.
 - Kebijakan privasi portal: formulir penilaian guide, nama guide sebagai data pribadi, salinan di Google Drive portal (ATR-KM-10).

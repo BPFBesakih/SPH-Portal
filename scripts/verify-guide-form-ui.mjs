@@ -5,7 +5,7 @@
 // Portal SQLite di memori + Google Drive/Sheets TIRUAN (scripts/fake-google-sheets.mjs),
 // data guide fiktif. Memeriksa skenario UJI-01/02/03/05/10/13/17/27 PRD di HP pos,
 // daftar saran nama guide (nama + ID · regu, filter, keyboard, nama kembar),
-// isian "100 − potongan + Etika" (ID, seragam, Etika −10…+10 lewat tombol, laporan berat
+// isian "100 − potongan + Etika" (ID, seragam, Etika −10…+10 lewat tombol dengan patokan dan pengingat hukuman ganda, laporan berat
 // dengan catatan wajib, nama petugas sekali per shift), koreksi/draf dari formulir lama,
 // penilaian Etika yang ditahan di HP selama server belum menyimpan Etika,
 // Verifikasi dan Aturan Nilai di ruang kerja,
@@ -57,6 +57,8 @@ try{
   const pick=async(name,seragam='lengkap',id='1')=>{await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput',name.slice(0,-1));await pilihSaran(name);await page.click(`.criterion[data-crit="idCard"] .seg[data-val="${id}"]`);await page.click(`.criterion[data-crit="seragam"] .seg[data-val="${seragam}"]`);};
   // Etika diatur dengan tombol − / + seperti di HP pos, sampai angkanya tercapai.
   const etikaBtn=step=>`[data-crit="etika"] .stepbtn[data-step="${step}"]`;
+  const patokanAktif=()=>page.$$eval('#etikaPatokan li.aktif',els=>els.map(e=>e.dataset.patokan));
+  const pengingatGanda=()=>page.$eval('#etikaGanda',e=>!e.hidden);
   const aturEtika=async target=>{for(let i=0;i<25;i++){const n=await page.evaluate(()=>App.state.form.crit.etika);if(n===target)return;await page.click(etikaBtn(n<target?1:-1));}throw new Error(`Etika tidak mencapai ${target}`);};
   await page.goto(base+'/penilaian-guide/');await page.waitForTimeout(800);await page.click('#tutSkip').catch(()=>{});
   await check('UJI-02 tanpa token hanya petunjuk tautan, tanpa daftar guide',async()=>{assert(await page.isVisible('#view-tautan'));assert.equal(await page.evaluate(()=>App.state.guides.length),0);assert.equal((await saran()).length,0);});
@@ -95,7 +97,13 @@ try{
   await check('Isian 100 − potongan + Etika: Etika −10…+10 lewat tombol, bawaan 0, tanpa catatan wajib; ID dan seragam wajib; nama petugas sekali per shift',async()=>{
     await page.evaluate(()=>App.go('nilai'));
     assert.equal(await page.locator('#teguranList, [data-teguran]').count(),0,'daftar teguran tidak ada lagi');
-    assert.equal(await page.textContent('#etikaNilai'),'0');assert.match(await page.textContent('[data-crit="etika"]'),/Etika.*−10 sampai \+10/s);
+    assert.equal(await page.textContent('#etikaNilai'),'0');
+    // Patokan Etika selalu terlihat; baris "0 = standar" disorot selama angkanya 0.
+    const patokan=await page.textContent('#etikaPatokan');
+    assert.match(patokan,/0 = standar/);assert.match(patokan,/Minus \(sampai −10\) hanya untuk perilaku yang perlu ditegur/);assert.match(patokan,/Seragam dan ID-Card sudah dinilai di atas, jangan dikurangi lagi/);
+    assert.match(patokan,/Plus \(sampai \+10\) hanya untuk yang benar-benar menonjol/);assert.match(patokan,/Rapi dan tertib termasuk standar/);
+    assert.deepEqual(await patokanAktif(),['nol']);assert.equal(await pengingatGanda(),false);
+    const tutorial=await page.evaluate(()=>App.TUT.map(t=>t.b).join(' '));assert.match(tutorial,/Etika: 0 = standar/);assert.doesNotMatch(tutorial,/Teguran/);
     assert.match(await page.textContent('#petunjukId'),/Terpasang = kartu ID resmi/);
     assert.equal(await page.$$eval('#beratSelect option',o=>o.length),6);assert(await page.isVisible('#petugasSelect'),'nama petugas diminta');
     await page.fill('#guideInput','Guide Contoh A1-0');await pilihSaran('Guide Contoh A1-03');await page.click('#btnSave');
@@ -103,8 +111,15 @@ try{
     await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');await page.click('.criterion[data-crit="seragam"] .seg[data-val="kurang"]');
     // Di batas bawah/atas tombolnya terkunci, jadi angkanya tidak pernah melewati −10/+10.
     await aturEtika(-10);assert.equal(await page.textContent('#etikaNilai'),'−10');assert(await page.isDisabled(etikaBtn(-1)));assert(await page.$eval('#etikaNilai',e=>e.classList.contains('minus')));
+    // Seragam kurang lengkap sudah dipotong: Etika minus memunculkan pengingat hukuman ganda.
+    assert.deepEqual(await patokanAktif(),['minus']);assert.equal(await pengingatGanda(),true);assert.match(await page.textContent('#etikaGanda'),/sudah dipotong/);
     await aturEtika(10);assert.equal(await page.textContent('#etikaNilai'),'+10');assert(await page.isDisabled(etikaBtn(1)));assert(!await page.isDisabled(etikaBtn(-1)));assert(await page.$eval('#etikaNilai',e=>e.classList.contains('plus')));
+    assert.deepEqual(await patokanAktif(),['plus']);assert.equal(await pengingatGanda(),false);
     await aturEtika(-2);assert.equal(await page.textContent('#etikaNilai'),'−2');assert.equal(await page.getAttribute('#etikaNilai','aria-label'),'Etika minus 2');
+    assert.deepEqual(await patokanAktif(),['minus']);assert.equal(await pengingatGanda(),true);
+    // Pengingat mengikuti seragam: dengan seragam lengkap dan ID terpasang, Etika minus tanpa pengingat.
+    await page.click('.criterion[data-crit="seragam"] .seg[data-val="lengkap"]');assert.equal(await pengingatGanda(),false);
+    await page.click('.criterion[data-crit="seragam"] .seg[data-val="kurang"]');assert.equal(await pengingatGanda(),true);
     assert.equal(await page.evaluate(()=>App.catatanWajib()),false,'Etika boleh tanpa catatan');
     await page.click('#btnSave');assert.match(await page.textContent('#toastWrap'),/Pilih nama petugas/);assert.equal(rows(),0);
     await page.selectOption('#petugasSelect',petugasUji.id);await page.waitForSelector('#petugasBox [data-ganti-petugas]');
@@ -177,6 +192,7 @@ try{
   await check('Aturan Nilai: Etika −10…+10 tanpa potongan teguran; rencana bulan depan disimpan dan dibatalkan; petugas dan jenis apresiasi ditambah',async()=>{
     await portal.goto(base+'/#visits-scoring');await portal.waitForSelector('[data-visit="rule-edit"]');const main=await portal.textContent('main');
     assert.match(main,/Tanpa ID-Card/);assert.match(main,/100 − potongan \+ Etika/);assert.match(main,/−10 … \+10/);assert.doesNotMatch(main,/Per teguran/);
+    assert.match(main,/Etika: 0 = standar \(tertib, tidak ada catatan khusus\)\. Minus hanya untuk perilaku yang perlu ditegur, bukan untuk seragam atau ID-Card/);
     assert.equal(await portal.locator('[data-visit="type-new"][data-jenis="teguran"]').count(),0,'jenis teguran tidak diatur lagi');
     await portal.click('[data-visit="rule-edit"]');assert.equal(await portal.locator('dialog [name=pot_teguran]').count(),0);
     // Tanpa ID + tidak berseragam paling banyak 90: dengan Etika −10 nilai tidak di bawah 0.
@@ -308,7 +324,9 @@ try{
     const id=await koreksiDiHp('G-008',{idCard:false,uniform:1,etika:-1});
     assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:false,seragam:'lengkap',etika:-1,berat:'',apresiasi:''});
     assert.equal(await page.textContent('#etikaNilai'),'−1');assert.equal(await page.locator('#teguranLamaNote').count(),0);
-    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);
+    assert.equal(await pengingatGanda(),true,'tanpa ID-Card dengan Etika minus');
+    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');assert.equal(await pengingatGanda(),false);assert.deepEqual(await patokanAktif(),['minus']);
+    await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);
     assert.deepEqual(await isianDiHp(id),{idCard:true,seragam:'lengkap',etika:-1,berat:'',apresiasi:''});assert.equal(await nilaiDiHp(id),99);
     assert.equal(dialogs,0);
   });

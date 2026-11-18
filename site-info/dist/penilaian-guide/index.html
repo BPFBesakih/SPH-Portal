@@ -189,12 +189,18 @@
 
         <div class="criterion" data-crit="etika">
           <div class="crit-head"><span class="crit-icon">🤝</span><span class="crit-name">Etika</span></div>
-          <div class="stepper" role="group" aria-label="Nilai Etika">
+          <div class="stepper" role="group" aria-label="Nilai Etika" aria-describedby="etikaPatokan">
             <button type="button" class="stepbtn" data-step="-1" aria-label="Kurangi Etika">−</button>
             <span id="etikaNilai" class="stepnilai" aria-live="polite">0</span>
             <button type="button" class="stepbtn" data-step="1" aria-label="Tambah Etika">+</button>
           </div>
-          <div class="help crit-help">Angka −10 sampai +10. Biarkan 0 bila tidak ada catatan khusus; kurangi bila perilakunya perlu ditegur, tambah bila menonjol.</div>
+          <!-- Patokan Etika (pemilik, 18 November 2026). Baris yang sesuai angka sekarang disorot. -->
+          <ul id="etikaPatokan" class="patokan crit-help" aria-label="Patokan Etika">
+            <li data-patokan="nol"><strong>0 = standar.</strong> Tertib dan tidak ada catatan khusus: biarkan 0.</li>
+            <li data-patokan="minus"><strong>Minus (sampai −10)</strong> hanya untuk perilaku yang perlu ditegur, mis. meninggalkan tamu atau main HP saat memandu. Seragam dan ID-Card sudah dinilai di atas, jangan dikurangi lagi di sini.</li>
+            <li data-patokan="plus"><strong>Plus (sampai +10)</strong> hanya untuk yang benar-benar menonjol, mis. menolong wisatawan. Rapi dan tertib termasuk standar.</li>
+          </ul>
+          <p id="etikaGanda" class="patokan-peringatan crit-help" role="status" hidden>Seragam atau ID-Card pengantaran ini sudah dipotong. Kurangi Etika hanya bila ada perilaku lain yang perlu ditegur.</p>
         </div>
 
         <details id="laporanBox" class="laporan">

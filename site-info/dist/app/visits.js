@@ -55,6 +55,8 @@ const rewardBadge={layak:['positive','Layak'],gugur:['negative','Gugur — pelan
 const rewardCell=g=>{if(!g.status)return '—';const [kind,label]=rewardBadge[g.status]||['neutral',g.status];return `<span class="badge ${kind}" title="${esc(g.alasan||'')}">${esc(label)}</span>${g.beratMenunggu?`<br><span class="muted text-small">${number(g.beratMenunggu)} laporan berat menunggu</span>`:''}`;};
 // Ringkasan aturan yang dipakai, mis. "tanpa ID −20 · kurang lengkap −10 · …". Etika
 // −10…+10 ditambahkan langsung ke nilai (Etika menggantikan teguran sejak 17 November 2026).
+// Patokan Etika (pemilik, 18 November 2026); teks yang sama tampil di formulir HP pos.
+const etikaPatokan='0 = standar (tertib, tidak ada catatan khusus). Minus hanya untuk perilaku yang perlu ditegur, bukan untuk seragam atau ID-Card yang sudah dinilai sendiri. Plus hanya untuk yang benar-benar menonjol, mis. menolong wisatawan; rapi dan tertib termasuk standar.';
 const ruleLine=r=>r?`tanpa ID −${r.pot_id} · kurang lengkap −${r.pot_kurang} · tidak berseragam −${r.pot_tidak} · Etika −10…+10`:'';
 const monthLabel=m=>formatDate(m+'-01',{month:'long',year:'numeric'});
 const when=t=>t?`${formatDate(t)} ${formatTime(t)}`:'—';
@@ -434,7 +436,7 @@ function scoringPage(){
   table(['Berlaku mulai','Tanpa ID','Kurang lengkap','Tidak berseragam','Ambang','Minimal','Status'],a.riwayat.slice().reverse().map(ruleRow)),manage?btn(`Atur ${monthLabel(a.bulan_depan)}`,'rule-edit','settings','primary'):'')}
  <div class="visit-grid">${typeCard('berat')}${typeCard('apresiasi')}</div>
  ${manage?card('Petugas penilai','Dipilih petugas sekali per shift di HP pos (berlaku 8 jam). Nama yang dinonaktifkan tidak muncul lagi di HP.',table(['Nama','Keterangan','Status',''],d.petugas.map(p=>`<tr class="${p.aktif?'':'visit-dim'}"><td><strong>${esc(p.nama)}</strong></td><td>${esc(p.keterangan||'—')}</td><td>${p.aktif?'Aktif':'Nonaktif'}</td><td>${btn('Ubah','assessor-edit','settings','text',`data-id="${esc(p.id)}"`)}</td></tr>`),'Belum ada petugas. Tanpa daftar ini, HP pos menyimpan penilaian tanpa nama petugas.'),btn('Tambah petugas','assessor-new','plus','outlined')):''}
- ${card('Petunjuk di formulir pos','Tampil di bawah tombol ID-Card dan Seragam, supaya Pos 1 dan Pos 3 memakai patokan yang sama.',`<div class="card-body"><p><strong>ID-Card:</strong> ${esc(d.petunjuk.petunjuk_id)}</p><p><strong>Seragam:</strong> ${esc(d.petunjuk.petunjuk_seragam)}</p></div>`,manage?btn('Ubah petunjuk','form-edit','settings','outlined'):'')}</div>
+ ${card('Petunjuk di formulir pos','Tampil di bawah tombol masing-masing, supaya Pos 1 dan Pos 3 memakai patokan yang sama. Patokan Etika berlaku untuk semua pos dan tidak diubah di sini.',`<div class="card-body"><p><strong>ID-Card:</strong> ${esc(d.petunjuk.petunjuk_id)}</p><p><strong>Seragam:</strong> ${esc(d.petunjuk.petunjuk_seragam)}</p><p><strong>Etika:</strong> ${esc(etikaPatokan)}</p></div>`,manage?btn('Ubah petunjuk','form-edit','settings','outlined'):'')}</div>
  <p class="muted visit-note">HP pos memperbarui daftar jenis, petugas, dan petunjuk bersama daftar guide (paling lama 10 menit, atau lewat Pengaturan → Tes Koneksi).</p>`;
 }
 function ruleDialog(){

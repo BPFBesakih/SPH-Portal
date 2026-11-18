@@ -183,7 +183,7 @@
   const TUT = [
     { i: '👋', t: 'Selamat Datang', b: 'Formulir ini untuk menilai guide di pos pemeriksaan Kawasan Besakih. Tidak perlu login — pos Anda sudah ditentukan tautan dari pengelola.' },
     { i: '📝', t: 'Langkah 1 — Pilih', b: 'Tekan tombol hijau “Penilaian Baru”. Pilih nama Anda sekali per shift, lalu pilih nama guide.' },
-    { i: '✅', t: 'Langkah 2 — Catat yang terlihat', b: 'ID‑Card: Terpasang atau Tidak. Seragam: Lengkap, Kurang lengkap, atau Tidak berseragam. Teguran hanya bila ada (pilih jenisnya). Pelanggaran berat atau apresiasi: pilih jenisnya dan tulis catatan. Lalu tekan SIMPAN.' },
+    { i: '✅', t: 'Langkah 2 — Catat yang terlihat', b: 'ID‑Card: Terpasang atau Tidak. Seragam: Lengkap, Kurang lengkap, atau Tidak berseragam. Etika: 0 = standar; kurangi hanya untuk perilaku yang perlu ditegur (bukan seragam atau ID), tambah hanya untuk yang benar-benar menonjol. Pelanggaran berat atau apresiasi: pilih jenisnya dan tulis catatan. Lalu tekan SIMPAN.' },
     { i: '📶', t: 'Langkah 3 — Tenang', b: 'Tanpa sinyal pun data tetap tersimpan. Saat sinyal ada, data terkirim sendiri (⏳ menjadi ✅).' },
   ];
 
