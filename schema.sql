@@ -361,7 +361,8 @@ CREATE TABLE IF NOT EXISTS visit_monthly_totals (
 CREATE TABLE IF NOT EXISTS visit_sheet_files (year INTEGER PRIMARY KEY CHECK(year BETWEEN 2026 AND 2100), spreadsheet_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS visit_sheet_tabs (
  title TEXT PRIMARY KEY CHECK(length(title)=7), year INTEGER NOT NULL REFERENCES visit_sheet_files(year), sheet_id INTEGER NOT NULL CHECK(sheet_id>=0),
- next_row INTEGER NOT NULL CHECK(next_row>=2), row_count INTEGER NOT NULL CHECK(row_count>=1), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+ next_row INTEGER NOT NULL CHECK(next_row>=2), row_count INTEGER NOT NULL CHECK(row_count>=1), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ etika_next_row INTEGER NOT NULL DEFAULT 2 CHECK(etika_next_row>=2));
 CREATE TABLE IF NOT EXISTS visit_sheet_state (
  id INTEGER PRIMARY KEY CHECK(id=1), folder_id TEXT, lease_owner TEXT, lease_until TEXT, last_attempt_at TEXT, last_success_at TEXT,
  last_error TEXT CHECK(last_error IS NULL OR length(last_error)<=300), last_error_at TEXT, last_retention_at TEXT, folded_through TEXT, updated_at TEXT NOT NULL,

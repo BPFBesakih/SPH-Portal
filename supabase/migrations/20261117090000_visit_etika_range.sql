@@ -1,8 +1,7 @@
 -- Etika −10 sampai +10 (keputusan pemilik 17 November 2026). Formulir pos 2.3 mengganti
 -- bagian "Teguran perilaku" dengan Etika seperti sebelumnya; nilai pengantaran menjadi
--- 100 − potongan + Etika. Migrasi ini hanya melonggarkan batas kolom etika dari −5..+5
--- menjadi −10..+10. Data yang sudah ada tetap memenuhi batas baru.
--- Tidak menambah kolom, grant, atau akses API, dan aman dijalankan ulang. guide-form dan
+-- 100 − potongan + Etika. Batas kolom etika dilonggarkan dari −5..+5 menjadi −10..+10.
+-- Posisi rekonsiliasi spreadsheet disimpan per tab. Aman dijalankan ulang. guide-form dan
 -- portal-api versi sebelumnya tetap berjalan: keduanya hanya menulis −5..+5 (cara lama)
 -- atau −jumlah teguran (formulir 2.2).
 BEGIN;
@@ -21,5 +20,6 @@ BEGIN
  END LOOP;
 END $$;
 ALTER TABLE portal.visit_evaluations ADD CONSTRAINT visit_evaluations_etika_range CHECK(etika BETWEEN -10 AND 10);
+ALTER TABLE portal.visit_sheet_tabs ADD COLUMN IF NOT EXISTS etika_next_row INTEGER NOT NULL DEFAULT 2 CHECK(etika_next_row>=2);
 
 COMMIT;

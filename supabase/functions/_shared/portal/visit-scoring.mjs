@@ -44,8 +44,17 @@ const ruleView = r => ({
   created_at: r.created_at || null
 });
 export const scoreRuleRows = async db => (await all(db, 'SELECT * FROM visit_score_rules ORDER BY berlaku_mulai')).map(ruleView);
+function effectiveScoreRule(rule) {
+  const maxUniform = 100 + scoringRules.etikaMin - rule.pot_id;
+  if (rule.pot_tidak <= maxUniform) return rule;
+  return {
+    ...rule,
+    pot_tidak: maxUniform,
+    pot_kurang: Math.min(rule.pot_kurang, maxUniform)
+  };
+}
 export function ruleFinder(rows) {
-  const sorted = rows.slice().sort((a, b) => a.berlaku_mulai < b.berlaku_mulai ? -1 : 1);
+  const sorted = rows.map(effectiveScoreRule).sort((a, b) => a.berlaku_mulai < b.berlaku_mulai ? -1 : 1);
   return month => {
     let found = null;
     for (const r of sorted) {
@@ -63,7 +72,7 @@ export async function scoreRuleState(db, nowMs = Date.now()) {
     bulan_depan: next,
     berlaku: find(current),
     bulan_depan_aturan: find(next),
-    riwayat: rows,
+    riwayat: rows.map(effectiveScoreRule),
     rencana: rows.filter(r => r.berlaku_mulai > current),
     batas: {
       potongan_maks: scoringRules.potonganMaks,

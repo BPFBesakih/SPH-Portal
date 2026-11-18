@@ -2,7 +2,8 @@
 // Basis data lokal (SQLite) yang dibuat dengan batas lama −5..+5 dilonggarkan saat dibuka.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import {DatabaseSync} from 'node:sqlite';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {openDb,insert,one} from '../lib/db.mjs';
@@ -16,26 +17,31 @@ const evaluationsSql=db=>one(db,"SELECT sql FROM sqlite_schema WHERE type='table
 
 test('basis data lokal lama: batas Etika −5..+5 dilonggarkan menjadi −10..+10 tanpa mengubah data',t=>{
   const dir=mkdtempSync(resolve(tmpdir(),'sph-etika-')),path=resolve(dir,'portal.sqlite');
-  t.after(()=>rmSync(dir,{recursive:true,force:true}));
-  let db=openDb(path);
-  assert.match(evaluationsSql(db),/etika BETWEEN -10 AND 10/,'instalasi baru langsung memakai batas baru');
-  // Kembalikan teks skema ke batas lama, seperti basis data yang dibuat sebelum rilis ini.
-  const version=Number(db.prepare('PRAGMA schema_version').get().schema_version);
-  db.exec('BEGIN');db.exec('PRAGMA writable_schema=ON');
-  db.prepare("UPDATE sqlite_schema SET sql=replace(sql,'etika BETWEEN -10 AND 10','etika BETWEEN -5 AND 5') WHERE type='table' AND name='visit_evaluations'").run();
-  db.exec(`PRAGMA schema_version=${version+1}`);db.exec('PRAGMA writable_schema=OFF');db.exec('COMMIT');
+  let db;
+  t.after(()=>{db?.close();rmSync(dir,{recursive:true,force:true});});
+  const fresh=openDb(':memory:');
+  assert.match(evaluationsSql(fresh),/etika BETWEEN -10 AND 10/,'instalasi baru langsung memakai batas baru');
+  fresh.close();
+  const schema=readFileSync(new URL('../schema.sql',import.meta.url),'utf8');
+  db=new DatabaseSync(path);
+  db.exec(schema.replace('etika BETWEEN -10 AND 10','etika BETWEEN -5 AND 5')
+    .replace(',\n etika_next_row INTEGER NOT NULL DEFAULT 2 CHECK(etika_next_row>=2)',''));
   insert(db,'visit_guides',{id:'G-001',seq:1,name:'Guide Fiktif',kategori:'Asing',regu:'A1',is_active:1});
   const lama=crypto.randomUUID();put(db,row(lama,-5));
   assert.throws(()=>put(db,row(crypto.randomUUID(),9)),/CHECK constraint failed/,'batas lama masih berlaku sebelum dibuka ulang');
-  db.close();
-  db=openDb(path);t.after(()=>db.close());
+  db.close();db=null;
+  db=openDb(path);
+  assert(db.prepare('PRAGMA table_info(visit_sheet_tabs)').all().some(column=>column.name==='etika_next_row'));
+  db.exec('PRAGMA writable_schema=ON');
+  assert.throws(()=>db.prepare("UPDATE sqlite_schema SET sql=sql WHERE name='visit_evaluations'").run(),/may not be modified/);
+  db.exec('PRAGMA writable_schema=OFF');
   assert.match(evaluationsSql(db),/etika BETWEEN -10 AND 10/);assert.doesNotMatch(evaluationsSql(db),/etika BETWEEN -5 AND 5/);
   for(const etika of [-10,10])put(db,row(crypto.randomUUID(),etika));
   for(const etika of [-11,11])assert.throws(()=>put(db,row(crypto.randomUUID(),etika)),/CHECK constraint failed/,`Etika ${etika}`);
   assert.equal(one(db,'SELECT etika FROM visit_evaluations WHERE id=?',lama).etika,-5,'baris lama utuh');
   assert.equal(Object.values(one(db,'PRAGMA integrity_check'))[0],'ok');
   // Dibuka sekali lagi: tidak diubah lagi.
-  const before=evaluationsSql(db);db.close();db=openDb(path);assert.equal(evaluationsSql(db),before);
+  const before=evaluationsSql(db);db.close();db=null;db=openDb(path);assert.equal(evaluationsSql(db),before);
 });
 
 test('nilai pengantaran = 100 − potongan + Etika; Etika plus boleh di atas 100',()=>{
@@ -48,4 +54,10 @@ test('nilai pengantaran = 100 − potongan + Etika; Etika plus boleh di atas 100
   assert.equal(visitScoreOf({...v2('lengkap',1,-2),teguran:'antrean,merokok-hp',teguran_n:2},ruleOf),98);
   // Cara lama: Uniform −1 = tidak berseragam, Etika apa adanya.
   assert.equal(visitScoreOf({versi:1,uniform:-1,id_card:1,etika:-1,wita_date:'2026-11-17'},ruleOf),79);
+  const oldRule={...defaultScoreRule,pot_id:50,pot_kurang:45,pot_tidak:50,pot_teguran:0};
+  const oldRules=ruleFinder([oldRule]);
+  assert.equal(visitScoreOf(v2('tidak',0,-10),oldRules),0);
+  assert.equal(visitScoreOf(v2('kurang',0,-10),oldRules),0);
+  assert.equal(oldRules('2026-11').pot_id,50);
+  assert.equal(oldRule.pot_tidak,50,'aturan yang disimpan tetap utuh');
 });

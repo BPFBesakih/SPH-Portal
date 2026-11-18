@@ -207,13 +207,15 @@ Bila PR #20 sudah lebih dulu dirilis dan migrasi awal NilaiGuide sudah diterapka
 
 Dibangun di atas master `0025af3` (PR #36 dan #37). Paket `guide-form` di branch ini sudah memuat seluruh isi `guide-form` PR #36, jadi bila `guide-form` PR #36 (`99fa8bfe…`) belum dideploy, cukup deploy paket ini. Urutan:
 
-1. SQL Editor: jalankan dulu migrasi rilis "100 − potongan" yang belum pernah dijalankan (`20261104120000…`, `20261113100000…`, `20261113034733…`, lihat di atas), lalu `20261117090000_visit_etika_range.sql`. Migrasi ini hanya melonggarkan batas kolom `etika` dari −5..+5 menjadi −10..+10; aman dijalankan ulang, dan `guide-form`/`portal-api` versi sebelumnya tetap berjalan karena keduanya hanya menulis −5..+5 atau −jumlah teguran.
-2. Edge Function `guide-form`: simpan dulu versi aktif sebagai titik kembali, lalu deploy `supabase/deploy/guide-form/index.ts` (SHA-256 `0cd8928c4da17eb1d6bcaedf06d2652a67e87844125a8582a0515d03e6d9d691`). Wajib sesudah langkah 1: tanpa migrasi, basis data menolak Etika di luar −5..+5.
+1. SQL Editor: jalankan dulu migrasi rilis "100 − potongan" yang belum pernah dijalankan (`20261104120000…`, `20261113100000…`, `20261113034733…`, lihat di atas), lalu `20261117090000_visit_etika_range.sql`. Migrasi melonggarkan batas kolom `etika` menjadi −10..+10 dan menambah penanda posisi rekonsiliasi spreadsheet. Aman dijalankan ulang.
+2. Edge Function `guide-form`: simpan dulu versi aktif sebagai titik kembali, lalu deploy `supabase/deploy/guide-form/index.ts` (SHA-256 `5dab0844666e02d97c233f77c278264188a9c729534fa9bb863f9626077fc58f`). Wajib sesudah langkah 1 agar basis data menerima Etika di luar −5..+5.
 3. Edge Function `portal-api`: unduh versi aktif, simpan salinannya, hitung SHA-256-nya.
-   - Bila sama dengan `00d65ac2a1e9d001f494417b0a77d7c78c2a273325e5461db495507c20a54d04` (paket PR #36, master `0025af3`), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `0fdd3d61861ff60ce7a8d0083141faacb6fc676cabcdfa81711b59f56bdcc25a`).
+   - Bila sama dengan `00d65ac2a1e9d001f494417b0a77d7c78c2a273325e5461db495507c20a54d04` (paket PR #36, master `0025af3`), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `0a074d2340f3ae393c81d4b8e0aba090bebed5514802cb9defc1d9ea7782f323`).
    - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya (hanya lingkup `__visits` yang diganti).
 4. Merge ke `master`: Pages menayangkan PWA 2.3.0 dan ruang kerja dengan Etika. HP pos memperbarui diri saat dibuka dalam keadaan online. Bila Pages sempat tayang sebelum langkah 2, penilaian Etika menunggu di HP (spanduk "menunggu portal diperbarui") dan terkirim sendiri setelah `guide-form` baru aktif; tidak ada Etika yang hilang.
 5. Periksa: di HP pos Pengaturan → Tes Koneksi, simpan satu penilaian dengan Etika selain 0, lalu cocokkan Etika dan nilainya di Penilaian portal dan di spreadsheet (kolom I dan kolom `nilai`).
+
+Sinkronisasi menyesuaikan kolom `nilai` di spreadsheet salinan SPH Portal, termasuk baris yang rinciannya sudah dilipat. Jalankan **Sinkronkan** di Tautan Pos jika ingin memulai tanpa menunggu kiriman HP. Pekerjaan berlanjut pada sinkronisasi berikutnya bila tab belum selesai diperiksa. Untuk aturan lama dengan potongan gabungan di atas 90, portal mempertahankan bobot ID dan membatasi bobot seragam pada sisa plafon. Konfigurasi asal tetap tersedia di basis data.
 
 Rollback:
 

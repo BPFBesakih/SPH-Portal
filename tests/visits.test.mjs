@@ -472,6 +472,34 @@ test('sheet copy: kolom N–T untuk cara baru; tab 13 kolom dilebarkan saat ditu
   assert.equal(one(f.db,"SELECT count(*) AS n FROM visit_evaluations WHERE wita_date=?",day).n,0,'rinciannya sudah dilipat');
 });
 
+test('Etika updates the scores already copied to Sheets, including folded rows, without rewriting other cells',async t=>{
+ const f=fixture(t),pos=f.link(1),google=createFakeGoogle(),recent=Date.now()-3600000,older=recent-45*DAY;
+ const examples=[[recent,'G-001'],[older,'G-003']];
+ for(const [stamp,guideId] of examples){
+  const item=at(stamp,{guideId,criteria:fakta({teguran:['antrean','merokok-hp']})});
+  assert.equal(f.ingest(pos,[item],stamp+60000).accepted.length,1);
+ }
+ assert.equal((await sync(f,google,{retention:'force'})).deleted,1);
+
+ // Simulate an existing copy produced by the prior scoring version.
+ for(const [stamp] of examples){
+  const title=witaDate(stamp).slice(0,7);
+  google.tab(title).cells[2][19]=60;
+ }
+ run(f.db,'UPDATE visit_sheet_tabs SET etika_next_row=2');
+ const result=await sync(f,google,{retention:'skip'});
+ assert.equal(result.ok,true,result.error);
+ assert.equal(result.etika_updated,2);
+ assert.equal(result.status.etika_pending_tabs,0);
+ assert.equal(result.rewritten,0);
+ for(const [stamp,guideId] of examples){
+  const day=witaDate(stamp),row=google.tab(day.slice(0,7)).cells[2];
+  assert.deepEqual([row[3],row[8],row[15],row[19]],[guideId,-2,'antrean,merokok-hp',98]);
+  assert.equal(row[19],visitOverview(f.db,day,day).ringkasan.nilai);
+ }
+ assert.equal((await sync(f,google,{retention:'skip'})).etika_updated,0);
+});
+
 test('nothing is deleted while the Google copy is unavailable, and the connection check explains why without creating files',async t=>{
   const f=fixture(t),google=createFakeGoogle(),pos1=f.link(1),oldNow=Date.now()-50*DAY;
   f.ingest(pos1,[at(oldNow-3600000)],oldNow);
