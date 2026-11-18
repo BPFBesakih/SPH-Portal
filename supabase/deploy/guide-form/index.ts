@@ -81,6 +81,8 @@ var visitRoles = Object.entries(visitRoleCodes).map(([code, [name, codes]]) => [
 // supabase/functions/_shared/portal/visit-scoring.mjs
 var scoringRules = Object.freeze({
   teguranMaks: 2,
+  etikaMin: -10,
+  etikaMaks: 10,
   potonganMaks: 50,
   catatanMin: 3,
   flagLimit: 500
@@ -125,7 +127,7 @@ function ruleFinder(rows) {
   };
 }
 var scoreRuleFinder = async (db) => ruleFinder(await scoreRuleRows(db));
-var potonganOf = (rule, n) => n.nId * rule.pot_id + n.nKurang * rule.pot_kurang + n.nTidak * rule.pot_tidak + n.nTeguran * rule.pot_teguran;
+var potonganOf = (rule, n) => n.nId * rule.pot_id + n.nKurang * rule.pot_kurang + n.nTidak * rule.pot_tidak;
 async function formSettings(db) {
   const s = await one(db, "SELECT * FROM visit_form_settings WHERE id=1");
   return {
@@ -147,6 +149,10 @@ async function formScoringContext(db) {
     versi: 2,
     teguranMaks: scoringRules.teguranMaks,
     catatanMin: scoringRules.catatanMin,
+    etika: {
+      min: scoringRules.etikaMin,
+      max: scoringRules.etikaMaks
+    },
     teguran: byKind("teguran"),
     berat: byKind("berat"),
     apresiasi: byKind("apresiasi"),
@@ -255,11 +261,12 @@ function storedValues(c, petugas) {
     petugas_id: null,
     petugas_nama: null
   };
+  const etika = Number.isInteger(c.etika) ? c.etika : c.teguran.length ? -c.teguran.length : 0;
   return {
     versi: 2,
     uniform: c.seragam === "lengkap" ? 1 : -1,
     id_card: c.idCard ? 1 : 0,
-    etika: -c.teguran.length,
+    etika,
     seragam: c.seragam,
     teguran: c.teguran.join(","),
     teguran_n: c.teguran.length,
@@ -423,7 +430,7 @@ function rowFindings(r) {
     nTeguran: v2 ? Number(r.teguran_n) : etika < 0 && uniform >= 1 ? 1 : 0
   };
 }
-var visitScoreOf = (r, ruleOf) => 100 - potonganOf(ruleOf(String(r.wita_date).slice(0, 7)), rowFindings(r));
+var visitScoreOf = (r, ruleOf) => 100 - potonganOf(ruleOf(String(r.wita_date).slice(0, 7)), rowFindings(r)) + Number(r.etika || 0);
 
 // supabase/functions/_shared/portal/guide-form.mjs
 var guidePosts = {
@@ -463,6 +470,10 @@ function checkNewCriteria(c, errors) {
   if (!seragamValues.includes(c.seragam)) errors.push("criteria.seragam harus lengkap, kurang, atau tidak");
   const teguran = c.teguran ?? [];
   if (!Array.isArray(teguran) || teguran.length > scoringRules.teguranMaks || !teguran.every((code) => typeof code === "string" && findingCode.test(code)) || new Set(teguran).size !== teguran.length) errors.push(`criteria.teguran berisi paling banyak ${scoringRules.teguranMaks} jenis teguran yang berbeda`);
+  if (c.etika !== void 0 && c.etika !== null) {
+    if (!(Number.isInteger(c.etika) && c.etika >= scoringRules.etikaMin && c.etika <= scoringRules.etikaMaks)) errors.push(`criteria.etika harus bilangan bulat ${scoringRules.etikaMin} sampai ${scoringRules.etikaMaks}`);
+    else if (Array.isArray(teguran) && teguran.length) errors.push("criteria.etika dan criteria.teguran tidak boleh diisi bersamaan");
+  }
   if (!optionalCode(c.berat)) errors.push("criteria.berat tidak valid");
   if (!optionalCode(c.apresiasi)) errors.push("criteria.apresiasi tidak valid");
 }
@@ -495,6 +506,7 @@ var cleanItem = (item) => {
     idCard: c.idCard,
     seragam: c.seragam,
     teguran: [...c.teguran || []],
+    etika: Number.isInteger(c.etika) ? c.etika : null,
     berat: c.berat || null,
     apresiasi: c.apresiasi || null
   } : {
@@ -640,7 +652,7 @@ var kunjunganFolder = "SPH-Portal-Kunjungan";
 var driveIdPattern = /^[A-Za-z0-9_-]{8,200}$/;
 var evaluationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var sheetAccessTokens = /* @__PURE__ */ new Map();
-var guideNotes = ["Penilaian Guide \u2014 salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).", "Satu tab per bulan, tanggal menurut WITA. Kolom A\u2013M sama dengan tab Evaluations aplikasi NilaiGuide lama.", 'Kolom N\u2013T: penilaian "100 \u2212 potongan" (versi 2). nilai = 100 \u2212 potongan menurut aturan bulan itu. Baris cara lama (versi kosong) dihitung portal dengan pemetaan: ID 0 = tanpa ID, Uniform \u22121 = tidak berseragam, Etika minus dengan seragam sesuai = satu teguran.', 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', "Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.", "Untuk mengolah data, gunakan Data \u2192 Tampilan filter, atau salin tab ke spreadsheet lain.", `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
+var guideNotes = ["Penilaian Guide \u2014 salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).", "Satu tab per bulan, tanggal menurut WITA. Kolom A\u2013M sama dengan tab Evaluations aplikasi NilaiGuide lama.", "Kolom N\u2013T: penilaian versi 2. nilai = 100 \u2212 potongan menurut aturan bulan itu + Etika (kolom etika, \u221210 sampai +10). Kolom teguran hanya terisi pada formulir lama 2.2; tiap teguran dihitung Etika \u22121. Baris cara lama (versi kosong) dihitung portal dengan pemetaan: ID 0 = tanpa ID, Uniform \u22121 = tidak berseragam, Etika apa adanya.", 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', "Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.", "Untuk mengolah data, gunakan Data \u2192 Tampilan filter, atau salin tab ke spreadsheet lain.", `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
 function visitSheetConfig(env = {}) {
   const value = (name) => typeof env[name] === "string" ? env[name].trim() : "";
   const config = {

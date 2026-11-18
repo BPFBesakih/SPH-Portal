@@ -200,7 +200,7 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
 .petugasbox .bigselect{flex:1 1 100%}
 .petugasbox .chip{min-height:44px}
 
-/* Penghitung Review — tombol besar, tanpa mengetik */
+/* Penghitung Etika (−10 … +10) — tombol besar, tanpa mengetik */
 .stepper{display:flex;align-items:center;gap:0;border:2px solid var(--garis);
   border-radius:14px;overflow:hidden}
 .stepbtn{min-width:60px;min-height:52px;border:0;background:var(--putih);
@@ -211,6 +211,8 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
 .stepnilai{min-width:56px;min-height:52px;display:grid;place-items:center;
   font-size:22px;font-weight:800;background:var(--hijau-muda);color:var(--hijau-tua);
   border-left:2px solid var(--garis);border-right:2px solid var(--garis)}
+.stepnilai.minus{background:var(--merah-muda);color:var(--merah)}
+.stepnilai.plus{background:#FFF6E0;color:#7A5410}
 .draft-note{font-size:14px;color:var(--hijau);text-align:center}
 
 /* ------------------------- Cards / Riwayat ------------------------- */

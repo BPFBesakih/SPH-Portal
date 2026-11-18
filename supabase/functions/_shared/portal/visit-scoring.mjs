@@ -3,6 +3,8 @@ import {asyncMap,asyncFilter,asyncSome,asyncEvery,asyncFind,asyncForEach,asyncRe
 import {all, one, run, insert, update, assert, now} from './db.mjs';
 export const scoringRules = Object.freeze({
   teguranMaks: 2,
+  etikaMin: -10,
+  etikaMaks: 10,
   potonganMaks: 50,
   catatanMin: 3,
   flagLimit: 500
@@ -53,7 +55,7 @@ export function ruleFinder(rows) {
   };
 }
 export const scoreRuleFinder = async db => ruleFinder(await scoreRuleRows(db));
-export const potonganOf = (rule, n) => n.nId * rule.pot_id + n.nKurang * rule.pot_kurang + n.nTidak * rule.pot_tidak + n.nTeguran * rule.pot_teguran;
+export const potonganOf = (rule, n) => n.nId * rule.pot_id + n.nKurang * rule.pot_kurang + n.nTidak * rule.pot_tidak;
 export async function scoreRuleState(db, nowMs = Date.now()) {
   const current = witaMonth(nowMs), next = nextMonthOf(current), rows = await scoreRuleRows(db), find = ruleFinder(rows);
   return {
@@ -65,7 +67,9 @@ export async function scoreRuleState(db, nowMs = Date.now()) {
     rencana: rows.filter(r => r.berlaku_mulai > current),
     batas: {
       potongan_maks: scoringRules.potonganMaks,
-      teguran_maks: scoringRules.teguranMaks
+      teguran_maks: scoringRules.teguranMaks,
+      etika_min: scoringRules.etikaMin,
+      etika_maks: scoringRules.etikaMaks
     }
   };
 }
@@ -83,12 +87,13 @@ export async function saveScoreRule(db, user, b, audit, nowMs = Date.now()) {
     pot_id: value('pot_id', 'Potongan tanpa ID-Card', 0, max),
     pot_kurang: value('pot_kurang', 'Potongan seragam kurang lengkap', 0, max),
     pot_tidak: value('pot_tidak', 'Potongan tidak berseragam', 0, max),
-    pot_teguran: value('pot_teguran', 'Potongan per teguran', 0, max),
+    pot_teguran: 0,
     ambang: value('ambang', 'Ambang layak reward', 50, 100),
     minimal: value('minimal', 'Minimal pengantaran', 1, 60)
   };
   assert(row.pot_kurang <= row.pot_tidak, 'Potongan "kurang lengkap" tidak boleh lebih besar dari "tidak berseragam".');
-  assert(row.pot_id + row.pot_tidak + scoringRules.teguranMaks * row.pot_teguran <= 100, `Potongan terbesar per pengantaran (tanpa ID + tidak berseragam + ${scoringRules.teguranMaks} teguran) tidak boleh lebih dari 100.`);
+  const etikaTerendah = -scoringRules.etikaMin;
+  assert(row.pot_id + row.pot_tidak + etikaTerendah <= 100, `Potongan tanpa ID + tidak berseragam paling banyak ${100 - etikaTerendah}, supaya nilai pengantaran dengan Etika ${scoringRules.etikaMin} tidak di bawah 0.`);
   const existing = await one(db, 'SELECT * FROM visit_score_rules WHERE berlaku_mulai=?', month), stamp = now();
   if (existing) await run(db, 'UPDATE visit_score_rules SET pot_id=?,pot_kurang=?,pot_tidak=?,pot_teguran=?,ambang=?,minimal=?,created_by=?,created_at=? WHERE berlaku_mulai=?', row.pot_id, row.pot_kurang, row.pot_tidak, row.pot_teguran, row.ambang, row.minimal, user.id, stamp, month); else await run(db, 'INSERT INTO visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)', month, row.pot_id, row.pot_kurang, row.pot_tidak, row.pot_teguran, row.ambang, row.minimal, user.id, stamp);
   await audit(db, user, existing ? 'UPDATE' : 'CREATE', 'visit_score_rules', month, {
@@ -245,6 +250,10 @@ export async function formScoringContext(db) {
     versi: 2,
     teguranMaks: scoringRules.teguranMaks,
     catatanMin: scoringRules.catatanMin,
+    etika: {
+      min: scoringRules.etikaMin,
+      max: scoringRules.etikaMaks
+    },
     teguran: byKind('teguran'),
     berat: byKind('berat'),
     apresiasi: byKind('apresiasi'),

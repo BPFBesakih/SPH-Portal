@@ -336,12 +336,13 @@ CREATE TABLE IF NOT EXISTS visit_evaluations (
  id TEXT PRIMARY KEY CHECK(length(id)=36), link_id TEXT REFERENCES guide_form_links(id), pos INTEGER NOT NULL CHECK(pos IN(1,3)),
  guide_id TEXT NOT NULL REFERENCES visit_guides(id), guide_name TEXT NOT NULL CHECK(length(guide_name) BETWEEN 1 AND 120),
  uniform INTEGER NOT NULL CHECK(uniform IN(-1,1,2)), id_card INTEGER NOT NULL CHECK(id_card IN(0,1)), review INTEGER NOT NULL DEFAULT 0 CHECK(review BETWEEN 0 AND 20),
- etika INTEGER NOT NULL CHECK(etika BETWEEN -5 AND 5), catatan TEXT NOT NULL DEFAULT '' CHECK(length(catatan)<=500),
+ etika INTEGER NOT NULL CHECK(etika BETWEEN -10 AND 10), catatan TEXT NOT NULL DEFAULT '' CHECK(length(catatan)<=500),
  evaluated_at TEXT NOT NULL CHECK(length(evaluated_at)=24), wita_date TEXT NOT NULL CHECK(length(wita_date)=10), received_at TEXT NOT NULL,
  koreksi_dari TEXT CHECK(koreksi_dari IS NULL OR koreksi_dari<>id), status TEXT NOT NULL DEFAULT 'aktif' CHECK(status IN('aktif','diganti')), replaced_by TEXT,
  sheet_tab TEXT, sheet_row INTEGER CHECK(sheet_row IS NULL OR sheet_row>=2), sheet_dirty INTEGER NOT NULL DEFAULT 0 CHECK(sheet_dirty IN(0,1)),
  sheet_synced_at TEXT, sheet_verified_at TEXT,
- -- Cara penilaian "100 − potongan" (versi 2). Kolom uniform/id_card/etika tetap diisi padanannya.
+ -- Cara penilaian "100 − potongan + Etika" (versi 2). Kolom uniform/id_card tetap diisi padanannya;
+ -- etika berisi Etika formulir 2.3 (−10..+10), atau −jumlah teguran untuk formulir 2.2.
  versi INTEGER NOT NULL DEFAULT 1 CHECK(versi IN(1,2)), seragam TEXT CHECK(seragam IS NULL OR seragam IN('lengkap','kurang','tidak')),
  teguran TEXT NOT NULL DEFAULT '' CHECK(length(teguran)<=81), teguran_n INTEGER NOT NULL DEFAULT 0 CHECK(teguran_n BETWEEN 0 AND 2),
  berat TEXT CHECK(berat IS NULL OR length(berat) BETWEEN 2 AND 40), apresiasi TEXT CHECK(apresiasi IS NULL OR length(apresiasi) BETWEEN 2 AND 40),

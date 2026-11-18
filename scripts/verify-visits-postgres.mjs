@@ -155,22 +155,35 @@ try{
     const status=await route(leader,'visits/sheet');assert.equal(status.pending,0);assert.equal(status.can_sync,false);
     await assert.rejects(route(manager,'visits/sheet/sync','POST'),e=>e instanceof api.AppError&&e.status===404,'penyalinan tidak pernah lewat transaksi permintaan');
   });
-  await check('100 − potongan on PostgreSQL: packaged form takes both shapes, flags wait for the manager, rules per month, nilai and sheet columns N–T',async()=>{
+  await check('100 − potongan + Etika on PostgreSQL: packaged form takes Etika (2.3), teguran (2.2) and old shapes, flags wait for the manager, rules per month, nilai and sheet columns N–T',async()=>{
     const fresh=await route(manager,'visits/links','POST',{action:'create',pos:1});
     const petugas=await route(manager,'visits/scoring/assessors','POST',{nama:'Petugas Uji',keterangan:'Pos 1',aktif:true});
     const ctx=await invoke('context',{token:fresh.token},'192.0.2.150');assert.equal(ctx.status,200,JSON.stringify(ctx.data));
-    assert.deepEqual([ctx.data.result.penilaian.teguran.length,ctx.data.result.penilaian.petugas.map(p=>p.nama)],[5,['Petugas Uji']]);
+    // `etika` menandai server yang menyimpan Etika; HP 2.3 menahan kiriman Etika sampai tanda ini ada.
+    assert.deepEqual([ctx.data.result.penilaian.teguran.length,ctx.data.result.penilaian.petugas.map(p=>p.nama),ctx.data.result.penilaian.etika],[5,['Petugas Uji'],{min:-10,max:10}]);
     const v2=evaluation({guideId:'G-010',criteria:{idCard:false,seragam:'kurang',teguran:['antrean'],berat:'pungutan'},petugasId:petugas.id,catatan:'Meminta uang di gerbang.'});
     const v1=evaluation({timestamp:new Date(Date.now()-3600000).toISOString(),criteria:{uniform:1,idCard:true,etika:-1}});
     const noNote=evaluation({guideId:'G-003',timestamp:new Date(Date.now()-7200000).toISOString(),criteria:{idCard:true,seragam:'lengkap',teguran:[],berat:'kasar'}});
-    const r=await invoke('submit',{token:fresh.token,evaluations:[v2,v1,noNote]},'192.0.2.151');assert.equal(r.status,200,JSON.stringify(r.data));
-    assert.deepEqual(r.data.result.accepted.map(a=>a.evaluationId),[v2.evaluationId,v1.evaluationId]);assert.match(r.data.result.rejected[0].errors[0],/Catatan wajib/);
+    // Formulir 2.3: Etika −10..+10 menggantikan teguran; di luar rentang, atau bersama teguran, ditolak.
+    const v3=evaluation({guideId:'G-003',timestamp:new Date(Date.now()-3*3600000).toISOString(),criteria:{idCard:true,seragam:'kurang',etika:10,berat:null,apresiasi:null},petugasId:petugas.id});
+    const tooLow=evaluation({guideId:'G-003',timestamp:new Date(Date.now()-4*3600000).toISOString(),criteria:{idCard:true,seragam:'lengkap',etika:-11}});
+    const both=evaluation({guideId:'G-003',timestamp:new Date(Date.now()-5*3600000).toISOString(),criteria:{idCard:true,seragam:'lengkap',etika:-1,teguran:['antrean']}});
+    const r=await invoke('submit',{token:fresh.token,evaluations:[v2,v1,noNote,v3,tooLow,both]},'192.0.2.151');assert.equal(r.status,200,JSON.stringify(r.data));
+    assert.deepEqual(r.data.result.accepted.map(a=>a.evaluationId),[v2.evaluationId,v1.evaluationId,v3.evaluationId]);
+    const rejected=Object.fromEntries(r.data.result.rejected.map(x=>[x.evaluationId,x.errors.join(' ')]));
+    assert.deepEqual(Object.keys(rejected).sort(),[noNote,tooLow,both].map(x=>x.evaluationId).sort());
+    assert.match(rejected[noNote.evaluationId],/Catatan wajib/);assert.match(rejected[tooLow.evaluationId],/etika harus bilangan bulat -10 sampai 10/);assert.match(rejected[both.evaluationId],/tidak boleh diisi bersamaan/);
     const row=await one(db,'SELECT * FROM visit_evaluations WHERE id=?',v2.evaluationId);
+    // Formulir 2.2: tiap teguran dihitung Etika −1.
     assert.deepEqual([row.versi,row.seragam,row.teguran,row.teguran_n,row.uniform,row.etika,row.petugas_nama],[2,'kurang','antrean',1,-1,-1,'Petugas Uji']);
+    const row3=await one(db,'SELECT * FROM visit_evaluations WHERE id=?',v3.evaluationId);
+    assert.deepEqual([row3.versi,row3.seragam,row3.teguran,row3.teguran_n,row3.uniform,row3.etika,row3.petugas_nama],[2,'kurang','',0,-1,10,'Petugas Uji']);
     assert.equal((await one(db,'SELECT versi FROM visit_evaluations WHERE id=?',v1.evaluationId)).versi,1);
     await Promise.all(background.splice(0));
     const month=witaDate(Date.parse(v2.timestamp)).slice(0,7),cells=google.rows(month).find(x=>x[0]===v2.evaluationId);
-    assert.deepEqual(cells.slice(13),[2,'Kurang lengkap','antrean','pungutan','','Petugas Uji',100-20-10-20]);
+    assert.deepEqual(cells.slice(13),[2,'Kurang lengkap','antrean','pungutan','','Petugas Uji',100-20-10-1]);
+    const cells3=google.rows(witaDate(Date.parse(v3.timestamp)).slice(0,7)).find(x=>x[0]===v3.evaluationId);
+    assert.equal(cells3[8],10);assert.deepEqual(cells3.slice(13),[2,'Kurang lengkap','','','','Petugas Uji',100-10+10]);
     // Batasan basis data: bentuk cara lama/baru tidak bisa tercampur, kode teguran dijaga.
     await assert.rejects(pg.query("UPDATE portal.visit_evaluations SET seragam='lengkap' WHERE id=$1",[v1.evaluationId]));
     await assert.rejects(pg.query("UPDATE portal.visit_evaluations SET teguran='a,b,c',teguran_n=3 WHERE id=$1",[v2.evaluationId]));
@@ -181,14 +194,15 @@ try{
     const decided=await route(manager,'visits/flags/decide','POST',{id:flags.items[0].id,row_version:flags.items[0].row_version,action:'setujui'});
     assert.deepEqual([decided.status,decided.diputuskanOleh],['disetujui','kunjungan']);
     const overview=await route(leader,'visits/overview','GET',{},q),g10=overview.perGuide.find(x=>x.guideId==='G-010');
-    assert.deepEqual([g10.nilai,g10.tanpaId,g10.kurangLengkap,g10.teguran,g10.berat],[50,1,1,1,1]);assert.equal(overview.ringkasan.berat.disetujui,1);
-    // Aturan: hanya bulan depan; bulan berjalan tetap.
+    assert.deepEqual([g10.nilai,g10.tanpaId,g10.kurangLengkap,g10.teguran,g10.etika,g10.berat],[69,1,1,1,-1,1]);assert.equal(overview.ringkasan.berat.disetujui,1);
+    // Aturan: hanya bulan depan; bulan berjalan tetap. Potongan per teguran tidak diatur lagi (disimpan 0).
     const rules=await route(manager,'visits/scoring');
     await assert.rejects(route(manager,'visits/scoring/rule','POST',{berlaku_mulai:rules.aturan.bulan_ini,pot_id:10,pot_kurang:10,pot_tidak:20,pot_teguran:20,ambang:95,minimal:10}),e=>e instanceof api.AppError&&e.status===409);
-    const next=await route(manager,'visits/scoring/rule','POST',{berlaku_mulai:rules.aturan.bulan_depan,pot_id:10,pot_kurang:10,pot_tidak:20,pot_teguran:20,ambang:95,minimal:10});assert.equal(next.pot_id,10);
-    assert.equal((await route(leader,'visits/overview','GET',{},q)).perGuide.find(x=>x.guideId==='G-010').nilai,50);
+    await assert.rejects(route(manager,'visits/scoring/rule','POST',{berlaku_mulai:rules.aturan.bulan_depan,pot_id:50,pot_kurang:10,pot_tidak:41,ambang:95,minimal:10}),e=>e instanceof api.AppError&&e.status===422&&/paling banyak 90/.test(e.message));
+    const next=await route(manager,'visits/scoring/rule','POST',{berlaku_mulai:rules.aturan.bulan_depan,pot_id:10,pot_kurang:10,pot_tidak:20,pot_teguran:20,ambang:95,minimal:10});assert.deepEqual([next.pot_id,next.pot_teguran],[10,0]);
+    assert.equal((await route(leader,'visits/overview','GET',{},q)).perGuide.find(x=>x.guideId==='G-010').nilai,69);
     await route(manager,'visits/scoring/rule-delete','POST',{berlaku_mulai:rules.aturan.bulan_depan});
-    const records=await route(leader,'visits/records','GET',{},q+'&guide=G-010');assert.deepEqual(records.items.map(x=>[x.versi,x.nilai,x.petugas]),[[2,50,'Petugas Uji']]);
+    const records=await route(leader,'visits/records','GET',{},q+'&guide=G-010');assert.deepEqual(records.items.map(x=>[x.versi,x.nilai,x.petugas]),[[2,69,'Petugas Uji']]);
     assert.equal((await one(db,"SELECT count(*)::int n FROM audit_events WHERE object_type IN('visit_flags','visit_score_rules','visit_assessors')")).n,4);
   });
   await check('patched gateway runs sheet sync and connection check outside the request transaction and without the global lock',async()=>{
@@ -286,6 +300,32 @@ try{
       assert.equal((await fresh.query('SELECT count(*)::int n FROM portal.visit_finding_types')).rows[0].n,13);
       assert.deepEqual({...(await fresh.query('SELECT pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal FROM portal.visit_score_rules')).rows[0]},{pot_id:20,pot_kurang:10,pot_tidak:20,pot_teguran:20,ambang:95,minimal:10});
       await assert.rejects(fresh.query("INSERT INTO portal.visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_at) VALUES('2027-01',40,10,40,20,95,10,'x')"),'potongan terbesar > 100 ditolak');
+    }finally{await fresh.close();}
+  });
+  await check('Etika migration widens only the etika CHECK to −10…+10, keeps existing rows, and can run again',async()=>{
+    const fresh=new PGlite();
+    try{
+      await fresh.exec(bootstrapSql);
+      const names=readdirSync(directory).filter(n=>n.endsWith('.sql')).sort(),at=names.indexOf('20261117090000_visit_etika_range.sql');
+      assert(at>names.indexOf('20261113100000_visit_objective_scoring.sql'),'berurutan sesudah cara penilaian 100 − potongan');
+      for(const name of names.slice(0,at))await fresh.exec(pgliteSql(readFileSync(new URL(name,directory),'utf8')));
+      await fresh.exec("INSERT INTO portal.visit_guides(id,seq,name,kategori,regu,created_at,updated_at,row_version) VALUES('G-001',1,'Guide Uji','Asing','A1','x','x',1)");
+      const id=randomUUID(),setEtika=v=>fresh.query('UPDATE portal.visit_evaluations SET etika=$1 WHERE id=$2',[v,id]);
+      await fresh.query("INSERT INTO portal.visit_evaluations(id,pos,guide_id,guide_name,uniform,id_card,review,etika,catatan,evaluated_at,wita_date,received_at,status) VALUES($1,1,'G-001','Guide Uji',1,1,0,-5,'x','2026-11-11T01:00:00.000Z','2026-11-11','2026-11-11T01:00:00.000Z','aktif')",[id]);
+      await assert.rejects(setEtika(6),'batas lama −5..+5 masih berlaku sebelum migrasi');
+      const checkCount=async()=>(await fresh.query("SELECT count(*)::int n FROM pg_constraint WHERE conrelid='portal.visit_evaluations'::regclass AND contype='c'")).rows[0].n,before=await checkCount();
+      const migration=pgliteSql(readFileSync(new URL(names[at],directory),'utf8'));
+      await fresh.exec(migration);
+      assert.equal((await fresh.query('SELECT etika FROM portal.visit_evaluations WHERE id=$1',[id])).rows[0].etika,-5,'baris lama tetap');
+      for(const v of [10,-10])await setEtika(v);
+      for(const v of [11,-11])await assert.rejects(setEtika(v));
+      await fresh.exec(migration);
+      const etikaChecks=(await fresh.query("SELECT con.conname FROM pg_constraint con JOIN pg_attribute att ON att.attrelid=con.conrelid AND att.attname='etika' WHERE con.conrelid='portal.visit_evaluations'::regclass AND con.contype='c' AND att.attnum=ANY(con.conkey)")).rows.map(r=>r.conname);
+      assert.deepEqual(etikaChecks,['visit_evaluations_etika_range'],'satu batas etika setelah dijalankan ulang');
+      await assert.rejects(setEtika(11));
+      // CHECK gabungan kolom lain (bentuk cara lama/baru) tidak ikut terhapus.
+      await assert.rejects(fresh.query("UPDATE portal.visit_evaluations SET seragam='lengkap' WHERE id=$1",[id]));
+      assert.equal(await checkCount(),before,'hanya batas etika yang diganti');
     }finally{await fresh.close();}
   });
 

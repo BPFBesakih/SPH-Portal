@@ -112,6 +112,21 @@
       </div>`).join('');
   }
 
+  /**
+   * Spanduk Beranda bila penilaian 2.3 menunggu server portal yang menyimpan Etika.
+   * Datanya aman di HP dan tidak dihitung ditolak; terkirim sendiri setelah portal siap.
+   */
+  App.tampilkanMenungguServer = function tampilkanMenungguServer(jumlah) {
+    const el = $('#serverNotice');
+    if (!el) return;
+    el.hidden = !jumlah;
+    if (jumlah) {
+      el.innerHTML = `<strong>⏳ ${esc(jumlah)} penilaian menunggu portal diperbarui</strong>` +
+        `<p>Server portal belum menyimpan nilai Etika, jadi penilaian ini belum dikirim supaya Etika-nya tidak hilang. ` +
+        `Datanya aman di HP dan terkirim sendiri setelah portal siap. Beri tahu Pengelola Kunjungan.</p>`;
+    }
+  }
+
   /** Spanduk Beranda bila tautan sebuah pos sudah tidak aktif (ATR-FL-07). */
   App.tampilkanTautanDicabut = function tampilkanTautanDicabut() {
     const el = $('#tautanNotice');

@@ -17,15 +17,15 @@
   const App = (window.App = window.App || {});
 
   /**
-   * Isian penilaian "100 − potongan" (sejak 2.2.0). Petugas hanya mencatat yang
-   * terlihat; besar potongan ditetapkan portal per bulan dan tidak ada di HP.
+   * Isian penilaian "100 − potongan + Etika" (sejak 2.3.0; 2.2 memakai teguran).
+   * Besar potongan ditetapkan portal per bulan dan tidak ada di HP.
    *   idCard   : true = terpasang & terlihat, false = tidak (wajib dipilih)
    *   seragam  : 'lengkap' | 'kurang' | 'tidak' (wajib dipilih)
-   *   teguran  : kode jenis teguran, paling banyak 2
+   *   etika    : −10 … +10, bawaan 0 (standar, tidak ada catatan khusus)
    *   berat    : kode pelanggaran berat atau '' — diverifikasi Pengelola
    *   apresiasi: kode apresiasi atau '' — diverifikasi Pengelola, tidak masuk nilai
    */
-  function kritKosong() { return { idCard: null, seragam: null, teguran: [], berat: '', apresiasi: '' }; }
+  function kritKosong() { return { idCard: null, seragam: null, etika: 0, berat: '', apresiasi: '' }; }
 
   /**
    * Satu-satunya salinan state yang berubah. Sengaja dikumpulkan di sini:
@@ -66,7 +66,7 @@
   // beriringan: kalau APP_VERSION mandek, laporan staff ("versi berapa yang
   // muncul di layar Tentang?") tidak bisa dipakai memastikan HP mana yang
   // sudah menerima pembaruan.
-  const APP_VERSION = '2.2.2';
+  const APP_VERSION = '2.3.0';
 
   const $ = s => document.querySelector(s);
 
@@ -102,16 +102,21 @@
     return isNaN(d) ? '' : `${p(d.getHours())}.${p(d.getMinutes())}`;
   };
 
+  // Etika formulir 2.3: −10 sampai +10, ditambahkan langsung ke nilai pengantaran.
+  const ETIKA_MIN = -10;
+
+  const ETIKA_MAKS = 10;
+
   // Penilaian cara lama (sebelum 2.2.0) masih bisa ada di HP: Uniform −1/+1/+2 dan
   // Etika −5…+5. Dibaca untuk riwayat dan dipetakan seperti di portal.
-  const ETIKA_MIN = -5;
-
-  const ETIKA_MAKS = 5;
+  const ETIKA_LAMA = 5;
 
   const UNIFORM_LABEL = { '-1': 'Tidak sesuai', '1': 'Sesuai', '2': 'Bagus' };
 
   const SERAGAM_LABEL = { lengkap: 'Lengkap', kurang: 'Kurang lengkap', tidak: 'Tidak berseragam' };
 
+  // Formulir 2.2 mencatat paling banyak 2 teguran. Penilaian seperti itu yang masih
+  // ada di HP tetap dikirim apa adanya; portal menghitungnya Etika −1 per teguran.
   const TEGURAN_MAKS = 2;
 
   // Jam berlaku pilihan nama petugas: sekali per shift.
@@ -132,31 +137,50 @@
 
   const labelUniform = v => UNIFORM_LABEL[String(nilaiUniform(v))];
 
-  /** true bila isian memakai cara baru (2.2.0+). */
+  /** true bila isian memakai seragam tiga pilihan (2.2.0+). */
   const caraBaru = c => !!c && typeof c.seragam === 'string';
+
+  /** true bila isian berasal dari formulir 2.2 (teguran, belum Etika). */
+  const caraTeguran = c => caraBaru(c) && typeof c.etika !== 'number';
+
+  /** Batasi angka Etika ke rentangnya; selain angka dianggap 0. */
+  const batasEtika = (v, maks = ETIKA_MAKS) => Math.min(maks, Math.max(-maks, Math.round(Number(v) || 0)));
+
+  /**
+   * Etika satu penilaian, sama dengan portal: formulir 2.3 apa adanya, formulir 2.2
+   * −1 per teguran, cara lama apa adanya (−5…+5).
+   */
+  const etikaDari = c => {
+    c = c || {};
+    if (caraTeguran(c)) return Array.isArray(c.teguran) ? -c.teguran.length || 0 : 0;
+    return batasEtika(c.etika, caraBaru(c) ? ETIKA_MAKS : ETIKA_LAMA);
+  };
+
+  /** Tampilkan nilai Etika dengan tanda: −3, 0, +2. */
+  const tandaEtika = v => { const n = Number(v) || 0; return n > 0 ? '+' + n : n < 0 ? '−' + Math.abs(n) : '0'; };
 
   /**
    * Temuan satu penilaian, untuk cara baru dan lama sekaligus — sama dengan portal:
-   * cara lama ID 0 = tanpa ID, Uniform −1 = tidak berseragam, Etika minus dengan
-   * seragam sesuai = 1 teguran ("Bagus" dan Etika plus tidak dihitung).
+   * cara lama ID 0 = tanpa ID, Uniform −1 = tidak berseragam ("Bagus" tidak dihitung).
+   * Etika ikut dilaporkan karena masuk nilai: 100 − potongan + Etika.
    */
   const temuanDari = c => {
     c = c || {};
     if (caraBaru(c)) {
-      return { tanpaId: c.idCard ? 0 : 1, kurang: c.seragam === 'kurang' ? 1 : 0, tidak: c.seragam === 'tidak' ? 1 : 0,
-               teguran: Array.isArray(c.teguran) ? c.teguran.length : 0 };
+      return { tanpaId: c.idCard ? 0 : 1, kurang: c.seragam === 'kurang' ? 1 : 0, tidak: c.seragam === 'tidak' ? 1 : 0, etika: etikaDari(c) };
     }
-    const u = nilaiUniform(c.uniform), e = Number(c.etika) || 0;
-    return { tanpaId: c.idCard ? 0 : 1, kurang: 0, tidak: u === -1 ? 1 : 0, teguran: e < 0 && u >= 1 ? 1 : 0 };
+    const u = nilaiUniform(c.uniform);
+    return { tanpaId: c.idCard ? 0 : 1, kurang: 0, tidak: u === -1 ? 1 : 0, etika: etikaDari(c) };
   };
 
-  /** Ringkasan singkat isian untuk pesan dan riwayat, mis. "ID Tidak, Seragam Lengkap, 1 teguran". */
+  /** Ringkasan singkat isian untuk pesan dan riwayat, mis. "ID Tidak, Seragam Lengkap, Etika −2". */
   const ringkasKriteria = c => {
     c = c || {};
-    if (!caraBaru(c)) return `Uniform ${labelUniform(c.uniform)}, ID ${c.idCard ? 'Ya' : 'Tidak'}, Etika ${Number(c.etika) > 0 ? '+' : ''}${Number(c.etika) || 0}`;
+    if (!caraBaru(c)) return `Uniform ${labelUniform(c.uniform)}, ID ${c.idCard ? 'Ya' : 'Tidak'}, Etika ${tandaEtika(etikaDari(c))}`;
     const n = Array.isArray(c.teguran) ? c.teguran.length : 0;
+    const perilaku = caraTeguran(c) ? (n ? `, ${n} teguran` : '') : `, Etika ${tandaEtika(etikaDari(c))}`;
     return `ID ${c.idCard ? 'Terpasang' : 'Tidak'}, Seragam ${SERAGAM_LABEL[c.seragam] || '—'}` +
-      (n ? `, ${n} teguran` : '') + (c.berat ? ', pelanggaran berat dilaporkan' : '') + (c.apresiasi ? ', apresiasi' : '');
+      perilaku + (c.berat ? ', pelanggaran berat dilaporkan' : '') + (c.apresiasi ? ', apresiasi' : '');
   };
 
   /** Tautan aktif untuk pos tertentu, atau null. */
@@ -204,6 +228,7 @@
 
   /* Diekspor supaya berkas lain bisa men-destructure-nya dari App. */
   Object.assign(App, { APP_VERSION, $, $$, TITLES, uuid, fmtTime, esc, jamLokal,
-                       ETIKA_MIN, ETIKA_MAKS, UNIFORM_LABEL, SERAGAM_LABEL, TEGURAN_MAKS, PETUGAS_JAM,
-                       nilaiUniform, labelUniform, caraBaru, temuanDari, ringkasKriteria, kritKosong });
+                       ETIKA_MIN, ETIKA_MAKS, ETIKA_LAMA, UNIFORM_LABEL, SERAGAM_LABEL, TEGURAN_MAKS, PETUGAS_JAM,
+                       nilaiUniform, labelUniform, caraBaru, caraTeguran, batasEtika, etikaDari, tandaEtika,
+                       temuanDari, ringkasKriteria, kritKosong });
 })();

@@ -104,8 +104,9 @@
     catatWaktuServer(data, t0, Date.now());
     await DB.simpanTautan({ token, pos: Number(data.pos), label: String(data.label || `Pos ${data.pos}`) });
     if (data.guides.length) await DB.setGuides(data.guides);
-    // Portal lama tidak mengirim `penilaian`; formulir lalu memakai daftar bawaan.
-    if (data.penilaian && Array.isArray(data.penilaian.teguran)) DB.setPenilaian(data.penilaian);
+    // Portal lama tidak mengirim `penilaian`; formulir lalu memakai daftar bawaan. Bahan
+    // lama dihapus juga, supaya tanda `etika` dari server sebelumnya tidak terbawa.
+    DB.setPenilaian(data.penilaian && Array.isArray(data.penilaian.teguran) ? data.penilaian : null);
     if (!Settings.get().pos) Settings.set({ pos: Number(data.pos) });
     emit('tautan', { pos: Number(data.pos) });
     return data;
@@ -144,15 +145,32 @@
     return hasil;
   }
 
+  /** true bila penilaian berasal dari formulir 2.3 (Etika −10…+10). */
+  const pakaiEtika = item => { const c = item.criteria || {}; return typeof c.seragam === 'string' && typeof c.etika === 'number'; };
+
+  /**
+   * Server menyimpan Etika bila bahan formulir terakhirnya membawa rentang `etika`.
+   * guide-form versi sebelumnya menerima kiriman 2.3 tetapi MEMBUANG Etika-nya, jadi
+   * penilaian 2.3 ditahan di HP (tidak hilang, tidak dihitung ditolak) sampai
+   * server diperbarui. Daftar diperbarui tiap 10 menit atau lewat Tes Koneksi.
+   */
+  const serverSimpanEtika = () => {
+    const k = DB.getPenilaian();
+    return !!(k && k.etika && Number.isInteger(k.etika.min) && Number.isInteger(k.etika.max));
+  };
+
   const payloadDari = item => {
     const c = item.criteria || {};
-    // Cara baru (2.2.0+) mengirim fakta; penilaian cara lama yang masih tertahan di HP
-    // tetap dikirim dalam bentuk lamanya dan dipetakan portal.
-    const criteria = typeof c.seragam === 'string'
+    // Formulir 2.3 mengirim Etika; penilaian 2.2 (teguran) dan cara lama yang masih
+    // tertahan di HP tetap dikirim dalam bentuk lamanya dan dipetakan portal.
+    const criteria = pakaiEtika(item)
+      ? { idCard: !!c.idCard, seragam: c.seragam, etika: App.batasEtika(c.etika),
+          berat: c.berat || null, apresiasi: c.apresiasi || null }
+      : typeof c.seragam === 'string'
       ? { idCard: !!c.idCard, seragam: c.seragam, teguran: Array.isArray(c.teguran) ? c.teguran.slice(0, 2) : [],
           berat: c.berat || null, apresiasi: c.apresiasi || null }
       : { idCard: !!c.idCard, uniform: App.nilaiUniform(c.uniform),
-          etika: Math.min(5, Math.max(-5, Math.round(Number(c.etika) || 0))) };
+          etika: App.batasEtika(c.etika, App.ETIKA_LAMA) };
     const p = {
       evaluationId: item.evaluationId,
       guideId: item.guideId,
@@ -182,8 +200,16 @@
   }
 
   async function kirimAntrean() {
-    const queue = await DB.pending();
-    if (!queue.length) { emit('idle', { pending: 0 }); return { sent: 0, failed: 0 }; }
+    const semua = await DB.pending();
+    // Penilaian 2.3 menunggu sampai server menyimpan Etika (lihat serverSimpanEtika).
+    // Selama ada yang menunggu, bahan formulir diperiksa ulang (paling sering tiap 10 menit).
+    if (!serverSimpanEtika() && semua.some(pakaiEtika)) { try { await refreshGuides(); } catch {} }
+    const ditunda = serverSimpanEtika() ? [] : semua.filter(pakaiEtika);
+    const queue = ditunda.length ? semua.filter(item => !pakaiEtika(item)) : semua;
+    if (!queue.length) {
+      if (ditunda.length) { emit('menungguServer', { ditunda: ditunda.length }); return { sent: 0, failed: 0, ditunda: ditunda.length }; }
+      emit('idle', { pending: 0 }); return { sent: 0, failed: 0 };
+    }
     emit('syncing', { pending: queue.length });
 
     const tautan = await DB.bacaTautan();
@@ -280,7 +306,8 @@
       backoffStep = 0;
       emit('done', { sent });
     }
-    return { sent, failed, ditolak: ditolakJml, ditahan: ditahanJml, lastError: lastError || alasanTerakhir };
+    if (ditunda.length) emit('menungguServer', { ditunda: ditunda.length });
+    return { sent, failed, ditolak: ditolakJml, ditahan: ditahanJml, ditunda: ditunda.length, lastError: lastError || alasanTerakhir };
   }
 
   // Koreksi yang ditolak permanen: penilaian lamanya kembali berlaku di HP,

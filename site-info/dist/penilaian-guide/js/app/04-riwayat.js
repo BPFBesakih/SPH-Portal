@@ -15,7 +15,8 @@
   'use strict';
 
   const App = window.App;
-  const { $, fmtTime, esc, jamLokal, nilaiUniform, labelUniform, caraBaru, ringkasKriteria, SERAGAM_LABEL, kritKosong } = App;
+  const { $, fmtTime, esc, jamLokal, nilaiUniform, labelUniform, caraBaru, caraTeguran, etikaDari, tandaEtika,
+          ringkasKriteria, SERAGAM_LABEL, kritKosong } = App;
 
   /**
    * Tiga keadaan, bukan dua:
@@ -73,12 +74,15 @@
         : caraBaru(c)
           ? `${b('ID', !!c.idCard)}` +
             `<span class="badge ${c.seragam === 'lengkap' ? '' : 'bad'}">Seragam ${esc(SERAGAM_LABEL[c.seragam] || c.seragam)}</span>` +
-            (c.teguran || []).map(k => `<span class="badge bad">Teguran: ${esc(App.labelTemuan('teguran', k))}</span>`).join('') +
+            // Formulir 2.2 masih menampilkan jenis tegurannya; formulir 2.3 menampilkan Etika.
+            (caraTeguran(c)
+              ? (c.teguran || []).map(k => `<span class="badge bad">Teguran: ${esc(App.labelTemuan('teguran', k))}</span>`).join('')
+              : `<span class="badge ${etikaDari(c) < 0 ? 'bad' : ''}">Etika ${esc(tandaEtika(etikaDari(c)))}</span>`) +
             (c.berat ? `<span class="badge bad">⚠️ Berat: ${esc(App.labelTemuan('berat', c.berat))} (diverifikasi pengelola)</span>` : '') +
             (c.apresiasi ? `<span class="badge">⭐ ${esc(App.labelTemuan('apresiasi', c.apresiasi))}</span>` : '')
           : `${b('ID', !!c.idCard)}` +
             `<span class="badge ${nilaiUniform(c.uniform) >= 1 ? '' : 'bad'}">Uniform ${esc(labelUniform(c.uniform))}</span>` +
-            `<span class="badge">Etika ${App.nilaiEtika(c.etika)}</span>`;
+            `<span class="badge">Etika ${esc(tandaEtika(etikaDari(c)))}</span>`;
       const keterangan = e.corrupt
         ? `<span class="cmeta">Sudah tersimpan di portal, kode ${esc(String(e.evaluationId).slice(0, 8))}</span>`
         : '';
@@ -131,13 +135,13 @@
 
     App.state.koreksi = asal;
     const c = asal.criteria || {};
-    // Penilaian cara lama dibuka dengan pemetaannya: Uniform −1 = tidak berseragam,
-    // selain itu lengkap. Teguran dari Etika lama tidak bisa ditebak jenisnya.
+    // Koreksi selalu memakai formulir 2.3. Cara lama dibuka dengan pemetaannya (Uniform −1
+    // = tidak berseragam, selain itu lengkap; Etika apa adanya); formulir 2.2 membawa
+    // tegurannya sebagai Etika −1 per teguran — sama dengan cara portal menghitungnya.
     const crit = caraBaru(c)
-      ? { ...kritKosong(), idCard: !!c.idCard, seragam: c.seragam, teguran: [...(c.teguran || [])], berat: c.berat || '', apresiasi: c.apresiasi || '' }
-      : { ...kritKosong(), idCard: !!c.idCard, seragam: nilaiUniform(c.uniform) >= 1 ? 'lengkap' : 'tidak' };
-    App.state.form = { pos: Number(asal.pos), guide: g, crit, catatan: asal.catatan || '', lanjutJeda: null,
-      ...(!caraBaru(c) && nilaiUniform(c.uniform) >= 1 && Number(c.etika) < 0 ? { teguranLama: { guideId: g.guideId } } : {}) };
+      ? { ...kritKosong(), idCard: !!c.idCard, seragam: c.seragam, etika: etikaDari(c), berat: c.berat || '', apresiasi: c.apresiasi || '' }
+      : { ...kritKosong(), idCard: !!c.idCard, seragam: nilaiUniform(c.uniform) >= 1 ? 'lengkap' : 'tidak', etika: etikaDari(c) };
+    App.state.form = { pos: Number(asal.pos), guide: g, crit, catatan: asal.catatan || '', lanjutJeda: null };
     App.tampilkanPos();
     $('#guideInput').value = g.guideName;
     $('#catatan').value = App.state.form.catatan;

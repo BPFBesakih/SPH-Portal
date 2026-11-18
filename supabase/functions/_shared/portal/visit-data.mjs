@@ -76,11 +76,12 @@ function storedValues(c, petugas) {
     petugas_id: null,
     petugas_nama: null
   };
+  const etika = Number.isInteger(c.etika) ? c.etika : c.teguran.length ? -c.teguran.length : 0;
   return {
     versi: 2,
     uniform: c.seragam === 'lengkap' ? 1 : -1,
     id_card: c.idCard ? 1 : 0,
-    etika: -c.teguran.length,
+    etika,
     seragam: c.seragam,
     teguran: c.teguran.join(','),
     teguran_n: c.teguran.length,
@@ -824,7 +825,7 @@ export function rowFindings(r) {
     nTeguran: v2 ? Number(r.teguran_n) : etika < 0 && uniform >= 1 ? 1 : 0
   };
 }
-export const visitScoreOf = (r, ruleOf) => 100 - potonganOf(ruleOf(String(r.wita_date).slice(0, 7)), rowFindings(r));
+export const visitScoreOf = (r, ruleOf) => 100 - potonganOf(ruleOf(String(r.wita_date).slice(0, 7)), rowFindings(r)) + Number(r.etika || 0);
 const recordView = (r, ruleOf) => {
   const v2 = Number(r.versi) === 2, f = rowFindings(r);
   return {
@@ -901,12 +902,14 @@ const visitFigures = s => {
   const antar = s ? s.antar : 0;
   return {
     pengantaran: antar,
-    nilai: antar ? 100 - s.potongan / antar : null,
+    nilai: antar ? 100 - (s.potongan - s.etika) / antar : null,
     persenId: antar ? 1 - s.nId / antar : null,
     persenSeragam: antar ? 1 - (s.nKurang + s.nTidak) / antar : null,
     tanpaId: antar ? s.nId : 0,
     kurangLengkap: antar ? s.nKurang : 0,
     tidakBerseragam: antar ? s.nTidak : 0,
+    etika: antar ? s.etika : 0,
+    etikaRata: antar ? s.etika / antar : null,
     teguran: antar ? s.nTeguran : 0,
     potongan: antar ? s.potongan : 0
   };
@@ -983,7 +986,7 @@ export function rewardStatus(g, rule) {
   };
 }
 export async function visitAssessorStats(db, from, to, ruleOf) {
-  const rows = await all(db, `SELECT coalesce(petugas_nama,'') AS nama,pos,substr(wita_date,1,7) AS bulan,count(*) AS antar,${visitFindingSums} FROM visit_evaluations
+  const rows = await all(db, `SELECT coalesce(petugas_nama,'') AS nama,pos,substr(wita_date,1,7) AS bulan,count(*) AS antar,sum(etika) AS etika,${visitFindingSums} FROM visit_evaluations
   WHERE status='aktif' AND versi=2 AND wita_date>=? AND wita_date<=? GROUP BY coalesce(petugas_nama,''),pos,substr(wita_date,1,7)`, from, to);
   const by = new Map();
   for (const r of rows) {
@@ -1006,6 +1009,7 @@ export async function visitAssessorStats(db, from, to, ruleOf) {
     s.nKurang += n.nKurang;
     s.nTidak += n.nTidak;
     s.nTeguran += n.nTeguran;
+    s.etika += Number(r.etika);
     s.potongan += potonganOf(ruleOf(r.bulan), n);
     s.pos.add(Number(r.pos));
   }
@@ -1147,6 +1151,7 @@ export async function visitOverview(db, from, to) {
       nilaiTerendah: ranked(enough, 'nilai', true, n),
       tanpaIdTerbanyak: ranked(enough.filter(x => x.tanpaId > 0), 'porsiTanpaId', false, n),
       seragamTerbanyak: ranked(enough.filter(x => x.kurangLengkap + x.tidakBerseragam > 0), 'porsiSeragam', false, n),
+      etikaTerendah: ranked(enough.filter(x => x.etikaRata < 0), 'etikaRata', true, n),
       teguranTerbanyak: ranked(enough.filter(x => x.teguran > 0), 'rataTeguran', false, n),
       beratTerverifikasi: ranked(list.filter(x => x.berat > 0), 'berat', false, list.length),
       belumCukup: ranked(short, 'antar', false, n)

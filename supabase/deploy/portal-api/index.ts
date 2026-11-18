@@ -5972,6 +5972,8 @@ async function has(db, user, permission) {
 // supabase/functions/_shared/portal/visit-scoring.mjs
 var scoringRules = Object.freeze({
   teguranMaks: 2,
+  etikaMin: -10,
+  etikaMaks: 10,
   potonganMaks: 50,
   catatanMin: 3,
   flagLimit: 500
@@ -6023,7 +6025,7 @@ function ruleFinder(rows) {
   };
 }
 var scoreRuleFinder = async (db) => ruleFinder(await scoreRuleRows(db));
-var potonganOf = (rule, n) => n.nId * rule.pot_id + n.nKurang * rule.pot_kurang + n.nTidak * rule.pot_tidak + n.nTeguran * rule.pot_teguran;
+var potonganOf = (rule, n) => n.nId * rule.pot_id + n.nKurang * rule.pot_kurang + n.nTidak * rule.pot_tidak;
 async function scoreRuleState(db, nowMs = Date.now()) {
   const current = witaMonth(nowMs), next = nextMonthOf(current), rows = await scoreRuleRows(db), find = ruleFinder(rows);
   return {
@@ -6035,7 +6037,9 @@ async function scoreRuleState(db, nowMs = Date.now()) {
     rencana: rows.filter((r) => r.berlaku_mulai > current),
     batas: {
       potongan_maks: scoringRules.potonganMaks,
-      teguran_maks: scoringRules.teguranMaks
+      teguran_maks: scoringRules.teguranMaks,
+      etika_min: scoringRules.etikaMin,
+      etika_maks: scoringRules.etikaMaks
     }
   };
 }
@@ -6053,12 +6057,13 @@ async function saveScoreRule(db, user, b, audit2, nowMs = Date.now()) {
     pot_id: value("pot_id", "Potongan tanpa ID-Card", 0, max),
     pot_kurang: value("pot_kurang", "Potongan seragam kurang lengkap", 0, max),
     pot_tidak: value("pot_tidak", "Potongan tidak berseragam", 0, max),
-    pot_teguran: value("pot_teguran", "Potongan per teguran", 0, max),
+    pot_teguran: 0,
     ambang: value("ambang", "Ambang layak reward", 50, 100),
     minimal: value("minimal", "Minimal pengantaran", 1, 60)
   };
   assert(row.pot_kurang <= row.pot_tidak, 'Potongan "kurang lengkap" tidak boleh lebih besar dari "tidak berseragam".');
-  assert(row.pot_id + row.pot_tidak + scoringRules.teguranMaks * row.pot_teguran <= 100, `Potongan terbesar per pengantaran (tanpa ID + tidak berseragam + ${scoringRules.teguranMaks} teguran) tidak boleh lebih dari 100.`);
+  const etikaTerendah = -scoringRules.etikaMin;
+  assert(row.pot_id + row.pot_tidak + etikaTerendah <= 100, `Potongan tanpa ID + tidak berseragam paling banyak ${100 - etikaTerendah}, supaya nilai pengantaran dengan Etika ${scoringRules.etikaMin} tidak di bawah 0.`);
   const existing = await one(db, "SELECT * FROM visit_score_rules WHERE berlaku_mulai=?", month), stamp = now();
   if (existing) await run(db, "UPDATE visit_score_rules SET pot_id=?,pot_kurang=?,pot_tidak=?,pot_teguran=?,ambang=?,minimal=?,created_by=?,created_at=? WHERE berlaku_mulai=?", row.pot_id, row.pot_kurang, row.pot_tidak, row.pot_teguran, row.ambang, row.minimal, user.id, stamp, month);
   else await run(db, "INSERT INTO visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)", month, row.pot_id, row.pot_kurang, row.pot_tidak, row.pot_teguran, row.ambang, row.minimal, user.id, stamp);
@@ -6989,7 +6994,7 @@ function rowFindings(r) {
     nTeguran: v2 ? Number(r.teguran_n) : etika < 0 && uniform >= 1 ? 1 : 0
   };
 }
-var visitScoreOf = (r, ruleOf) => 100 - potonganOf(ruleOf(String(r.wita_date).slice(0, 7)), rowFindings(r));
+var visitScoreOf = (r, ruleOf) => 100 - potonganOf(ruleOf(String(r.wita_date).slice(0, 7)), rowFindings(r)) + Number(r.etika || 0);
 var recordView = (r, ruleOf) => {
   const v2 = Number(r.versi) === 2, f = rowFindings(r);
   return {
@@ -7066,12 +7071,14 @@ var visitFigures = (s) => {
   const antar = s ? s.antar : 0;
   return {
     pengantaran: antar,
-    nilai: antar ? 100 - s.potongan / antar : null,
+    nilai: antar ? 100 - (s.potongan - s.etika) / antar : null,
     persenId: antar ? 1 - s.nId / antar : null,
     persenSeragam: antar ? 1 - (s.nKurang + s.nTidak) / antar : null,
     tanpaId: antar ? s.nId : 0,
     kurangLengkap: antar ? s.nKurang : 0,
     tidakBerseragam: antar ? s.nTidak : 0,
+    etika: antar ? s.etika : 0,
+    etikaRata: antar ? s.etika / antar : null,
     teguran: antar ? s.nTeguran : 0,
     potongan: antar ? s.potongan : 0
   };
@@ -7148,7 +7155,7 @@ function rewardStatus(g, rule) {
   };
 }
 async function visitAssessorStats(db, from, to, ruleOf) {
-  const rows = await all(db, `SELECT coalesce(petugas_nama,'') AS nama,pos,substr(wita_date,1,7) AS bulan,count(*) AS antar,${visitFindingSums} FROM visit_evaluations
+  const rows = await all(db, `SELECT coalesce(petugas_nama,'') AS nama,pos,substr(wita_date,1,7) AS bulan,count(*) AS antar,sum(etika) AS etika,${visitFindingSums} FROM visit_evaluations
   WHERE status='aktif' AND versi=2 AND wita_date>=? AND wita_date<=? GROUP BY coalesce(petugas_nama,''),pos,substr(wita_date,1,7)`, from, to);
   const by = /* @__PURE__ */ new Map();
   for (const r of rows) {
@@ -7171,6 +7178,7 @@ async function visitAssessorStats(db, from, to, ruleOf) {
     s.nKurang += n.nKurang;
     s.nTidak += n.nTidak;
     s.nTeguran += n.nTeguran;
+    s.etika += Number(r.etika);
     s.potongan += potonganOf(ruleOf(r.bulan), n);
     s.pos.add(Number(r.pos));
   }
@@ -7312,6 +7320,7 @@ async function visitOverview(db, from, to) {
       nilaiTerendah: ranked(enough, "nilai", true, n),
       tanpaIdTerbanyak: ranked(enough.filter((x) => x.tanpaId > 0), "porsiTanpaId", false, n),
       seragamTerbanyak: ranked(enough.filter((x) => x.kurangLengkap + x.tidakBerseragam > 0), "porsiSeragam", false, n),
+      etikaTerendah: ranked(enough.filter((x) => x.etikaRata < 0), "etikaRata", true, n),
       teguranTerbanyak: ranked(enough.filter((x) => x.teguran > 0), "rataTeguran", false, n),
       beratTerverifikasi: ranked(list.filter((x) => x.berat > 0), "berat", false, list.length),
       belumCukup: ranked(short, "antar", false, n)
@@ -7369,7 +7378,7 @@ var kunjunganFolder = "SPH-Portal-Kunjungan";
 var driveIdPattern = /^[A-Za-z0-9_-]{8,200}$/;
 var evaluationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 var sheetAccessTokens = /* @__PURE__ */ new Map();
-var guideNotes = ["Penilaian Guide \u2014 salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).", "Satu tab per bulan, tanggal menurut WITA. Kolom A\u2013M sama dengan tab Evaluations aplikasi NilaiGuide lama.", 'Kolom N\u2013T: penilaian "100 \u2212 potongan" (versi 2). nilai = 100 \u2212 potongan menurut aturan bulan itu. Baris cara lama (versi kosong) dihitung portal dengan pemetaan: ID 0 = tanpa ID, Uniform \u22121 = tidak berseragam, Etika minus dengan seragam sesuai = satu teguran.', 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', "Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.", "Untuk mengolah data, gunakan Data \u2192 Tampilan filter, atau salin tab ke spreadsheet lain.", `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
+var guideNotes = ["Penilaian Guide \u2014 salinan otomatis dari SPH Portal (modul Pengelolaan Kunjungan).", "Satu tab per bulan, tanggal menurut WITA. Kolom A\u2013M sama dengan tab Evaluations aplikasi NilaiGuide lama.", "Kolom N\u2013T: penilaian versi 2. nilai = 100 \u2212 potongan menurut aturan bulan itu + Etika (kolom etika, \u221210 sampai +10). Kolom teguran hanya terisi pada formulir lama 2.2; tiap teguran dihitung Etika \u22121. Baris cara lama (versi kosong) dihitung portal dengan pemetaan: ID 0 = tanpa ID, Uniform \u22121 = tidak berseragam, Etika apa adanya.", 'Baris berstatus "diganti" adalah penilaian yang dikoreksi petugas pos dan tidak ikut dihitung.', "Jangan mengurutkan, menyisipkan, atau menghapus baris di tab bulanan: portal menulis ke posisi baris yang dicatatnya.", "Untuk mengolah data, gunakan Data \u2192 Tampilan filter, atau salin tab ke spreadsheet lain.", `Portal menyimpan rincian penilaian ${visitRules.retensiHari / 7} minggu terakhir; rincian yang lebih lama hanya ada di spreadsheet ini.`];
 function visitSheetConfig(env = {}) {
   const value = (name) => typeof env[name] === "string" ? env[name].trim() : "";
   const config = {
