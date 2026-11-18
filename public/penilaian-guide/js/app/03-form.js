@@ -13,13 +13,15 @@
   'use strict';
 
   const App = window.App;
-  const { $, $$, uuid, fmtTime, esc, jamLokal, ETIKA_MIN, ETIKA_MAKS, TEGURAN_MAKS, PETUGAS_JAM,
-          ringkasKriteria, kritKosong } = App;
+  const { $, $$, uuid, fmtTime, esc, jamLokal, ETIKA_MIN, ETIKA_MAKS, ETIKA_LAMA, PETUGAS_JAM,
+          batasEtika, tandaEtika, ringkasKriteria, kritKosong } = App;
 
   /**
    * Daftar bawaan = contoh di usulan rumus, sama dengan isi awal migrasi portal.
    * Dipakai hanya bila HP belum pernah menerima daftar dari portal (mis. baru
    * diperbarui saat offline). Kodenya pasti dikenal portal: jenis tidak pernah dihapus.
+   * Daftar teguran hanya untuk label penilaian formulir 2.2 yang masih ada di HP.
+   * Sengaja tanpa `etika`: tanda itu hanya boleh datang dari portal (lihat sync.js).
    */
   const PENILAIAN_BAWAAN = {
     versi: 2, teguranMaks: 2, catatanMin: 3, petugas: [], petunjuk: { idCard: '', seragam: '' },
@@ -96,17 +98,9 @@
 
   /* ---------------- Daftar pilihan dari portal ---------------- */
 
-  /** Gambar chip teguran, pilihan pelanggaran berat/apresiasi, dan petunjuk. */
+  /** Gambar pilihan pelanggaran berat/apresiasi dan petunjuk. */
   App.renderPenilaianForm = function renderPenilaianForm() {
     const k = App.konteksPenilaian();
-    const list = $('#teguranList');
-    if (list) {
-      const dipilih = App.state.form.crit.teguran || [];
-      // Kode yang sudah dipilih (mis. dari draf) tetap tampil walau kini tidak aktif.
-      const jenis = [...k.teguran, ...dipilih.filter(kode => !k.teguran.some(t => t.kode === kode))
-        .map(kode => ({ kode, label: `${App.labelTemuan('teguran', kode)} (tidak aktif)`, nonaktif: true }))];
-      list.innerHTML = jenis.map(t => `<button type="button" class="chip" data-teguran="${esc(t.kode)}"${t.nonaktif ? ' data-nonaktif' : ''} aria-pressed="false">${esc(t.label)}</button>`).join('');
-    }
     for (const [sel, jenis] of [['#beratSelect', 'berat'], ['#apresiasiSelect', 'apresiasi']]) {
       const el = $(sel);
       const dipilih = App.state.form.crit[jenis], aktif = k[jenis] || [];
@@ -123,11 +117,9 @@
     App.applyCritUI();
   };
 
-  /** Catatan wajib bila ada pelanggaran berat, apresiasi, atau teguran "lain". */
+  /** Catatan wajib bila ada laporan pelanggaran berat atau apresiasi. Etika boleh tanpa catatan. */
   App.catatanWajib = function catatanWajib(crit = App.state.form.crit) {
-    if (crit.berat || crit.apresiasi) return true;
-    const k = App.konteksPenilaian();
-    return (crit.teguran || []).some(kode => (k.teguran.find(t => t.kode === kode) || {}).perluCatatan);
+    return !!(crit.berat || crit.apresiasi);
   };
 
   App.resetForm = function resetForm(keepPos = true) {
@@ -160,13 +152,17 @@
       const d = await DB.bacaDraft();
       if (!d) return;
       const form = App.state.form;
-      // Draf dari versi sebelum 2.2.0 berisi Uniform/Etika: hanya ID-Card yang dipakai.
+      // Draf versi sebelumnya: cara lama (Uniform/Etika −5…+5) hanya membawa ID-Card dan
+      // Etika; formulir 2.2 membawa teguran yang diubah menjadi Etika −1 per teguran.
       const lama = d.crit || {};
+      const etika = lama.uniform === undefined && typeof lama.etika === 'number' ? batasEtika(lama.etika)
+        : Array.isArray(lama.teguran) ? (-lama.teguran.length || 0)
+        : batasEtika(lama.etika, ETIKA_LAMA);
       const crit = { ...kritKosong(), idCard: typeof lama.idCard === 'boolean' ? lama.idCard : null,
-                     seragam: ['lengkap', 'kurang', 'tidak'].includes(lama.seragam) ? lama.seragam : null,
-                     teguran: Array.isArray(lama.teguran) ? lama.teguran.slice(0, TEGURAN_MAKS) : [],
+                     seragam: ['lengkap', 'kurang', 'tidak'].includes(lama.seragam) ? lama.seragam : null, etika,
                      berat: typeof lama.berat === 'string' ? lama.berat : '', apresiasi: typeof lama.apresiasi === 'string' ? lama.apresiasi : '' };
       App.state.form = { ...form, ...d, crit };
+      delete App.state.form.teguranLama;
       // Draf dari pos yang tautannya sudah dihapus tidak boleh mengunci formulir.
       if (!App.state.tautan.some(l => l.pos === Number(App.state.form.pos))) App.state.form.pos = App.posBawaan();
       // Guide di draf dicocokkan ulang ke daftar terbaru lewat guideId.
@@ -180,16 +176,22 @@
     } catch {}
   }
 
-  /** Tampilkan nilai etika dengan tanda: -3, 0, +2. */
+  /** Tampilkan nilai Etika dengan tanda: −3, 0, +2. */
   App.nilaiEtika = function nilaiEtika(v) {
-    const n = Math.min(ETIKA_MAKS, Math.max(ETIKA_MIN, Number(v) || 0));
-    return n > 0 ? '+' + n : String(n);
+    return tandaEtika(batasEtika(v));
   }
+
+  /** Ubah Etika formulir dengan tombol − / +, tetap di dalam −10 … +10. */
+  App.ubahEtika = function ubahEtika(langkah) {
+    const c = App.state.form.crit;
+    c.etika = Math.min(ETIKA_MAKS, Math.max(ETIKA_MIN, batasEtika(c.etika) + Number(langkah)));
+    App.applyCritUI();
+  };
 
   /** True bila belum ada satu pun isian penilaian. */
   App.kriteriaKosong = function kriteriaKosong() {
     const c = App.state.form.crit;
-    return c.idCard === null && c.seragam === null && !(c.teguran || []).length && !c.berat && !c.apresiasi;
+    return c.idCard === null && c.seragam === null && !Number(c.etika) && !c.berat && !c.apresiasi;
   };
 
   App.applyCritUI = function applyCritUI() {
@@ -202,29 +204,29 @@
       } else if (k === 'seragam') {
         el.classList.toggle('unset', c.seragam === null);
         el.querySelectorAll('.seg').forEach(b => b.classList.toggle('on', b.dataset.val === c.seragam));
+      } else if (k === 'etika') {
+        // 0 sudah jawaban sah (standar), jadi Etika tidak pernah "belum diisi".
+        const n = batasEtika(c.etika);
+        const angka = $('#etikaNilai');
+        if (angka) {
+          angka.textContent = tandaEtika(n);
+          angka.classList.toggle('minus', n < 0);
+          angka.classList.toggle('plus', n > 0);
+          angka.setAttribute('aria-label', `Etika ${n > 0 ? 'plus ' + n : n < 0 ? 'minus ' + Math.abs(n) : 'nol'}`);
+        }
+        const kurang = el.querySelector('[data-step="-1"]'), tambah = el.querySelector('[data-step="1"]');
+        if (kurang) kurang.toggleAttribute('disabled', n <= ETIKA_MIN);
+        if (tambah) tambah.toggleAttribute('disabled', n >= ETIKA_MAKS);
+        // Patokan: 0 = standar, minus hanya perilaku yang perlu ditegur, plus hanya yang
+        // menonjol. Baris yang sesuai angka sekarang disorot supaya terbaca saat menekan.
+        const arah = n < 0 ? 'minus' : n > 0 ? 'plus' : 'nol';
+        el.querySelectorAll('[data-patokan]').forEach(li => li.classList.toggle('aktif', li.dataset.patokan === arah));
+        // Seragam dan ID-Card sudah dipotong sendiri: Etika minus untuk hal yang sama
+        // berarti hukuman ganda. Hanya pengingat; perilaku lain tetap boleh ditegur.
+        const ganda = $('#etikaGanda');
+        if (ganda) ganda.hidden = !(n < 0 && (c.idCard === false || c.seragam === 'kurang' || c.seragam === 'tidak'));
       }
     });
-    const dipilih = c.teguran || [];
-    $$('[data-teguran]').forEach(b => {
-      const on = dipilih.includes(b.dataset.teguran);
-      // Pilihan lama hanya berlaku selama masih dipilih pada draf/koreksi ini.
-      // Reset formulir dan pelepasan pilihan tidak boleh menawarkannya lagi.
-      if (b.hasAttribute('data-nonaktif') && !on) { b.remove(); return; }
-      b.classList.toggle('active', on);
-      b.setAttribute('aria-pressed', String(on));
-      // Paling banyak 2 teguran per pengantaran: chip lain dikunci setelah 2 dipilih.
-      b.toggleAttribute('disabled', !on && dipilih.length >= TEGURAN_MAKS);
-    });
-    const list = $('#teguranList');
-    let lama = $('#teguranLamaNote');
-    if (!lama && list) {
-      lama = document.createElement('p'); lama.id = 'teguranLamaNote'; lama.className = 'help crit-help';
-      lama.setAttribute('role', 'status'); list.after(lama);
-    }
-    if (lama) {
-      lama.hidden = App.state.form.teguranLama?.guideId !== App.state.form.guide?.guideId || dipilih.length > 0 || !App.state.form.teguranLama;
-      lama.textContent = 'Penilaian lama memuat 1 teguran tanpa jenis. Pilih jenis tegurannya. Jika teguran itu keliru, konfirmasikan penghapusannya saat menyimpan.';
-    }
     for (const [sel, jenis] of [['#beratSelect', 'berat'], ['#apresiasiSelect', 'apresiasi']]) {
       const el = $(sel);
       if (!el) continue;
@@ -240,8 +242,6 @@
   }
 
   App.showPicked = function showPicked(g) {
-    // Draf koreksi yang dibuka kembali tidak boleh membawa teguran guide lain.
-    if (App.state.form.teguranLama && App.state.form.teguranLama.guideId !== g.guideId) delete App.state.form.teguranLama;
     const el = $('#guidePicked');
     el.dataset.guideId = g.guideId;
     el.innerHTML = `✓ ${esc(g.guideName)} · ${esc(g.guideId)} · ${esc(App.labelRegu(g.regu))}`;
@@ -300,11 +300,10 @@
     }
     const g = pilihan.guide;
     // ID-Card dan Seragam wajib dipilih: nilai 100 berarti "sudah dicek dan bersih",
-    // bukan "tidak diisi". Teguran boleh kosong.
+    // bukan "tidak diisi". Etika bawaan 0 (standar).
     const crit = App.state.form.crit;
     if (crit.idCard === null || crit.seragam === null) { App.toast('Pilih ID-Card dan Seragam dulu', 'warn', '⚠️'); return; }
     const k = App.konteksPenilaian();
-    if ((crit.teguran || []).length > TEGURAN_MAKS) { App.toast(`Paling banyak ${TEGURAN_MAKS} teguran per pengantaran`, 'warn', '⚠️'); return; }
     const catatanIsi = $('#catatan').value.trim();
     if (App.catatanWajib(crit) && catatanIsi.length < (k.catatanMin || 3)) {
       App.toast('Tulis catatan singkat untuk laporan ini', 'warn', '📝'); $('#catatan').focus(); return;
@@ -364,11 +363,6 @@
       }
     }
 
-    // Jenis teguran dari Etika lama tidak bisa ditebak. Penurunan jumlahnya ke
-    // nol harus disengaja, bukan efek samping membetulkan ID-Card/seragam.
-    if (App.state.form.teguranLama?.guideId === g.guideId && !(crit.teguran || []).length &&
-        !confirm('Penilaian lama memuat 1 teguran. Anda belum memilih jenisnya. Hapus teguran lama ini? Pilih Batal untuk mempertahankannya dan mengisi jenis teguran.')) return;
-
     const evaluation = {
       evaluationId: uuid(),
       guideId: g.guideId,
@@ -383,7 +377,7 @@
       criteria: {
         idCard: !!crit.idCard,
         seragam: crit.seragam,
-        teguran: (crit.teguran || []).slice(0, TEGURAN_MAKS),
+        etika: batasEtika(crit.etika),
         berat: crit.berat || '',
         apresiasi: crit.apresiasi || '',
       },

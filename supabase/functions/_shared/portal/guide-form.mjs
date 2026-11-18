@@ -42,6 +42,9 @@ function checkNewCriteria(c, errors) {
   if (!seragamValues.includes(c.seragam)) errors.push('criteria.seragam harus lengkap, kurang, atau tidak');
   const teguran = c.teguran ?? [];
   if (!Array.isArray(teguran) || teguran.length > scoringRules.teguranMaks || !teguran.every(code => typeof code === 'string' && findingCode.test(code)) || new Set(teguran).size !== teguran.length) errors.push(`criteria.teguran berisi paling banyak ${scoringRules.teguranMaks} jenis teguran yang berbeda`);
+  if (c.etika !== undefined && c.etika !== null) {
+    if (!(Number.isInteger(c.etika) && c.etika >= scoringRules.etikaMin && c.etika <= scoringRules.etikaMaks)) errors.push(`criteria.etika harus bilangan bulat ${scoringRules.etikaMin} sampai ${scoringRules.etikaMaks}`); else if (Array.isArray(teguran) && teguran.length) errors.push('criteria.etika dan criteria.teguran tidak boleh diisi bersamaan');
+  }
   if (!optionalCode(c.berat)) errors.push('criteria.berat tidak valid');
   if (!optionalCode(c.apresiasi)) errors.push('criteria.apresiasi tidak valid');
 }
@@ -72,6 +75,7 @@ const cleanItem = item => {
     idCard: c.idCard,
     seragam: c.seragam,
     teguran: [...c.teguran || []],
+    etika: Number.isInteger(c.etika) ? c.etika : null,
     berat: c.berat || null,
     apresiasi: c.apresiasi || null
   } : {

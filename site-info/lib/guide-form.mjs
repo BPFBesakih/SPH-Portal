@@ -18,7 +18,14 @@ function scoringContext(s){
   if(typeof p?.id!=='string'||typeof p.nama!=='string'||typeof p.keterangan!=='string')throw new Error('Invalid assessor context');
   return {id:p.id,nama:p.nama,keterangan:p.keterangan};
  });
- return {versi:s.versi,teguranMaks:s.teguranMaks,catatanMin:s.catatanMin,
+ // Rentang Etika hanya dikirim guide-form yang menyimpan Etika. Tanpanya formulir 2.3
+ // menahan kiriman di HP sampai server diperbarui.
+ let etika;
+ if(s.etika!==undefined){
+  if(!Number.isInteger(s.etika?.min)||!Number.isInteger(s.etika.max)||s.etika.min>=0||s.etika.max<=0)throw new Error('Invalid Etika context');
+  etika={min:s.etika.min,max:s.etika.max};
+ }
+ return {versi:s.versi,teguranMaks:s.teguranMaks,catatanMin:s.catatanMin,...(etika?{etika}:{}),
   teguran:s.teguran.map(finding),berat:s.berat.map(finding),apresiasi:s.apresiasi.map(finding),petugas,
   petunjuk:{idCard:s.petunjuk.idCard,seragam:s.petunjuk.seragam}};
 }

@@ -200,7 +200,7 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
 .petugasbox .bigselect{flex:1 1 100%}
 .petugasbox .chip{min-height:44px}
 
-/* Penghitung Review — tombol besar, tanpa mengetik */
+/* Penghitung Etika (−10 … +10) — tombol besar, tanpa mengetik */
 .stepper{display:flex;align-items:center;gap:0;border:2px solid var(--garis);
   border-radius:14px;overflow:hidden}
 .stepbtn{min-width:60px;min-height:52px;border:0;background:var(--putih);
@@ -211,6 +211,19 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
 .stepnilai{min-width:56px;min-height:52px;display:grid;place-items:center;
   font-size:22px;font-weight:800;background:var(--hijau-muda);color:var(--hijau-tua);
   border-left:2px solid var(--garis);border-right:2px solid var(--garis)}
+.stepnilai.minus{background:var(--merah-muda);color:var(--merah)}
+.stepnilai.plus{background:#FFF6E0;color:#7A5410}
+/* Patokan Etika selalu terlihat di bawah penghitung; baris yang sesuai angka sekarang
+   disorot, dan pengingat muncul bila Etika minus diberikan pada pengantaran yang
+   seragam/ID-Card-nya sudah dipotong (hukuman ganda). */
+.patokan{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;
+  font-size:14px;color:var(--abu)}
+.patokan li{padding:6px 10px;border-radius:10px;border-left:4px solid transparent;line-height:1.35}
+.patokan li.aktif{background:var(--hijau-muda);border-left-color:var(--hijau);color:var(--teks)}
+.patokan li[data-patokan="minus"].aktif{background:var(--merah-muda);border-left-color:var(--merah)}
+.patokan li[data-patokan="plus"].aktif{background:#FFF6E0;border-left-color:var(--emas)}
+.patokan-peringatan{margin:4px 0 0;padding:8px 10px;border-radius:10px;font-size:14px;font-weight:600;
+  background:var(--merah-muda);color:var(--merah)}
 .draft-note{font-size:14px;color:var(--hijau);text-align:center}
 
 /* ------------------------- Cards / Riwayat ------------------------- */

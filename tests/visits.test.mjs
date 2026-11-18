@@ -31,10 +31,10 @@ function fixture(t,{guides=baseGuides}={}){
 }
 // Bentuk setelah checkGuideItem (guide-form.mjs) — dipakai langsung oleh ingest.
 const clean=i=>{
-  const c=i.criteria,criteria=c.seragam!==undefined?{idCard:c.idCard,seragam:c.seragam,teguran:c.teguran||[],berat:c.berat||null,apresiasi:c.apresiasi||null}:{idCard:c.idCard,uniform:c.uniform,etika:c.etika??0};
+  const c=i.criteria,criteria=c.seragam!==undefined?{idCard:c.idCard,seragam:c.seragam,teguran:c.teguran||[],etika:Number.isInteger(c.etika)?c.etika:null,berat:c.berat||null,apresiasi:c.apresiasi||null}:{idCard:c.idCard,uniform:c.uniform,etika:c.etika??0};
   return {evaluationId:i.evaluationId,guideId:i.guideId,guideName:i.guideName,pos:i.pos,timestamp:i.timestamp,criteria,catatan:i.catatan||'',...(i.koreksiDari?{koreksiDari:i.koreksiDari}:{}),...(i.petugasId?{petugasId:i.petugasId}:{})};
 };
-// Isian cara baru ("100 − potongan").
+// Isian cara baru. Formulir 2.3 mengirim etika (−10..+10); tanpa etika = formulir 2.2 (teguran).
 const fakta=(extra={})=>({idCard:true,seragam:'lengkap',teguran:[],berat:null,apresiasi:null,...extra});
 const evaluation=(pos=1,extra={})=>({evaluationId:crypto.randomUUID(),guideId:'G-001',guideName:'Nama dari HP',pos,timestamp:iso(-30),criteria:{uniform:2,idCard:true,etika:1},catatan:'',...extra});
 const at=(ms,extra={})=>evaluation(extra.pos||1,{timestamp:new Date(ms).toISOString(),...extra});
@@ -150,26 +150,27 @@ test('guide registry: import from the old Guides tab, previews, errors, twins, a
   assert.deepEqual(all(f.db,"SELECT action FROM audit_events WHERE object_type='visit_guides' ORDER BY occurred_at,rowid").map(a=>a.action),['IMPORT','IMPORT','CREATE','CREATE','UPDATE']);
 });
 
-test('overview: penilaian cara lama dipetakan ke 100 − potongan; daftar penilaian berhalaman',t=>{
+test('overview: penilaian cara lama dipetakan ke 100 − potongan + Etika; daftar penilaian berhalaman',t=>{
   const f=fixture(t),pos1=f.link(1),pos3=f.link(3);
   const day=witaDate(Date.now()-2*DAY),base=Date.parse(`${day}T09:00:00+08:00`),slot=i=>base+i*20*60000;
   const series=(link,guideId,values)=>f.ingest(link,values.map(([uniform,idCard,etika],i)=>at(slot(i),{guideId,pos:link.admitted.pos,criteria:{uniform,idCard:Boolean(idCard),etika}})));
-  // G-001: satu tanpa ID, satu Uniform −1 (Etika −1 di baris itu = hukuman ganda, tidak dihitung).
+  // G-001: satu tanpa ID, satu Uniform −1; Etika dijumlah apa adanya (1+0+2−1+0+1 = 3).
   series(pos1,'G-001',[[2,1,1],[1,1,0],[1,0,2],[-1,1,-1],[2,1,0],[1,1,1]]);
-  series(pos3,'G-003',[[1,1,0],[1,1,-2],[1,1,0],[1,1,0],[1,1,0]]);   // Etika minus dengan seragam sesuai = 1 teguran
+  series(pos3,'G-003',[[1,1,0],[1,1,-2],[1,1,0],[1,1,0],[1,1,0]]);   // Etika −2, bukan lagi "1 teguran"
   series(pos1,'G-004',[[-1,0,-2],[-1,0,-1]]);
   series(pos3,'G-002',[[2,1,5]]);
   const o=f.route(f.users.leader,'overview','GET',{},`from=${shiftDate(day,-3)}&to=${witaDate(Date.now())}`);
-  const potongan=(1+2)*20+(1+2)*20+1*20;
-  assert.deepEqual(o.ringkasan,{pengantaran:14,nilai:100-potongan/14,persenId:1-3/14,persenSeragam:1-3/14,tanpaId:3,kurangLengkap:0,tidakBerseragam:3,teguran:1,potongan,
+  const potongan=(1+2)*20+(1+2)*20,etika=3-2-3+5;
+  // teguran: cacah lama (Etika minus dengan seragam sesuai) tetap dilaporkan untuk ruang kerja versi sebelumnya.
+  assert.deepEqual(o.ringkasan,{pengantaran:14,nilai:100-(potongan-etika)/14,persenId:1-3/14,persenSeragam:1-3/14,tanpaId:3,kurangLengkap:0,tidakBerseragam:3,etika,etikaRata:etika/14,teguran:1,potongan,
     guideDinilai:4,hariDinilai:1,guideAktif:4,berat:{disetujui:0,menunggu:0},apresiasi:{disetujui:0,menunggu:0},layak:null});
-  assert.deepEqual(o.perPos.map(p=>[p.pos,p.pengantaran,p.nilai,p.guideDinilai]),[[1,8,100-120/8,2],[3,6,100-20/6,2]]);
+  assert.deepEqual(o.perPos.map(p=>[p.pos,p.pengantaran,p.nilai,p.etika,p.guideDinilai]),[[1,8,100-120/8,0,2],[3,6,100+3/6,3,2]],'Etika plus boleh membawa nilai di atas 100');
   assert.deepEqual(o.perRegu.map(r=>[r.regu,r.pengantaran]),[['A1',6],['A2',1],['D1',7],['D2',2]]);
   // Minimal pengantaran mengikuti aturan bulan (bawaan 10): semua masih "belum cukup".
   assert.deepEqual([o.minimalPengantaran,o.diperingkat,o.belumCukup],[10,0,3]);
   const ids=list=>list.map(x=>x.guideId);
   assert.deepEqual(ids(o.peringkat.belumCukup),['G-001','G-003','G-004']);assert.deepEqual(ids(o.perGuide),['G-003','G-001','G-004'],'guide nonaktif tidak diperingkat');
-  const g1=o.perGuide.find(g=>g.guideId==='G-001');assert.deepEqual([g1.antar,g1.hari,g1.tanpaId,g1.tidakBerseragam,g1.teguran,g1.potongan],[6,1,1,1,0,40]);
+  const g1=o.perGuide.find(g=>g.guideId==='G-001');assert.deepEqual([g1.antar,g1.hari,g1.tanpaId,g1.tidakBerseragam,g1.teguran,g1.potongan,g1.etika,g1.nilai],[6,1,1,1,0,40,3,100-(40-3)/6]);
   assert.equal(g1.status,undefined,'status reward hanya untuk satu bulan kalender');
   assert.equal(o.peringkat.review,undefined,'REVIEW belum dipakai');
   assert.throws(()=>f.route(f.users.it,'overview'),e=>e.status===403);
@@ -179,8 +180,8 @@ test('overview: penilaian cara lama dipetakan ke 100 − potongan; daftar penila
   assert.equal(q('limit=5&offset=10').items.length,4);
   assert.equal(q('pos=3').total,6);assert.equal(q('regu=D2').total,2);assert.equal(q('guide=G-001').total,6);assert.equal(q('status=diganti').total,0);
   assert.deepEqual(Object.keys(page.items[0]).sort(),['apresiasi','berat','catatan','digantiOleh','etika','evaluationId','guideId','guideName','idCard','koreksiDari','nilai','petugas','pos','receivedAt','regu','review','seragam','status','tanggal','teguran','teguranN','timestamp','uniform','versi']);
-  assert.deepEqual(q('guide=G-004').items.map(r=>[r.versi,r.seragam,r.nilai]),[[1,'tidak',60],[1,'tidak',60]]);
-  assert.deepEqual(q('guide=G-003').items.map(r=>r.nilai).sort((a,b)=>a-b),[80,100,100,100,100]);
+  assert.deepEqual(q('guide=G-004').items.map(r=>[r.versi,r.seragam,r.etika,r.nilai]),[[1,'tidak',-1,59],[1,'tidak',-2,58]]);
+  assert.deepEqual(q('guide=G-003').items.map(r=>r.nilai).sort((a,b)=>a-b),[98,100,100,100,100]);
   assert.throws(()=>q('pos=2'),e=>e.status===422);assert.throws(()=>f.route(f.users.hr,'records'),e=>e.status===403);
 });
 
@@ -195,13 +196,17 @@ test('nilai 100 − potongan: contoh usulan 97,5, layak reward, pelanggaran bera
     assert.equal(r.accepted.length,1,JSON.stringify(r.rejected));});
   // Contoh di usulan: 20 pengantaran, 2 kali tanpa ID, 1 kali kurang lengkap → 100 − (40 + 10) ÷ 20 = 97,5.
   send(pos1,'G-001',Array.from({length:20},(_,i)=>fakta({idCard:i>1,seragam:i===2?'kurang':'lengkap'})));
-  // 12 pengantaran, satu dengan 1 teguran dan satu dengan 2 teguran → 100 − 60 ÷ 12 = 95 (tepat ambang).
-  send(pos3,'G-003',Array.from({length:12},(_,i)=>fakta({teguran:i===0?['merokok-hp']:i===1?['tamu-tanpa-kain','antrean']:[]})));
+  // 12 pengantaran: Etika lima kali −10 dan sekali −8, ditambah satu penilaian formulir 2.2 dengan
+  // 2 teguran (dihitung Etika −2) → 100 − 60 ÷ 12 = 95 (tepat ambang).
+  send(pos3,'G-003',Array.from({length:12},(_,i)=>i===1?fakta({teguran:['tamu-tanpa-kain','antrean']}):fakta({etika:i>=2&&i<7?-10:i===7?-8:0})));
   send(pos1,'G-004',Array.from({length:10},(_,i)=>fakta({berat:i===4?'pungutan':null})),100);
   send(pos3,'G-005',Array.from({length:10},(_,i)=>fakta({apresiasi:i===3?'dipuji':null})),100);
   send(pos1,'G-006',Array.from({length:10},()=>fakta()),200);
   const saved=one(f.db,"SELECT * FROM visit_evaluations WHERE guide_id='G-003' AND teguran_n=2");
   assert.deepEqual([saved.versi,saved.seragam,saved.uniform,saved.etika,saved.teguran],[2,'lengkap',1,-2,'tamu-tanpa-kain,antrean'],'kolom lama diisi padanannya');
+  const etikaRow=one(f.db,"SELECT * FROM visit_evaluations WHERE guide_id='G-003' AND etika=-8");
+  assert.deepEqual([etikaRow.versi,etikaRow.etika,etikaRow.teguran,etikaRow.teguran_n],[2,-8,'',0],'Etika formulir 2.3 disimpan apa adanya');
+  assert.equal(one(f.db,"SELECT count(*) AS n FROM visit_evaluations WHERE guide_id='G-003' AND etika=-10").n,5);
   assert.equal(one(f.db,"SELECT petugas_nama FROM visit_evaluations WHERE guide_id='G-001' LIMIT 1").petugas_nama,'Petugas Pos Satu');
   const overview=()=>f.route(f.users.leader,'overview','GET',{},`from=${month}-01&to=${monthLastDay(month)}`);
   let o=overview(),g=id=>o.perGuide.find(x=>x.guideId===id);
@@ -217,8 +222,9 @@ test('nilai 100 − potongan: contoh usulan 97,5, layak reward, pelanggaran bera
   assert.deepEqual([g('G-004').status,g('G-004').alasan],['gugur','Pelanggaran berat terverifikasi']);assert.equal(o.ringkasan.layak,4);
   assert.deepEqual(o.peringkat.nilaiTertinggi.map(x=>[x.guideId,x.peringkat]),[['G-005',1],['G-004',2],['G-006',2],['G-001',4],['G-003',5]],'nilai sama: apresiasi penentu, lalu setara');
   assert.deepEqual(o.peringkat.beratTerverifikasi.map(x=>x.guideId),['G-004']);
-  assert.deepEqual(o.peringkat.tanpaIdTerbanyak.map(x=>x.guideId),['G-001']);assert.deepEqual(o.peringkat.teguranTerbanyak.map(x=>x.guideId),['G-003']);
-  assert.deepEqual(o.perPetugas.map(p=>[p.petugas,p.pengantaran]),[[null,22],['Petugas Pos Satu',40]].sort((a,b)=>b[1]-a[1]));
+  assert.deepEqual(o.peringkat.tanpaIdTerbanyak.map(x=>x.guideId),['G-001']);assert.deepEqual(o.peringkat.etikaTerendah.map(x=>[x.guideId,x.etikaRata]),[['G-003',-5]]);
+  assert.deepEqual(o.peringkat.teguranTerbanyak.map(x=>x.guideId),['G-003'],'cacah teguran formulir 2.2 tetap dilaporkan');
+  assert.deepEqual(o.perPetugas.map(p=>[p.petugas,p.pengantaran,p.etika]),[[null,22,-60],['Petugas Pos Satu',40,0]].sort((a,b)=>b[1]-a[1]));
   // Ambang dan bobot mengikuti aturan BULAN itu: aturan baru untuk bulan sesudahnya tidak mengubahnya.
   run(f.db,"INSERT INTO visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_at) VALUES(?,10,10,20,20,98,10,?)",month,now());
   o=overview();assert.equal(g('G-001').nilai,98.5);assert.equal(g('G-001').status,'layak');assert.deepEqual([g('G-003').status,g('G-003').alasan],['bawah','Nilai di bawah ambang 98']);
@@ -235,8 +241,14 @@ test('isian cara baru diperiksa: jenis temuan, catatan wajib, petugas terdaftar,
   assert.deepEqual(checkGuideItem(item(fakta({berat:'Bukan Kode!'})),1),['criteria.berat tidak valid']);
   assert.deepEqual(checkGuideItem(item(fakta(),{petugasId:'x'}),1),['petugasId tidak valid']);
   assert.deepEqual(checkGuideItem(item(fakta()),1),[]);assert.deepEqual(checkGuideItem(item({uniform:1,idCard:true,etika:0}),1),[],'cara lama tetap diterima');
-  const admitted=admitGuideForm(f.db,'submit',{token:link.token,evaluations:[item(fakta({teguran:['antrean']}),{petugasId:crypto.randomUUID().toUpperCase()})]});
-  assert.deepEqual(admitted.items[0].criteria,{idCard:true,seragam:'lengkap',teguran:['antrean'],berat:null,apresiasi:null});assert(admitted.items[0].petugasId);
+  // Etika formulir 2.3: bilangan bulat −10..+10, tidak bersama teguran. Cara lama tetap −5..+5.
+  for(const etika of [-10,0,10])assert.deepEqual(checkGuideItem(item(fakta({etika})),1),[],`Etika ${etika}`);
+  for(const etika of [-11,11,1.5,'2'])assert.deepEqual(checkGuideItem(item(fakta({etika})),1),['criteria.etika harus bilangan bulat -10 sampai 10'],`Etika ${etika}`);
+  assert.deepEqual(checkGuideItem(item(fakta({etika:-1,teguran:['antrean']})),1),['criteria.etika dan criteria.teguran tidak boleh diisi bersamaan']);
+  assert.match(checkGuideItem(item({uniform:1,idCard:true,etika:6}),1).join(),/-5 sampai 5/);
+  const admitted=admitGuideForm(f.db,'submit',{token:link.token,evaluations:[item(fakta({teguran:['antrean']}),{petugasId:crypto.randomUUID().toUpperCase()}),item(fakta({etika:-7}))]});
+  assert.deepEqual(admitted.items[0].criteria,{idCard:true,seragam:'lengkap',teguran:['antrean'],etika:null,berat:null,apresiasi:null});assert(admitted.items[0].petugasId);
+  assert.deepEqual(admitted.items[1].criteria,{idCard:true,seragam:'lengkap',teguran:[],etika:-7,berat:null,apresiasi:null});
   // Aturan terima: jenis harus dikenal portal dan sesuai golongannya; catatan wajib.
   const p1={admitted:{id:link.link.id,pos:1}};
   const rejected=(criteria,extra={})=>f.ingest(p1,[at(t0,{criteria,...extra})]).rejected[0];
@@ -267,11 +279,13 @@ test('aturan nilai: hanya untuk bulan depan, dijaga ≤ 100, diaudit; jenis temu
   assert.equal(state.jenis.filter(x=>x.jenis==='teguran').length,5);assert(state.jenis.filter(x=>x.jenis!=='teguran').every(x=>x.perlu_catatan));
   const rule={pot_id:25,pot_kurang:10,pot_tidak:25,pot_teguran:20,ambang:96,minimal:12};
   assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_ini}),e=>e.status===409&&/bulan depan/.test(e.message));
-  assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan,pot_teguran:26}),e=>e.status===422&&/lebih dari 100/.test(e.message));
+  assert.deepEqual([state.aturan.batas.etika_min,state.aturan.batas.etika_maks],[-10,10]);
+  // Tanpa ID + tidak berseragam paling banyak 90, supaya Etika −10 tidak membawa nilai di bawah 0.
+  assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan,pot_id:50,pot_tidak:41}),e=>e.status===422&&/paling banyak 90/.test(e.message));
   assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan,pot_kurang:30,pot_tidak:20}),e=>e.status===422);
   assert.throws(()=>f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan,minimal:''}),e=>e.status===422);
   assert.throws(()=>f.route(leader,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan}),e=>e.status===403);
-  const saved=f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan});assert.equal(saved.pot_id,25);
+  const saved=f.route(m,'scoring/rule','POST',{...rule,berlaku_mulai:state.aturan.bulan_depan});assert.equal(saved.pot_id,25);assert.equal(saved.pot_teguran,0,'potongan teguran tidak dipakai lagi');
   let after=f.route(m,'scoring','GET');assert.equal(after.aturan.berlaku.pot_id,20,'bulan berjalan tidak berubah');assert.equal(after.aturan.bulan_depan_aturan.pot_id,25);
   assert.deepEqual(after.aturan.rencana.map(r=>r.berlaku_mulai),[state.aturan.bulan_depan]);
   assert.throws(()=>f.route(m,'scoring/rule-delete','POST',{berlaku_mulai:'2026-01'}),e=>e.status===409);
@@ -423,16 +437,19 @@ test('sheet copy: kolom N–T untuk cara baru; tab 13 kolom dilebarkan saat ditu
   let r=await sync(f,google,{retention:'skip'});assert.equal(r.ok,true,r.error);
   const oldTab=google.tab(oldMonth);oldTab.columnCount=13;for(const row of Object.values(oldTab.cells))row.length=Math.min(row.length,13);
   // Cara baru hari ini: kolom versi, seragam, teguran, pelanggaranBerat, apresiasi, petugas, nilai.
+  // a = formulir 2.3 (Etika), b = pelanggaran berat, d = formulir 2.2 (teguran, dihitung Etika −1 per teguran).
   const t0=Date.now()-2*3600000,month=witaDate(t0).slice(0,7);
-  const a=at(t0,{criteria:fakta({seragam:'kurang',teguran:['antrean'],idCard:false}),petugasId:petugas.id});
-  const b=at(t0,{guideId:'G-004',criteria:fakta({berat:'pungutan'}),catatan:'Meminta uang di gerbang.'});
-  f.ingest(pos1,[a,b]);
+  const a=at(t0,{criteria:fakta({seragam:'kurang',etika:-3,idCard:false}),petugasId:petugas.id});
+  const b=at(t0,{guideId:'G-004',criteria:fakta({berat:'pungutan',etika:2}),catatan:'Meminta uang di gerbang.'});
+  const d=at(t0,{guideId:'G-005',criteria:fakta({teguran:['antrean']})});
+  f.ingest(pos1,[a,b,d]);
   r=await sync(f,google,{retention:'skip'});assert.equal(r.ok,true,r.error);
   assert.deepEqual(google.tab(month).cells[1],[...visitSheetHeader]);assert.equal(visitSheetHeader.length,20);
   const rowOf=id=>google.rows(month).find(x=>x[0]===id);
-  assert.deepEqual(rowOf(a.evaluationId).slice(5,9),[-1,0,0,-1],'kolom lama berisi padanannya');
-  assert.deepEqual(rowOf(a.evaluationId).slice(13),[2,'Kurang lengkap','antrean','','','Ketut Petugas',100-20-10-20]);
-  assert.deepEqual(rowOf(b.evaluationId).slice(13),[2,'Lengkap','','pungutan','','',100]);
+  assert.deepEqual(rowOf(a.evaluationId).slice(5,9),[-1,0,0,-3],'kolom lama berisi padanannya; kolom etika berisi Etika');
+  assert.deepEqual(rowOf(a.evaluationId).slice(13),[2,'Kurang lengkap','','','','Ketut Petugas',100-20-10-3]);
+  assert.deepEqual(rowOf(b.evaluationId).slice(13),[2,'Lengkap','','pungutan','','',102],'Etika plus menambah nilai');
+  assert.deepEqual([rowOf(d.evaluationId)[8],...rowOf(d.evaluationId).slice(13)],[-1,2,'Lengkap','antrean','','','',99]);
   // Koreksi penilaian cara lama di tab 13 kolom: tab dilebarkan, kepala N–T ditulis, baris ditulis ulang utuh.
   if(oldMonth!==month){
    const old=one(f.db,"SELECT * FROM visit_evaluations WHERE guide_id='G-003'");
@@ -445,11 +462,42 @@ test('sheet copy: kolom N–T untuk cara baru; tab 13 kolom dilebarkan saat ditu
   r=await sync(f,google,{retention:'force'});assert.equal(r.ok,true,r.error);assert.equal(r.verified,1);assert.equal(r.deleted,1);
   const daily=one(f.db,"SELECT * FROM visit_daily_totals WHERE guide_id='G-003'");
   assert.deepEqual([daily.antar,daily.n_id,daily.n_kurang,daily.n_tidak,daily.n_teguran],[1,1,0,1,0],'temuan cara lama ikut dilipat');
-  // Baris cara baru yang dilipat membawa cacah temuannya.
-  const fold=Date.now()-45*DAY,c=at(fold,{guideId:'G-005',criteria:fakta({seragam:'tidak',teguran:['antrean','merokok-hp']}),petugasId:petugas.id});
-  f.ingest(pos1,[c],fold+60000);r=await sync(f,google,{retention:'force'});assert.equal(r.ok,true,r.error);
-  const daily5=one(f.db,"SELECT * FROM visit_daily_totals WHERE guide_id='G-005'");assert.deepEqual([daily5.n_tidak,daily5.n_teguran,daily5.n_id],[1,2,0]);
-  const day=witaDate(fold),o=visitOverview(f.db,day,day);assert.equal(o.ringkasan.nilai,100-20-40,'nilai hari yang sudah dilipat');
+  // Baris cara baru yang dilipat membawa cacah temuan dan jumlah Etikanya.
+  const fold=Date.now()-45*DAY,c=at(fold,{guideId:'G-005',criteria:fakta({seragam:'tidak',etika:4}),petugasId:petugas.id});
+  const e=at(fold+30*60000,{guideId:'G-005',criteria:fakta({teguran:['antrean','merokok-hp']})});
+  f.ingest(pos1,[c,e],fold+3600000);r=await sync(f,google,{retention:'force'});assert.equal(r.ok,true,r.error);
+  const daily5=one(f.db,"SELECT * FROM visit_daily_totals WHERE guide_id='G-005' AND day=?",witaDate(fold));
+  assert.deepEqual([daily5.antar,daily5.n_tidak,daily5.n_teguran,daily5.n_id,daily5.etika],[2,1,2,0,4-2]);
+  const day=witaDate(fold),o=visitOverview(f.db,day,day);assert.equal(o.ringkasan.nilai,100-(20-2)/2,'nilai hari yang sudah dilipat');
+  assert.equal(one(f.db,"SELECT count(*) AS n FROM visit_evaluations WHERE wita_date=?",day).n,0,'rinciannya sudah dilipat');
+});
+
+test('Etika updates the scores already copied to Sheets, including folded rows, without rewriting other cells',async t=>{
+ const f=fixture(t),pos=f.link(1),google=createFakeGoogle(),recent=Date.now()-3600000,older=recent-45*DAY;
+ const examples=[[recent,'G-001'],[older,'G-003']];
+ for(const [stamp,guideId] of examples){
+  const item=at(stamp,{guideId,criteria:fakta({teguran:['antrean','merokok-hp']})});
+  assert.equal(f.ingest(pos,[item],stamp+60000).accepted.length,1);
+ }
+ assert.equal((await sync(f,google,{retention:'force'})).deleted,1);
+
+ // Simulate an existing copy produced by the prior scoring version.
+ for(const [stamp] of examples){
+  const title=witaDate(stamp).slice(0,7);
+  google.tab(title).cells[2][19]=60;
+ }
+ run(f.db,'UPDATE visit_sheet_tabs SET etika_next_row=2');
+ const result=await sync(f,google,{retention:'skip'});
+ assert.equal(result.ok,true,result.error);
+ assert.equal(result.etika_updated,2);
+ assert.equal(result.status.etika_pending_tabs,0);
+ assert.equal(result.rewritten,0);
+ for(const [stamp,guideId] of examples){
+  const day=witaDate(stamp),row=google.tab(day.slice(0,7)).cells[2];
+  assert.deepEqual([row[3],row[8],row[15],row[19]],[guideId,-2,'antrean,merokok-hp',98]);
+  assert.equal(row[19],visitOverview(f.db,day,day).ringkasan.nilai);
+ }
+ assert.equal((await sync(f,google,{retention:'skip'})).etika_updated,0);
 });
 
 test('nothing is deleted while the Google copy is unavailable, and the connection check explains why without creating files',async t=>{
@@ -498,6 +546,7 @@ test('public form over HTTP: context from Data Guide, receipts, outcome log with
   // Bahan formulir cara baru: jenis temuan aktif, petugas aktif, petunjuk — tanpa bobot potongan.
   assert.deepEqual([context.penilaian.versi,context.penilaian.teguranMaks,context.penilaian.teguran.length,context.penilaian.berat.length,context.penilaian.apresiasi.length],[2,2,5,5,3]);
   assert.match(context.penilaian.petunjuk.idCard,/Terpasang/);assert.equal(JSON.stringify(context.penilaian).includes('pot_'),false);
+  assert.deepEqual(context.penilaian.etika,{min:-10,max:10},'tanda bahwa server menyimpan Etika formulir 2.3');
   const page=await fetch(`${s.origin}/penilaian-guide/`);assert.equal(page.headers.get('referrer-policy'),'no-referrer');assert.match(page.headers.get('x-robots-tag'),/noindex/);
   const good=evaluation(1),unknown=evaluation(1,{guideId:'G-999'}),wrong=evaluation(3);
   let r=await s.form('submit',{token:link.token,evaluations:[good,unknown,wrong]});assert.equal(r.status,200);let receipt=await r.json();
@@ -508,9 +557,14 @@ test('public form over HTTP: context from Data Guide, receipts, outcome log with
   const fresh=evaluation(1,{guideId:'G-003',criteria:fakta({teguran:['antrean']})});
   receipt=await (await s.form('submit',{token:link.token,evaluations:[fresh]})).json();assert.equal(receipt.accepted[0].evaluationId,fresh.evaluationId);
   assert.equal(one(s.db,'SELECT versi FROM visit_evaluations WHERE id=?',fresh.evaluationId).versi,2);
+  // Formulir 2.3 lewat HTTP: Etika −10..+10 disimpan apa adanya; di luar rentang ditolak.
+  const etika=evaluation(1,{guideId:'G-004',criteria:fakta({etika:9})}),tooHigh=evaluation(1,{guideId:'G-005',criteria:fakta({etika:11})});
+  receipt=await (await s.form('submit',{token:link.token,evaluations:[etika,tooHigh]})).json();
+  assert.deepEqual(receipt.accepted.map(a=>a.evaluationId),[etika.evaluationId]);assert.equal(receipt.rejected[0].evaluationId,tooHigh.evaluationId);
+  assert.deepEqual({...one(s.db,'SELECT versi,etika,teguran FROM visit_evaluations WHERE id=?',etika.evaluationId)},{versi:2,etika:9,teguran:''});
   await Promise.all([...s.app.sheetTasks]);
   const log=all(s.db,'SELECT * FROM guide_form_submissions ORDER BY outcome,reason');
-  assert.deepEqual(log.map(l=>[l.outcome,l.reason]),[['ACCEPTED',null],['ACCEPTED',null],['DUPLICATE',null],['REJECTED','GUIDE'],['REJECTED','POS']]);
+  assert.deepEqual(log.map(l=>[l.outcome,l.reason]),[['ACCEPTED',null],['ACCEPTED',null],['ACCEPTED',null],['DUPLICATE',null],['REJECTED','GUIDE'],['REJECTED','POS'],['REJECTED','VALIDASI']]);
   assert(log.every(l=>l.ip_hmac===null));assert(!JSON.stringify(log).includes('Guide Fiktif'));
   assert.equal((await s.form('submit',{token:link.token,evaluations:'x'})).status,400);
   assert.equal((await s.form('submit',{token:link.token,evaluations:[evaluation(1,{catatan:'x'.repeat(30000)})]})).status,413);

@@ -98,6 +98,7 @@
     </div>
 
     <div id="homeDitahan" class="notice" hidden></div>
+    <div id="serverNotice" class="notice" role="status" hidden></div>
     <div id="jamNotice" class="notice" hidden></div>
 
     <button id="btnSyncNow" class="bigbutton ghost">
@@ -186,10 +187,20 @@
           <div id="petunjukSeragam" class="help crit-help"></div>
         </div>
 
-        <div class="criterion criterion-list" data-crit="teguran">
-          <div class="crit-head"><span class="crit-icon">🤝</span><span class="crit-name">Teguran perilaku</span></div>
-          <div class="help crit-help">Biarkan kosong bila tidak ada. Pilih paling banyak 2 jenis.</div>
-          <div id="teguranList" class="chipgrid" role="group" aria-label="Jenis teguran"></div>
+        <div class="criterion" data-crit="etika">
+          <div class="crit-head"><span class="crit-icon">🤝</span><span class="crit-name">Etika</span></div>
+          <div class="stepper" role="group" aria-label="Nilai Etika" aria-describedby="etikaPatokan">
+            <button type="button" class="stepbtn" data-step="-1" aria-label="Kurangi Etika">−</button>
+            <span id="etikaNilai" class="stepnilai" aria-live="polite">0</span>
+            <button type="button" class="stepbtn" data-step="1" aria-label="Tambah Etika">+</button>
+          </div>
+          <!-- Patokan Etika (pemilik, 18 November 2026). Baris yang sesuai angka sekarang disorot. -->
+          <ul id="etikaPatokan" class="patokan crit-help" aria-label="Patokan Etika">
+            <li data-patokan="nol"><strong>0 = standar.</strong> Tertib dan tidak ada catatan khusus: biarkan 0.</li>
+            <li data-patokan="minus"><strong>Minus (sampai −10)</strong> hanya untuk perilaku yang perlu ditegur, mis. meninggalkan tamu atau main HP saat memandu. Seragam dan ID-Card sudah dinilai di atas, jangan dikurangi lagi di sini.</li>
+            <li data-patokan="plus"><strong>Plus (sampai +10)</strong> hanya untuk yang benar-benar menonjol, mis. menolong wisatawan. Rapi dan tertib termasuk standar.</li>
+          </ul>
+          <p id="etikaGanda" class="patokan-peringatan crit-help" role="status" hidden>Seragam atau ID-Card pengantaran ini sudah dipotong. Kurangi Etika hanya bila ada perilaku lain yang perlu ditegur.</p>
         </div>
 
         <details id="laporanBox" class="laporan">
@@ -330,7 +341,7 @@
     <div class="about">
       <div class="logo big">🛕</div>
       <h2>Penilaian Guide Kawasan Besakih</h2>
-      <p>Formulir pencatatan kepatuhan guide di pos pemeriksaan: <strong>ID‑Card</strong>, <strong>Seragam</strong>, dan <strong>teguran perilaku</strong>. Petugas hanya mencatat yang terlihat; nilainya dihitung portal (100 − potongan). Bagian dari SPH-Portal BP Besakih.</p>
+      <p>Formulir pencatatan kepatuhan guide di pos pemeriksaan: <strong>ID‑Card</strong>, <strong>Seragam</strong>, dan <strong>Etika</strong>. Petugas mencatat yang terlihat; nilainya dihitung portal (100 − potongan + Etika). Bagian dari SPH-Portal BP Besakih.</p>
       <ul class="checklist">
         <li>Bekerja penuh tanpa jaringan</li>
         <li>Data tersimpan aman di perangkat</li>

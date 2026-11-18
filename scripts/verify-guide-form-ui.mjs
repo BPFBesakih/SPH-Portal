@@ -5,8 +5,10 @@
 // Portal SQLite di memori + Google Drive/Sheets TIRUAN (scripts/fake-google-sheets.mjs),
 // data guide fiktif. Memeriksa skenario UJI-01/02/03/05/10/13/17/27 PRD di HP pos,
 // daftar saran nama guide (nama + ID · regu, filter, keyboard, nama kembar),
-// isian "100 − potongan" (ID, seragam, teguran ≤ 2, laporan berat dengan catatan wajib,
-// nama petugas sekali per shift), Verifikasi dan Aturan Nilai di ruang kerja,
+// isian "100 − potongan + Etika" (ID, seragam, Etika −10…+10 lewat tombol dengan patokan dan pengingat hukuman ganda, laporan berat
+// dengan catatan wajib, nama petugas sekali per shift), koreksi/draf dari formulir lama,
+// penilaian Etika yang ditahan di HP selama server belum menyimpan Etika,
+// Verifikasi dan Aturan Nilai di ruang kerja,
 // salinan spreadsheet di latar belakang, serta Data Guide (impor .csv), Dashboard,
 // migrasi awal NilaiGuide (pratinjau, putus lalu lanjutkan, batalkan), dan Tautan Pos
 // (periksa koneksi, sinkronkan) di portal.
@@ -18,7 +20,7 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:net';
-import {openDb,insert,one,all,run,now} from '../lib/db.mjs';
+import {openDb,insert,one,all,now} from '../lib/db.mjs';
 import {seedPermissions,digest,hashPasswordSync} from '../lib/auth.mjs';
 import {guidePosts} from '../lib/guide-form.mjs';
 import {visitDayRows,visitOverview} from '../lib/visit-data.mjs';
@@ -53,6 +55,11 @@ try{
   const pilihSaran=async name=>{const ids=(await saran()).filter(r=>r.nama===name).map(r=>r.id);assert.equal(ids.length,1,`satu saran bernama ${name}`);await page.click(`#guideSaran [data-saran="${ids[0]}"]`);};
   // Ketik sebagian nama lalu pilih dari daftar, seperti petugas di pos.
   const pick=async(name,seragam='lengkap',id='1')=>{await page.evaluate(()=>App.go('nilai'));await page.fill('#guideInput',name.slice(0,-1));await pilihSaran(name);await page.click(`.criterion[data-crit="idCard"] .seg[data-val="${id}"]`);await page.click(`.criterion[data-crit="seragam"] .seg[data-val="${seragam}"]`);};
+  // Etika diatur dengan tombol − / + seperti di HP pos, sampai angkanya tercapai.
+  const etikaBtn=step=>`[data-crit="etika"] .stepbtn[data-step="${step}"]`;
+  const patokanAktif=()=>page.$$eval('#etikaPatokan li.aktif',els=>els.map(e=>e.dataset.patokan));
+  const pengingatGanda=()=>page.$eval('#etikaGanda',e=>!e.hidden);
+  const aturEtika=async target=>{for(let i=0;i<25;i++){const n=await page.evaluate(()=>App.state.form.crit.etika);if(n===target)return;await page.click(etikaBtn(n<target?1:-1));}throw new Error(`Etika tidak mencapai ${target}`);};
   await page.goto(base+'/penilaian-guide/');await page.waitForTimeout(800);await page.click('#tutSkip').catch(()=>{});
   await check('UJI-02 tanpa token hanya petunjuk tautan, tanpa daftar guide',async()=>{assert(await page.isVisible('#view-tautan'));assert.equal(await page.evaluate(()=>App.state.guides.length),0);assert.equal((await saran()).length,0);});
   await page.goto(base+'/penilaian-guide/#'+tokens[1]);await page.waitForFunction(()=>App.state.guides.length>30);
@@ -87,36 +94,55 @@ try{
     assert.equal(await page.inputValue('#guideInput'),'Guide Contoh D1-02');assert.equal(await page.evaluate(()=>App.state.form.guide.guideId),'G-022');
     assert(await page.isHidden('#guideSaran'));assert.equal(await page.evaluate(()=>window.__kirim),0);
   });
-  await check('Isian 100 − potongan: daftar teguran dari portal, paling banyak 2; ID dan seragam wajib; nama petugas sekali per shift',async()=>{
+  await check('Isian 100 − potongan + Etika: Etika −10…+10 lewat tombol, bawaan 0, tanpa catatan wajib; ID dan seragam wajib; nama petugas sekali per shift',async()=>{
     await page.evaluate(()=>App.go('nilai'));
-    assert.equal(await page.$$eval('#teguranList [data-teguran]',els=>els.length),5);assert.match(await page.textContent('#petunjukId'),/Terpasang = kartu ID resmi/);
+    assert.equal(await page.locator('#teguranList, [data-teguran]').count(),0,'daftar teguran tidak ada lagi');
+    assert.equal(await page.textContent('#etikaNilai'),'0');
+    // Patokan Etika selalu terlihat; baris "0 = standar" disorot selama angkanya 0.
+    const patokan=await page.textContent('#etikaPatokan');
+    assert.match(patokan,/0 = standar/);assert.match(patokan,/Minus \(sampai −10\) hanya untuk perilaku yang perlu ditegur/);assert.match(patokan,/Seragam dan ID-Card sudah dinilai di atas, jangan dikurangi lagi/);
+    assert.match(patokan,/Plus \(sampai \+10\) hanya untuk yang benar-benar menonjol/);assert.match(patokan,/Rapi dan tertib termasuk standar/);
+    assert.deepEqual(await patokanAktif(),['nol']);assert.equal(await pengingatGanda(),false);
+    const tutorial=await page.evaluate(()=>App.TUT.map(t=>t.b).join(' '));assert.match(tutorial,/Etika: 0 = standar/);assert.doesNotMatch(tutorial,/Teguran/);
+    assert.match(await page.textContent('#petunjukId'),/Terpasang = kartu ID resmi/);
     assert.equal(await page.$$eval('#beratSelect option',o=>o.length),6);assert(await page.isVisible('#petugasSelect'),'nama petugas diminta');
     await page.fill('#guideInput','Guide Contoh A1-0');await pilihSaran('Guide Contoh A1-03');await page.click('#btnSave');
     assert.match(await page.textContent('#toastWrap'),/Pilih ID-Card dan Seragam/);
     await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');await page.click('.criterion[data-crit="seragam"] .seg[data-val="kurang"]');
-    for(const kode of ['antrean','merokok-hp'])await page.click(`[data-teguran="${kode}"]`);
-    assert.equal(await page.$eval('[data-teguran="meninggalkan-tamu"]',b=>b.disabled),true,'chip ketiga dikunci');
-    await page.click('[data-teguran="merokok-hp"]');assert.deepEqual(await page.evaluate(()=>App.state.form.crit.teguran),['antrean']);
+    // Di batas bawah/atas tombolnya terkunci, jadi angkanya tidak pernah melewati −10/+10.
+    await aturEtika(-10);assert.equal(await page.textContent('#etikaNilai'),'−10');assert(await page.isDisabled(etikaBtn(-1)));assert(await page.$eval('#etikaNilai',e=>e.classList.contains('minus')));
+    // Seragam kurang lengkap sudah dipotong: Etika minus memunculkan pengingat hukuman ganda.
+    assert.deepEqual(await patokanAktif(),['minus']);assert.equal(await pengingatGanda(),true);assert.match(await page.textContent('#etikaGanda'),/sudah dipotong/);
+    await aturEtika(10);assert.equal(await page.textContent('#etikaNilai'),'+10');assert(await page.isDisabled(etikaBtn(1)));assert(!await page.isDisabled(etikaBtn(-1)));assert(await page.$eval('#etikaNilai',e=>e.classList.contains('plus')));
+    assert.deepEqual(await patokanAktif(),['plus']);assert.equal(await pengingatGanda(),false);
+    await aturEtika(-2);assert.equal(await page.textContent('#etikaNilai'),'−2');assert.equal(await page.getAttribute('#etikaNilai','aria-label'),'Etika minus 2');
+    assert.deepEqual(await patokanAktif(),['minus']);assert.equal(await pengingatGanda(),true);
+    // Pengingat mengikuti seragam: dengan seragam lengkap dan ID terpasang, Etika minus tanpa pengingat.
+    await page.click('.criterion[data-crit="seragam"] .seg[data-val="lengkap"]');assert.equal(await pengingatGanda(),false);
+    await page.click('.criterion[data-crit="seragam"] .seg[data-val="kurang"]');assert.equal(await pengingatGanda(),true);
+    assert.equal(await page.evaluate(()=>App.catatanWajib()),false,'Etika boleh tanpa catatan');
     await page.click('#btnSave');assert.match(await page.textContent('#toastWrap'),/Pilih nama petugas/);assert.equal(rows(),0);
     await page.selectOption('#petugasSelect',petugasUji.id);await page.waitForSelector('#petugasBox [data-ganti-petugas]');
     assert.match(await page.textContent('#petugasBox'),/Petugas Uji Satu · berlaku sampai/);
   });
   await page.fill('#catatan','=IMPORTDATA("x")');await page.dispatchEvent('#catatan','input');await page.waitForTimeout(600);
-  await check('UJI-13 draf pulih setelah dimuat ulang (termasuk seragam dan teguran), nama petugas tetap',async()=>{await page.reload();await page.waitForTimeout(1000);await page.evaluate(()=>App.go('nilai'));assert.equal(await page.inputValue('#guideInput'),'Guide Contoh A1-03');assert.equal(await page.inputValue('#catatan'),'=IMPORTDATA("x")');
-    assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:true,seragam:'kurang',teguran:['antrean'],berat:'',apresiasi:''});assert(await page.$eval('[data-teguran="antrean"]',b=>b.classList.contains('active')));
+  await check('UJI-13 draf pulih setelah dimuat ulang (termasuk seragam dan Etika), nama petugas tetap',async()=>{await page.reload();await page.waitForTimeout(1000);await page.evaluate(()=>App.go('nilai'));assert.equal(await page.inputValue('#guideInput'),'Guide Contoh A1-03');assert.equal(await page.inputValue('#catatan'),'=IMPORTDATA("x")');
+    assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:true,seragam:'kurang',etika:-2,berat:'',apresiasi:''});assert.equal(await page.textContent('#etikaNilai'),'−2');
     assert.match(await page.textContent('#petugasBox'),/Petugas Uji Satu/);});
   await page.click('#btnSave');await until(c=>c.synced===1,'kiriman pertama');await settle();
-  await check('Simpan → ✅ hanya setelah portal menyimpan; cara baru tersimpan dengan petugas; spreadsheet: catatan rumus tetap teks, kolom N–T terisi',async()=>{
+  await check('Simpan → ✅ hanya setelah portal menyimpan; Etika tersimpan bersama petugas; spreadsheet: catatan rumus tetap teks, kolom etika dan N–T terisi',async()=>{
     assert.equal(rows(),1);const saved=one(db,'SELECT * FROM visit_evaluations');assert.equal(saved.catatan,'=IMPORTDATA("x")');
-    assert.deepEqual([saved.versi,saved.seragam,saved.teguran,saved.petugas_nama],[2,'kurang','antrean','Petugas Uji Satu']);
-    const tab=google.rows(saved.wita_date.slice(0,7));assert.equal(tab.length,1);assert.equal(tab[0][9],'=IMPORTDATA("x")');assert.deepEqual(tab[0].slice(13),[2,'Kurang lengkap','antrean','','','Petugas Uji Satu',70]);
+    assert.deepEqual([saved.versi,saved.seragam,saved.etika,saved.teguran,saved.teguran_n,saved.petugas_nama],[2,'kurang',-2,'',0,'Petugas Uji Satu']);
+    // Kurang lengkap (−10) dengan Etika −2 → 100 − 10 − 2 = 88.
+    const tab=google.rows(saved.wita_date.slice(0,7));assert.equal(tab.length,1);assert.equal(tab[0][9],'=IMPORTDATA("x")');assert.equal(tab[0][8],-2);
+    assert.deepEqual(tab[0].slice(13),[2,'Kurang lengkap','','','','Petugas Uji Satu',88]);
   });
   await pick('Guide Contoh A1-03');await page.click('#btnSave');await page.waitForTimeout(400);
   await check('UJI-05 guide & pos sama < 15 menit ditahan aplikasi tanpa tombol lanjut',async()=>{assert.match(await page.textContent('#guideAmbigu'),/server akan menolaknya/);assert.equal(await page.$('#guideAmbigu [data-lanjut]'),null);});
   await page.click('#guideAmbigu [data-fix]');await page.waitForSelector('#koreksiBar:not([hidden])');
-  await check('Koreksi membuka isian lama (seragam, teguran) untuk dibetulkan',async()=>{assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:true,seragam:'kurang',teguran:['antrean'],berat:'',apresiasi:''});assert.match(await page.textContent('#koreksiBar'),/Seragam Kurang lengkap, 1 teguran/);});
-  await page.click('.criterion[data-crit="seragam"] .seg[data-val="tidak"]');await page.click('[data-teguran="antrean"]');await page.click('#btnSave');await until(c=>c.synced===2,'koreksi');
-  await check('UJI-10 koreksi menandai baris lama diganti, dengan jam yang sama',async()=>{const [a,b]=all(db,'SELECT * FROM visit_evaluations ORDER BY received_at');assert.equal(a.status,'diganti');assert.equal(b.status,'aktif');assert.equal(b.koreksi_dari,a.id);assert.equal(b.evaluated_at,a.evaluated_at);});
+  await check('Koreksi membuka isian lama (seragam, Etika) untuk dibetulkan',async()=>{assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:true,seragam:'kurang',etika:-2,berat:'',apresiasi:''});assert.equal(await page.textContent('#etikaNilai'),'−2');assert.match(await page.textContent('#koreksiBar'),/Seragam Kurang lengkap, Etika −2/);});
+  await page.click('.criterion[data-crit="seragam"] .seg[data-val="tidak"]');await aturEtika(1);await page.click('#btnSave');await until(c=>c.synced===2,'koreksi');
+  await check('UJI-10 koreksi menandai baris lama diganti, dengan jam yang sama dan Etika baru',async()=>{const [a,b]=all(db,'SELECT * FROM visit_evaluations ORDER BY received_at');assert.equal(a.status,'diganti');assert.equal(b.status,'aktif');assert.equal(b.koreksi_dari,a.id);assert.equal(b.evaluated_at,a.evaluated_at);assert.deepEqual([a.etika,b.etika,b.seragam],[-2,1,'tidak']);});
   await ctx.setOffline(true);for(const name of ['Guide Contoh A2-01','Guide Contoh D1-02','Guide Contoh D2-03']){await pick(name,'lengkap','0');await page.click('#btnSave');await page.waitForTimeout(250);}
   assert.equal((await page.evaluate(()=>DB.counts())).pending,3);
   await ctx.setOffline(false);await page.evaluate(()=>window.dispatchEvent(new Event('online')));await until(c=>c.pending===0&&c.synced===5,'antrean offline');
@@ -137,10 +163,12 @@ try{
   await page.evaluate(()=>App.go('tautan'));await page.fill('#tautanInput',`${base}/penilaian-guide/#${tokens[3]}`);await page.click('#formTautan button[type=submit]');await page.waitForTimeout(1200);
   await check('UJI-27 tempel tautan Pos 3; pemilih pos muncul',async()=>{assert(await page.isVisible('#homePos'));assert.equal((await page.$$eval('#homePos option',o=>o.length)),2);});
   const csv=await page.evaluate(async()=>{let out='';const orig=App.download;App.download=(n,c)=>{out=c;};await App.exportCsv();App.download=orig;return out;});
-  await check('UJI-17 CSV menulis temuan per pengantaran dan rinciannya',async()=>{const lines=csv.split('\n').filter(l=>l.includes('A1-03'));
-    assert(lines.some(l=>/;Tidak berseragam;;;;Petugas Uji Satu;/.test(l)),lines.join('\n'));assert(lines.some(l=>/;Kurang lengkap;antrean;;;Petugas Uji Satu;/.test(l)),'koreksi tercatat di bagian dibetulkan');
-    assert.match(csv,/TANPA ID;KURANG LENGKAP;TIDAK BERSERAGAM;TEGURAN/);});
-  await check('Riwayat HP menampilkan seragam, teguran, laporan berat, dan nama petugas',async()=>{await page.evaluate(()=>App.go('riwayat'));await page.waitForTimeout(300);const t=await page.textContent('#historyList');assert.match(t,/Seragam Tidak berseragam/);assert.match(t,/Teguran: Tidak tertib antrean/);assert.match(t,/Berat: Meminta uang/);assert.match(t,/👤 Petugas Uji Satu/);});
+  await check('UJI-17 CSV menulis temuan per pengantaran, jumlah Etika, dan rinciannya',async()=>{const lines=csv.split('\n').filter(l=>l.includes('A1-03'));
+    assert(lines.some(l=>/;Tidak berseragam;1;;;;Petugas Uji Satu;/.test(l)),lines.join('\n'));assert(lines.some(l=>/;Kurang lengkap;-2;;;;Petugas Uji Satu;/.test(l)),'koreksi tercatat di bagian dibetulkan');
+    // Rekap harian: 1 antar, 0 tanpa ID, 0 kurang lengkap, 1 tidak berseragam, jumlah Etika +1.
+    assert(lines.some(l=>/;Guide Contoh A1-03;G-003;A1;1;0;0;1;1;0;0;/.test(l)),lines.join('\n'));
+    assert.match(csv,/TANPA ID;KURANG LENGKAP;TIDAK BERSERAGAM;JUMLAH ETIKA;/);assert.match(csv,/;Seragam;Etika;Teguran \(formulir 2\.2\);/);});
+  await check('Riwayat HP menampilkan seragam, Etika, laporan berat, dan nama petugas',async()=>{await page.evaluate(()=>App.go('riwayat'));await page.waitForTimeout(300);const t=await page.textContent('#historyList');assert.match(t,/Seragam Tidak berseragam/);assert.match(t,/Etika \+1/);assert.match(t,/Etika −2/);assert.doesNotMatch(t,/Teguran:/);assert.match(t,/Berat: Meminta uang/);assert.match(t,/👤 Petugas Uji Satu/);});
   assert.deepEqual(errors,[]);
 
   // Ruang kerja portal (layar laptop).
@@ -152,8 +180,8 @@ try{
   await check('Dashboard menghitung penilaian dari portal dan menampilkan status salinan',async()=>{
     await portal.goto(base+'/#visits-records');await portal.goto(base+'/#visits');await portal.waitForSelector('.stat-value');
     const values=await portal.$$eval('.stat-card .stat-value',els=>els.map(e=>e.textContent.trim()));assert.equal(values[0],'5','5 pengantaran aktif (1 diganti), termasuk nama kembar');
-    // Tidak berseragam (−20) + 3 tanpa ID (−60) dari 5 pengantaran → 100 − 80 ÷ 5 = 84.
-    assert.equal(values[2],'84');const main=await portal.textContent('main');assert.match(main,/semua baris sudah tersalin/);assert.match(main,/1 laporan menunggu verifikasi/);assert.match(main,/Per petugas penilai/);
+    // Tidak berseragam (−20) + 3 tanpa ID (−60), Etika +1, dari 5 pengantaran → 100 − (80 − 1) ÷ 5 = 84,2.
+    assert.equal(values[2],'84,2');const main=await portal.textContent('main');assert.match(main,/semua baris sudah tersalin/);assert.match(main,/1 laporan menunggu verifikasi/);assert.match(main,/Per petugas penilai/);
   });
   await check('Verifikasi: Pengelola menyetujui laporan pelanggaran berat; guide itu gugur reward',async()=>{
     await portal.goto(base+'/#visits-flags');await portal.waitForSelector('[data-visit="flag-approve"]');assert.match(await portal.textContent('main'),/Meminta uang parkir ke tamu\./);
@@ -161,16 +189,21 @@ try{
     assert.equal(one(db,"SELECT status FROM visit_flags WHERE guide_id='G-091'").status,'disetujui');
     await portal.goto(base+'/#visits-reports');await portal.waitForSelector('text=Ringkasan per guide');assert.match(await portal.textContent('main'),/Gugur — pelanggaran berat/);
   });
-  await check('Aturan Nilai: rencana bulan depan disimpan dan dibatalkan; petugas dan jenis teguran ditambah',async()=>{
-    await portal.goto(base+'/#visits-scoring');await portal.waitForSelector('[data-visit="rule-edit"]');assert.match(await portal.textContent('main'),/Tanpa ID-Card/);
-    await portal.click('[data-visit="rule-edit"]');await portal.fill('dialog [name=pot_id]','30');await portal.fill('dialog [name=pot_teguran]','30');await portal.click('dialog [type=submit]');
-    await portal.waitForFunction(()=>/lebih dari 100/.test(document.querySelector('dialog .form-error')?.textContent||''));await portal.fill('dialog [name=pot_teguran]','20');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Rencana');
-    assert.equal(one(db,'SELECT pot_id FROM visit_score_rules ORDER BY berlaku_mulai DESC LIMIT 1').pot_id,30);
+  await check('Aturan Nilai: Etika −10…+10 tanpa potongan teguran; rencana bulan depan disimpan dan dibatalkan; petugas dan jenis apresiasi ditambah',async()=>{
+    await portal.goto(base+'/#visits-scoring');await portal.waitForSelector('[data-visit="rule-edit"]');const main=await portal.textContent('main');
+    assert.match(main,/Tanpa ID-Card/);assert.match(main,/100 − potongan \+ Etika/);assert.match(main,/−10 … \+10/);assert.doesNotMatch(main,/Per teguran/);
+    assert.match(main,/Etika: 0 = standar \(tertib, tidak ada catatan khusus\)\. Minus hanya untuk perilaku yang perlu ditegur, bukan untuk seragam atau ID-Card/);
+    assert.equal(await portal.locator('[data-visit="type-new"][data-jenis="teguran"]').count(),0,'jenis teguran tidak diatur lagi');
+    await portal.click('[data-visit="rule-edit"]');assert.equal(await portal.locator('dialog [name=pot_teguran]').count(),0);
+    // Tanpa ID + tidak berseragam paling banyak 90: dengan Etika −10 nilai tidak di bawah 0.
+    await portal.fill('dialog [name=pot_id]','50');await portal.fill('dialog [name=pot_tidak]','41');await portal.click('dialog [type=submit]');
+    await portal.waitForFunction(()=>/paling banyak 90/.test(document.querySelector('dialog .form-error')?.textContent||''));await portal.fill('dialog [name=pot_tidak]','40');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Rencana');
+    const plan=one(db,'SELECT pot_id,pot_tidak,pot_teguran FROM visit_score_rules ORDER BY berlaku_mulai DESC LIMIT 1');assert.deepEqual([plan.pot_id,plan.pot_tidak,plan.pot_teguran],[50,40,0]);
     await portal.click('[data-visit="rule-delete"]');await portal.waitForSelector('dialog [data-confirm]');await portal.click('dialog [data-confirm]');await portal.waitForSelector('text=Rencana aturan dibatalkan.');
     assert.equal(one(db,'SELECT count(*) n FROM visit_score_rules').n,1);
     await portal.click('[data-visit="assessor-new"]');await portal.fill('dialog [name=nama]','Petugas Uji Dua');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Petugas disimpan.');
-    await portal.click('[data-visit="type-new"][data-jenis="teguran"]');await portal.fill('dialog [name=label]','Berpakaian tidak sopan di area suci');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Jenis temuan disimpan.');
-    assert.equal(one(db,"SELECT count(*) n FROM visit_finding_types WHERE jenis='teguran' AND is_active=1").n,6);
+    await portal.click('[data-visit="type-new"][data-jenis="apresiasi"]');await portal.fill('dialog [name=label]','Menjaga kebersihan area suci');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Jenis temuan disimpan.');
+    assert.equal(one(db,"SELECT count(*) n FROM visit_finding_types WHERE jenis='apresiasi' AND is_active=1").n,4);
   });
   const file=resolve(dataDir,'Guides.csv');
   writeFileSync(file,'﻿guideId,guideName,kategori,regu,aktif\r\nG-001,Guide Contoh A1-01,Asing,A1,TRUE\r\nG-041,"Guide Baru, Uji",Domestik,"D1, D2",TRUE\r\nG-042,Guide Nonaktif Uji,Asing,A2,FALSE\r\n');
@@ -273,44 +306,54 @@ try{
     await portal.waitForFunction(()=>/Penilaian Guide \d{4}/.test(document.querySelector('main').textContent),null,{timeout:15000});
   });
   // Regresi koreksi/draf: jalankan setelah pemeriksaan rekap yang memakai jumlah tetap.
-  // Penilaian berikut hanya berada di HP, supaya tidak menambah data server fixture.
+  // Penilaian berikut hanya berada di HP sampai pemeriksaan terakhir, supaya tidak menambah data server fixture.
   await page.evaluate(()=>Sync.Settings.set({forceOffline:true}));
-  const legacyCorrection=async guideId=>page.evaluate(async id=>{
+  // Penilaian bentuk lama yang masih tertinggal di HP dari versi sebelumnya.
+  const simpanDiHp=(guideId,criteria,catatan='')=>page.evaluate(async ([id,criteria,catatan])=>{
     const g=App.state.guides.find(g=>g.guideId===id),evaluationId=App.uuid();
-    await DB.save({evaluationId,guideId:id,guideName:g.guideName,pos:1,timestamp:DB.sekarangISO(),criteria:{idCard:false,uniform:1,etika:-1},catatan:'',synced:false});
-    await App.mulaiKoreksi(evaluationId);return evaluationId;
-  },guideId);
-  await check('Koreksi cara lama: perbaikan ID saja tidak menghapus teguran; klasifikasi menghasilkan nilai 80',async()=>{
-    const id=await legacyCorrection('G-008');
-    assert(await page.isVisible('#teguranLamaNote'));assert.match(await page.textContent('#teguranLamaNote'),/1 teguran tanpa jenis/);
-    // Penanda ikut draf; pemulihan draf tidak boleh melewati pengaman ini.
-    await page.evaluate(async()=>{await DB.simpanDraftSegera(App.state.form);delete App.state.form.teguranLama;await App.loadDraft();});
-    assert.deepEqual(await page.evaluate(()=>App.state.form.teguranLama),{guideId:'G-008'});
-    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');
-    let question='';page.once('dialog',async dialog=>{question=dialog.message();await dialog.dismiss();});
-    await page.click('#btnSave');assert.match(question,/Hapus teguran lama/);
-    assert.deepEqual(await page.evaluate(async id=>(await DB.get(id)).criteria,id),{idCard:false,uniform:1,etika:-1},'membatalkan konfirmasi tidak mengubah penilaian');
-    await page.click('[data-teguran="antrean"]');assert(await page.isHidden('#teguranLamaNote'));
+    await DB.save({evaluationId,guideId:id,guideName:g.guideName,pos:1,timestamp:DB.sekarangISO(),criteria,catatan,synced:false});
+    return evaluationId;
+  },[guideId,criteria,catatan]);
+  const koreksiDiHp=async(guideId,criteria,catatan)=>{const id=await simpanDiHp(guideId,criteria,catatan);await page.evaluate(id=>App.mulaiKoreksi(id),id);return id;};
+  const isianDiHp=id=>page.evaluate(async id=>(await DB.get(id)).criteria,id);
+  // Nilai pengantaran dengan aturan bawaan (tanpa ID −20, kurang lengkap −10, tidak berseragam −20) + Etika.
+  const nilaiDiHp=id=>page.evaluate(async id=>{const f=App.temuanDari((await DB.get(id)).criteria);return 100-20*f.tanpaId-10*f.kurang-20*f.tidak+f.etika;},id);
+  // Koreksi tidak lagi menanyakan "hapus teguran lama": Etika lama dibawa apa adanya.
+  let dialogs=0;page.on('dialog',async d=>{dialogs++;await d.dismiss();});
+  await check('Koreksi cara lama: dibuka dengan Etika apa adanya; membetulkan ID tidak mengubah Etika dan tanpa pertanyaan',async()=>{
+    const id=await koreksiDiHp('G-008',{idCard:false,uniform:1,etika:-1});
+    assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:false,seragam:'lengkap',etika:-1,berat:'',apresiasi:''});
+    assert.equal(await page.textContent('#etikaNilai'),'−1');assert.equal(await page.locator('#teguranLamaNote').count(),0);
+    assert.equal(await pengingatGanda(),true,'tanpa ID-Card dengan Etika minus');
+    await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');assert.equal(await pengingatGanda(),false);assert.deepEqual(await patokanAktif(),['minus']);
     await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);
-    const corrected=await page.evaluate(async id=>{const e=await DB.get(id),f=App.temuanDari(e.criteria);return {criteria:e.criteria,nilai:100-20*f.tanpaId-10*f.kurang-20*f.tidak-20*f.teguran};},id);
-    assert.deepEqual(corrected.criteria,{idCard:true,seragam:'lengkap',teguran:['antrean'],berat:'',apresiasi:''});assert.equal(corrected.nilai,80);
-    assert.equal(await page.evaluate(()=>App.state.form.teguranLama),undefined,'reset menghapus penanda koreksi lama');
+    assert.deepEqual(await isianDiHp(id),{idCard:true,seragam:'lengkap',etika:-1,berat:'',apresiasi:''});assert.equal(await nilaiDiHp(id),99);
+    assert.equal(dialogs,0);
   });
-  await check('Koreksi cara lama: teguran hanya dapat dihapus dengan konfirmasi; guard tidak terbawa ke guide baru',async()=>{
-    const id=await legacyCorrection('G-009');await page.click('.criterion[data-crit="idCard"] .seg[data-val="1"]');
-    let question='';page.once('dialog',async dialog=>{question=dialog.message();await dialog.accept();});
-    await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);assert.match(question,/Hapus teguran lama/);
-    assert.deepEqual(await page.evaluate(async id=>(await DB.get(id)).criteria.teguran,id),[]);
-    await legacyCorrection('G-008');await page.evaluate(()=>App.batalKoreksi(true));assert.equal(await page.evaluate(()=>App.state.form.teguranLama),undefined);assert(await page.isHidden('#teguranLamaNote'));
-    await page.evaluate(()=>{const g=App.state.guides.find(g=>g.guideId==='G-010');App.state.form.teguranLama={guideId:'G-008'};App.state.form.guide=g;App.showPicked(g);});
-    assert.equal(await page.evaluate(()=>App.state.form.teguranLama),undefined);assert(await page.isHidden('#teguranLamaNote'));
+  await check('Koreksi formulir 2.2: teguran dibuka sebagai Etika −1 per teguran, lalu disimpan sebagai formulir Etika',async()=>{
+    const id=await koreksiDiHp('G-009',{idCard:true,seragam:'kurang',teguran:['antrean','merokok-hp'],berat:'',apresiasi:''});
+    assert.match(await page.textContent('#koreksiBar'),/Seragam Kurang lengkap, 2 teguran/);
+    assert.deepEqual(await page.evaluate(()=>App.state.form.crit),{idCard:true,seragam:'kurang',etika:-2,berat:'',apresiasi:''});assert.equal(await page.textContent('#etikaNilai'),'−2');
+    await aturEtika(-1);await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);
+    assert.deepEqual(await isianDiHp(id),{idCard:true,seragam:'kurang',etika:-1,berat:'',apresiasi:''});assert.equal(await nilaiDiHp(id),89);
+    assert.equal(dialogs,0);
+  });
+  await check('Draf versi sebelumnya: teguran 2.2 menjadi Etika −1 per teguran; Etika cara lama dibatasi −5…+5, formulir Etika −10…+10',async()=>{
+    const pulihkan=crit=>page.evaluate(async crit=>{await DB.simpanDraftSegera({...App.state.form,crit});App.state.form.crit={};await App.loadDraft();return App.state.form.crit;},crit);
+    assert.deepEqual(await pulihkan({idCard:true,seragam:'lengkap',teguran:['antrean','merokok-hp'],berat:'',apresiasi:''}),{idCard:true,seragam:'lengkap',etika:-2,berat:'',apresiasi:''});
+    assert.equal((await pulihkan({idCard:true,seragam:'lengkap',teguran:[],berat:'',apresiasi:''})).etika,0);
+    assert.deepEqual(await pulihkan({idCard:true,uniform:1,etika:-7}),{idCard:true,seragam:null,etika:-5,berat:'',apresiasi:''});
+    assert.equal((await pulihkan({idCard:false,seragam:'tidak',etika:7,berat:'',apresiasi:''})).etika,7);
+    assert.equal((await pulihkan({idCard:false,seragam:'tidak',etika:25,berat:'',apresiasi:''})).etika,10);
+    assert.equal(await page.textContent('#etikaNilai'),'+10');
+    await page.evaluate(()=>{DB.hapusDraft();App.resetForm(true);});assert.equal(await page.textContent('#etikaNilai'),'0');
   });
   await check('Laporan nonaktif tetap terlihat dalam koreksi/draf dan hanya hilang setelah dipilih Tidak ada',async()=>{
     const id=await page.evaluate(async()=>{
       window.__penilaianBefore=DB.getPenilaian();const k=structuredClone(window.__penilaianBefore);
       k.berat=k.berat.filter(t=>t.kode!=='kasar');k.apresiasi=k.apresiasi.filter(t=>t.kode!=='menolong');DB.setPenilaian(k);
       const g=App.state.guides.find(g=>g.guideId==='G-010'),evaluationId=App.uuid();
-      await DB.save({evaluationId,guideId:g.guideId,guideName:g.guideName,pos:1,timestamp:DB.sekarangISO(),criteria:{idCard:true,seragam:'lengkap',teguran:[],berat:'kasar',apresiasi:'menolong'},catatan:'Catatan laporan semula.',synced:false});
+      await DB.save({evaluationId,guideId:g.guideId,guideName:g.guideName,pos:1,timestamp:DB.sekarangISO(),criteria:{idCard:true,seragam:'lengkap',etika:0,berat:'kasar',apresiasi:'menolong'},catatan:'Catatan laporan semula.',synced:false});
       await App.mulaiKoreksi(evaluationId);return evaluationId;
     });
     for(const [sel,kode]of [['#beratSelect','kasar'],['#apresiasiSelect','menolong']]){
@@ -323,51 +366,45 @@ try{
     assert.equal(await page.$('#beratSelect option[value="kasar"]'),null);assert.equal(await page.$('#apresiasiSelect option[value="menolong"]'),null,'laporan baru tidak menawarkan jenis nonaktif');
     await page.evaluate(()=>{DB.setPenilaian(window.__penilaianBefore);delete window.__penilaianBefore;App.renderPenilaianForm();});
   });
-  const warningContext=await page.evaluate(()=>DB.getPenilaian());
-  run(db,"UPDATE visit_finding_types SET is_active=0 WHERE id='antrean'");
-  await page.evaluate(()=>{const k=DB.getPenilaian();k.teguran=k.teguran.filter(t=>t.kode!=='antrean');DB.setPenilaian(k);});
-  const inactiveWarningCorrection=guideId=>page.evaluate(async id=>{
-    const g=App.state.guides.find(g=>g.guideId===id),evaluationId=App.uuid();
-    await DB.save({evaluationId,guideId:id,guideName:g.guideName,pos:1,timestamp:DB.sekarangISO(),criteria:{idCard:true,seragam:'lengkap',teguran:['antrean'],berat:'',apresiasi:''},catatan:'',synced:false});
-    await App.mulaiKoreksi(evaluationId);return evaluationId;
-  },guideId);
-  await check('Teguran nonaktif tidak ditawarkan lagi setelah koreksi dibatalkan atau pilihannya dilepas',async()=>{
-    await inactiveWarningCorrection('G-038');
-    await page.click('[data-batal-koreksi]');
-    assert.equal(await page.locator('[data-teguran="antrean"]').count(),0,'batal koreksi membersihkan pilihan nonaktif');
-    await inactiveWarningCorrection('G-037');
-    assert.match(await page.textContent('[data-teguran="antrean"]'),/tidak aktif/);
-    await page.click('[data-teguran="antrean"]');
-    assert.deepEqual(await page.evaluate(()=>App.state.form.crit.teguran),[]);
-    assert.equal(await page.locator('[data-teguran="antrean"]').count(),0,'teguran nonaktif yang dilepas tidak bisa dipilih lagi');
-    await page.click('[data-batal-koreksi]');
-  });
-  await check('Teguran nonaktif tetap tersimpan pada koreksi/draf asal, lalu dibersihkan setelah simpan',async()=>{
-    const id=await inactiveWarningCorrection('G-039');
-    assert.equal(await page.getAttribute('[data-teguran="antrean"]','aria-pressed'),'true');
-    assert.match(await page.textContent('[data-teguran="antrean"]'),/tidak aktif/);
-    await page.evaluate(async()=>{await DB.simpanDraftSegera(App.state.form);App.state.form.crit.teguran=[];await App.loadDraft();});
-    assert.equal(await page.getAttribute('[data-teguran="antrean"]','aria-pressed'),'true');
-    await page.click('#btnSave');await page.waitForFunction(()=>!App.state.koreksi);
-    assert.deepEqual(await page.evaluate(async id=>(await DB.get(id)).criteria.teguran,id),['antrean'],'temuan lama tetap dipertahankan');
-    assert.equal(await page.locator('[data-teguran="antrean"]').count(),0,'simpan koreksi membersihkan pilihan nonaktif');
-  });
-  await check('Penilaian guide berikutnya hanya menawarkan teguran aktif dan tersimpan dengan nilai 100 saat tanpa temuan',async()=>{
-    await pick('Guide Contoh D2-10');
-    assert.equal(await page.locator('[data-teguran="antrean"]').count(),0);
-    // Teguran aktif tetap bisa dipilih dan dilepas seperti biasa.
-    await page.click('[data-teguran="merokok-hp"]');await page.click('[data-teguran="merokok-hp"]');
-    assert.equal(await page.locator('[data-teguran="merokok-hp"]').count(),1);
-    assert.deepEqual(await page.evaluate(()=>App.state.form.crit.teguran),[]);
-    await page.click('#btnSave');await page.waitForFunction(()=>App.state.form.guide===null);
-    await page.evaluate(async()=>{Sync.Settings.set({forceOffline:false});await Sync.syncNow();});
+  await check('Server belum menyimpan Etika: penilaian Etika ditahan di HP (bukan ditolak), formulir lama tetap terkirim; setelah server siap terkirim sendiri',async()=>{
+    // guide-form sebelum Etika menerima formulir baru tetapi membuang Etika-nya; bahan formulirnya tanpa `etika`.
+    const terkirim=[],bentukEtika=e=>typeof e.criteria.seragam==='string'&&typeof e.criteria.etika==='number';
+    await page.route('**/api/guide-form/context',async route=>{const res=await route.fetch(),body=await res.json();delete body.penilaian.etika;await route.fulfill({response:res,json:body});});
+    await page.route('**/api/guide-form/submit',route=>{terkirim.push(...JSON.parse(route.request().postData()).evaluations);return route.continue();});
+    // Bahan formulir yang tersimpan berasal dari server lama itu.
+    await page.evaluate(()=>{const k=DB.getPenilaian();delete k.etika;DB.setPenilaian(k);});
+    await simpanDiHp('G-038',{idCard:true,seragam:'lengkap',teguran:['antrean'],berat:'',apresiasi:''});
+    await simpanDiHp('G-039',{idCard:true,uniform:2,etika:3});
+    await pick('Guide Contoh D2-10');await aturEtika(2);await page.click('#btnSave');await page.waitForFunction(()=>App.state.form.guide===null);
+    // Formulir Etika di HP: koreksi G-008, G-009, G-010 dan penilaian baru G-040.
+    const etikaDiHp=await page.evaluate(async()=>(await DB.pending()).filter(e=>typeof e.criteria?.seragam==='string'&&typeof e.criteria?.etika==='number').map(e=>e.guideId).sort());
+    assert.deepEqual(etikaDiHp,['G-008','G-009','G-010','G-040']);
+    await page.evaluate(async()=>{Sync.Settings.set({forceOffline:false});await Sync.refreshGuides({force:true});await Sync.syncNow();});
+    await until(c=>c.pending===4,'formulir lama terkirim, formulir Etika menunggu');
+    await page.waitForFunction(()=>!document.querySelector('#serverNotice').hidden);
+    assert.match(await page.textContent('#serverNotice'),/4 penilaian menunggu portal diperbarui/);
+    assert.equal(await page.evaluate(()=>DB.getPenilaian().etika),undefined,'tanda Etika dari server sebelumnya tidak terbawa');
+    assert.deepEqual(terkirim.filter(bentukEtika),[],'tidak ada formulir Etika yang dikirim ke server lama');
+    assert.deepEqual(terkirim.map(e=>e.guideId).sort(),['G-038','G-039']);
+    assert(await page.evaluate(async()=>(await DB.pending()).every(e=>!e.tolakan&&!e.lastError)),'ditahan bukan ditolak');assert.equal((await page.evaluate(()=>DB.counts())).buntu,0);
+    const lama=Object.fromEntries(all(db,"SELECT guide_id,versi,teguran,etika FROM visit_evaluations WHERE guide_id IN ('G-038','G-039')").map(r=>[r.guide_id,[r.versi,r.teguran,r.etika]]));
+    assert.deepEqual(lama,{'G-038':[2,'antrean',-1],'G-039':[1,'',3]});
+    assert.equal(one(db,"SELECT count(*) n FROM visit_evaluations WHERE guide_id IN ('G-008','G-009','G-010','G-040')").n,0);
+    await page.evaluate(()=>App.go('riwayat'));await page.waitForTimeout(300);
+    const riwayat=await page.textContent('#historyList');assert.match(riwayat,/Teguran: Tidak tertib antrean/);assert.match(riwayat,/Uniform Bagus/);assert.match(riwayat,/Etika \+3/);assert.match(riwayat,/Etika \+2/);
+    // Server diperbarui: bahan formulirnya kembali membawa `etika` (Tes Koneksi atau pembaruan 10 menit).
+    await page.unroute('**/api/guide-form/context');
+    await page.evaluate(async()=>{await Sync.ping();for(let i=0;i<20&&(await Sync.syncNow()).skipped;i++)await new Promise(r=>setTimeout(r,250));});
+    await until(c=>c.pending===0,'formulir Etika terkirim setelah server siap');
+    await page.waitForFunction(()=>document.querySelector('#serverNotice').hidden);
+    assert.deepEqual(terkirim.filter(bentukEtika).map(e=>[e.guideId,e.criteria.etika]).sort(),[['G-008',-1],['G-009',-1],['G-010',0],['G-040',2]]);
     const saved=one(db,"SELECT * FROM visit_evaluations WHERE guide_id='G-040' AND status='aktif'");
-    assert(saved,'penilaian baru benar-benar tersimpan di server');assert.equal(saved.teguran,'');assert.equal(saved.teguran_n,0);
-    assert.equal(visitOverview(db,saved.wita_date,saved.wita_date).perGuide.find(g=>g.guideId==='G-040').nilai,100);
-    await settle();
+    assert(saved,'penilaian baru benar-benar tersimpan di server');assert.deepEqual([saved.etika,saved.teguran,saved.teguran_n],[2,'',0]);
+    // Tanpa temuan dengan Etika +2 → 102.
+    assert.equal(visitOverview(db,saved.wita_date,saved.wita_date).perGuide.find(g=>g.guideId==='G-040').nilai,102);
+    await page.unroute('**/api/guide-form/submit');await settle();
   });
-  run(db,"UPDATE visit_finding_types SET is_active=1 WHERE id='antrean'");
-  await page.evaluate(k=>{DB.setPenilaian(k);App.renderPenilaianForm();},warningContext);
+  assert.equal(dialogs,0);
   assert.deepEqual(errors,[]);
   assert.deepEqual(portalErrors,[]);
   console.log(`${checks} pemeriksaan UI penilaian guide lulus.`);

@@ -30,11 +30,17 @@ test('context carries scoring choices, assessors and instructions through the pr
  const empty={...penilaian,teguran:[],berat:[],petugas:[]};
  const responseEmpty=await handleGuideForm(request(),env,async()=>Response.json({ok:true,result:{pos:3,label:'Pos 3',guides:[],penilaian:empty}}));
  assert.equal(responseEmpty.status,200);assert.deepEqual((await responseEmpty.json()).penilaian,empty);
+ // guide-form yang menyimpan Etika mengirim rentangnya; tanda ini diteruskan tanpa isian lain.
+ const withEtika={...penilaian,etika:{min:-10,max:10}};
+ const responseEtika=await handleGuideForm(request(),env,async()=>Response.json({ok:true,result:{pos:1,label:'Pos 1',guides:[],penilaian:{...structuredClone(withEtika),etika:{min:-10,max:10,secret:'must-not-leak'}}}}));
+ assert.equal(responseEtika.status,200);const etikaData=await responseEtika.json();assert.deepEqual(etikaData.penilaian,withEtika);assert(!JSON.stringify(etikaData).includes('must-not-leak'));
+ assert.equal(data.penilaian.etika,undefined,'guide-form versi sebelumnya: tanpa tanda Etika');
 });
 
 test('malformed scoring context is retryable instead of silently dropping configured choices',async()=>{
  const valid={versi:2,teguranMaks:2,catatanMin:3,teguran:[],berat:[],apresiasi:[],petugas:[],petunjuk:{idCard:'ID',seragam:'Seragam'}};
- for(const patch of [{versi:1},{teguran:null},{berat:{}},{apresiasi:'secret'},{petugas:null},{petunjuk:null},{teguran:[null]},{petugas:[{id}]},{teguranMaks:'2'},{catatanMin:'3'}]){
+ for(const patch of [{versi:1},{teguran:null},{berat:{}},{apresiasi:'secret'},{petugas:null},{petunjuk:null},{teguran:[null]},{petugas:[{id}]},{teguranMaks:'2'},{catatanMin:'3'},
+  {etika:null},{etika:{min:-10}},{etika:{min:'-10',max:10}},{etika:{min:0,max:10}},{etika:{min:-10,max:0}}]){
   const response=await handleGuideForm(request(),env,async()=>Response.json({ok:true,result:{pos:1,label:'Pos 1',guides:[],penilaian:{...valid,...patch}}}));
   assert.equal(response.status,503,JSON.stringify(patch));assert(!JSON.stringify(await response.json()).includes('secret'));
  }

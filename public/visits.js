@@ -45,13 +45,19 @@ const stat=(label,value,detail='')=>`<section class="stat-card visit-stat"><div 
 const pct=v=>v==null?'—':`${(v*100).toLocaleString('id-ID',{maximumFractionDigits:1})}%`;
 const dec=(v,d=2)=>v==null?'—':Number(v).toLocaleString('id-ID',{minimumFractionDigits:d,maximumFractionDigits:d});
 const signed=v=>v>0?`+${v}`:String(v);
+// Etika: jumlah dengan tanda (+3, −2, 0) dan rata-rata per pengantaran (+0,15).
+const etikaSum=v=>v==null?'—':v>0?`+${number(v)}`:v<0?`−${number(-v)}`:'0';
+const etikaAvg=v=>v==null?'—':`${v>0?'+':v<0?'−':''}${Math.abs(v).toLocaleString('id-ID',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const uniformLabel={'-1':'Tidak sesuai','1':'Sesuai','2':'Bagus'};
 const seragamLabel={lengkap:'Lengkap',kurang:'Kurang lengkap',tidak:'Tidak berseragam'};
 const score=v=>v==null?'—':Number(v).toLocaleString('id-ID',{maximumFractionDigits:1});
 const rewardBadge={layak:['positive','Layak'],gugur:['negative','Gugur — pelanggaran berat'],bawah:['warm','Di bawah ambang'],kurang:['neutral','Belum cukup data']};
 const rewardCell=g=>{if(!g.status)return '—';const [kind,label]=rewardBadge[g.status]||['neutral',g.status];return `<span class="badge ${kind}" title="${esc(g.alasan||'')}">${esc(label)}</span>${g.beratMenunggu?`<br><span class="muted text-small">${number(g.beratMenunggu)} laporan berat menunggu</span>`:''}`;};
-// Ringkasan aturan yang dipakai, mis. "tanpa ID −20 · kurang lengkap −10 · …".
-const ruleLine=r=>r?`tanpa ID −${r.pot_id} · kurang lengkap −${r.pot_kurang} · tidak berseragam −${r.pot_tidak} · per teguran −${r.pot_teguran}`:'';
+// Ringkasan aturan yang dipakai, mis. "tanpa ID −20 · kurang lengkap −10 · …". Etika
+// −10…+10 ditambahkan langsung ke nilai (Etika menggantikan teguran sejak 17 November 2026).
+// Patokan Etika (pemilik, 18 November 2026); teks yang sama tampil di formulir HP pos.
+const etikaPatokan='0 = standar (tertib, tidak ada catatan khusus). Minus hanya untuk perilaku yang perlu ditegur, bukan untuk seragam atau ID-Card yang sudah dinilai sendiri. Plus hanya untuk yang benar-benar menonjol, mis. menolong wisatawan; rapi dan tertib termasuk standar.';
+const ruleLine=r=>r?`tanpa ID −${r.pot_id} · kurang lengkap −${r.pot_kurang} · tidak berseragam −${r.pot_tidak} · Etika −10…+10`:'';
 const monthLabel=m=>formatDate(m+'-01',{month:'long',year:'numeric'});
 const when=t=>t?`${formatDate(t)} ${formatTime(t)}`:'—';
 const range=()=>`from=${M.from}&to=${M.to}`;
@@ -73,19 +79,19 @@ const rankMetric={
  nilai:['Nilai',r=>score(r.nilai)],
  tanpaId:['Tanpa ID',r=>`${number(r.tanpaId)} (${pct(r.porsiTanpaId)})`],
  seragam:['Seragam bermasalah',r=>`${number(r.kurangLengkap+r.tidakBerseragam)} (${pct(r.porsiSeragam)})`],
- teguran:['Teguran',r=>`${number(r.teguran)} (${dec(r.rataTeguran)}/antar)`],
+ etika:['Etika rata-rata',r=>`${etikaAvg(r.etikaRata)} (jumlah ${etikaSum(r.etika)})`],
  berat:['Pelanggaran berat',r=>number(r.berat)]};
 function rankTable(title,rows,metric,note=''){
  const [label,value]=rankMetric[metric];
  return card(title,note,table(['#','Guide','Regu','Pengantaran',label],rows.map(r=>`<tr><td>${number(r.peringkat)}</td><td><strong>${esc(r.nama)}</strong><br><span class="muted text-small">${esc(r.guideId)}</span></td><td>${esc(r.regu)}</td><td>${number(r.antar)}</td><td><strong>${value(r)}</strong></td></tr>`),'Belum ada guide yang memenuhi.'));
 }
-const figureCells=r=>`<td>${number(r.pengantaran)}</td><td><strong>${score(r.nilai)}</strong></td><td>${pct(r.persenId)}</td><td>${pct(r.persenSeragam)}</td><td>${number(r.teguran)}</td>`;
-const figureHeads=['Pengantaran','Nilai','% ID terpasang','% seragam lengkap','Teguran'];
+const figureCells=r=>`<td>${number(r.pengantaran)}</td><td><strong>${score(r.nilai)}</strong></td><td>${pct(r.persenId)}</td><td>${pct(r.persenSeragam)}</td><td>${etikaAvg(r.etikaRata)}</td>`;
+const figureHeads=['Pengantaran','Nilai','% ID terpasang','% seragam lengkap','Etika rata-rata'];
 const periodNote=d=>d.periode?.bulan_ringkasan?.length?` Bulan ${d.periode.bulan_ringkasan.map(m=>formatDate(m+'-01',{month:'long',year:'numeric'})).join(', ')} memakai ringkasan bulanan; rincian sampai ${formatDate(d.periode.folded_through)} ada di spreadsheet.`:'';
 function ruleNote(d){
  const a=d.aturan;if(!a)return '';
  const months=a.per_bulan||[],same=months.every(m=>ruleLine(m)===ruleLine(a));
- return same?`Nilai pengantaran = 100 − potongan (${ruleLine(a)}).`:`Nilai pengantaran = 100 − potongan, dengan aturan bulan masing-masing: ${months.map(m=>`${monthLabel(m.bulan)}: ${ruleLine(m)}`).join('; ')}.`;
+ return same?`Nilai pengantaran = 100 − potongan + Etika (${ruleLine(a)}).`:`Nilai pengantaran = 100 − potongan + Etika, dengan aturan bulan masing-masing: ${months.map(m=>`${monthLabel(m.bulan)}: ${ruleLine(m)}`).join('; ')}.`;
 }
 function dashboard(){
  const d=M.overview,s=d.ringkasan,p=d.peringkat,a=d.aturan;
@@ -94,14 +100,14 @@ function dashboard(){
  const petugas=(d.perPetugas||[]).map(r=>`<tr><td>${r.petugas?esc(r.petugas):'<span class="muted">Tanpa nama petugas</span>'}</td><td>${esc(r.pos.map(x=>'Pos '+x).join(', '))}</td>${figureCells(r)}</tr>`);
  return `${head('Dashboard Kunjungan',`Penilaian guide ${formatDate(d.from)} – ${formatDate(d.to)}. ${ruleNote(d)}`)}${filters()}
  ${waiting?`<div class="notice warning">${icon('incident')}<div><strong>${number(waiting)} laporan menunggu verifikasi</strong><p>${number(s.berat.menunggu)} pelanggaran berat dan ${number(s.apresiasi.menunggu)} apresiasi dari HP pos belum diputuskan Pengelola Kunjungan. Pelanggaran berat baru menggugurkan reward setelah disetujui.</p><p><a href="#visits-flags">Buka Verifikasi</a></p></div></div>`:''}
- <div class="stats-grid">${stat('Pengantaran',number(s.pengantaran),`${number(s.hariDinilai)} hari berpenilaian`)}${stat('Guide dinilai',number(s.guideDinilai),`dari ${number(s.guideAktif)} guide aktif`)}${stat('Nilai rata-rata',score(s.nilai),'100 − potongan per pengantaran')}${stat('ID terpasang',pct(s.persenId),`${number(s.tanpaId)} kali tanpa ID`)}${stat('Seragam lengkap',pct(s.persenSeragam),`${number(s.kurangLengkap)} kurang · ${number(s.tidakBerseragam)} tidak`)}${stat('Teguran',number(s.teguran),`${number(s.berat.disetujui)} pelanggaran berat terverifikasi`)}${a?.satu_bulan?stat('Layak reward',number(s.layak),`nilai ≥ ${a.ambang}, ≥ ${a.minimal} antar, tanpa pelanggaran berat`):''}</div>
+ <div class="stats-grid">${stat('Pengantaran',number(s.pengantaran),`${number(s.hariDinilai)} hari berpenilaian`)}${stat('Guide dinilai',number(s.guideDinilai),`dari ${number(s.guideAktif)} guide aktif`)}${stat('Nilai rata-rata',score(s.nilai),'100 − potongan + Etika per pengantaran')}${stat('ID terpasang',pct(s.persenId),`${number(s.tanpaId)} kali tanpa ID`)}${stat('Seragam lengkap',pct(s.persenSeragam),`${number(s.kurangLengkap)} kurang · ${number(s.tidakBerseragam)} tidak`)}${stat('Etika rata-rata',etikaAvg(s.etikaRata),`jumlah ${etikaSum(s.etika)} · ${number(s.berat.disetujui)} pelanggaran berat terverifikasi`)}${a?.satu_bulan?stat('Layak reward',number(s.layak),`nilai ≥ ${a.ambang}, ≥ ${a.minimal} antar, tanpa pelanggaran berat`):''}</div>
  <div class="visit-grid">${card('Per pos','Pos 1 dan Pos 3 dihitung masing-masing. Selisih besar biasanya tanda patokan antarpos belum sama.',table(['Pos','Guide',...figureHeads],d.perPos.map(r=>`<tr><td>Pos ${esc(r.pos)}</td><td>${number(r.guideDinilai)}</td>${figureCells(r)}</tr>`)))}
  ${card('Per regu','',table(['Regu','Kategori',...figureHeads],d.perRegu.map(r=>`<tr><td>${esc(r.regu)}</td><td>${esc(r.kategori)}</td>${figureCells(r)}</tr>`)))}</div>
- ${petugas.length?card('Per petugas penilai','Dari rincian 6 minggu terakhir. Petugas yang jauh lebih longgar atau ketat dari yang lain perlu dikalibrasi.',table(['Petugas','Pos',...figureHeads],petugas)):''}
+ ${petugas.length?card('Per petugas penilai','Dari rincian 6 minggu terakhir. Petugas yang jauh lebih longgar atau ketat dari yang lain perlu dikalibrasi, termasuk patokan Etika (rata-rata jauh dari 0).',table(['Petugas','Pos',...figureHeads],petugas)):''}
  ${M.activity?card('Kiriman dari HP pos','Kiriman terakhir yang diterima tiap pos dan jumlahnya dalam 24 jam terakhir.',table(['Pos','Kiriman terakhir','Diterima 24 jam','Ditolak 24 jam'],activity)):''}
  <p class="muted visit-note">Peringkat memakai rata-rata nilai per pengantaran, minimal ${number(d.minimalPengantaran)} pengantaran (${number(d.diperingkat)} guide memenuhi, ${number(d.belumCukup)} belum). Nilai sama mendapat peringkat sama; apresiasi terverifikasi menjadi penentu, bukan jumlah pengantaran. Guide nonaktif ikut di total, tidak di peringkat.${esc(periodNote(d))} Diperbarui ${when(d.diperbarui)}.</p>
  ${sheetLine(M.sheet)}
- <div class="visit-grid">${rankTable('Nilai tertinggi',p.nilaiTertinggi,'nilai')}${rankTable('Nilai terendah',p.nilaiTerendah,'nilai')}${rankTable('Paling sering tanpa ID',p.tanpaIdTerbanyak,'tanpaId')}${rankTable('Paling sering seragam bermasalah',p.seragamTerbanyak,'seragam')}${rankTable('Teguran terbanyak',p.teguranTerbanyak,'teguran')}${rankTable('Pelanggaran berat terverifikasi',p.beratTerverifikasi,'berat','Menggugurkan reward bulan itu.')}${rankTable(`Belum cukup pengantaran (< ${d.minimalPengantaran})`,p.belumCukup,'nilai')}</div>`;
+ <div class="visit-grid">${rankTable('Nilai tertinggi',p.nilaiTertinggi,'nilai')}${rankTable('Nilai terendah',p.nilaiTerendah,'nilai')}${rankTable('Paling sering tanpa ID',p.tanpaIdTerbanyak,'tanpaId')}${rankTable('Paling sering seragam bermasalah',p.seragamTerbanyak,'seragam')}${rankTable('Etika rata-rata terendah',p.etikaTerendah||[],'etika','Hanya guide dengan Etika rata-rata di bawah 0.')}${rankTable('Pelanggaran berat terverifikasi',p.beratTerverifikasi,'berat','Menggugurkan reward bulan itu.')}${rankTable(`Belum cukup pengantaran (< ${d.minimalPengantaran})`,p.belumCukup,'nilai')}</div>`;
 }
 
 /* ---------- Data Guide ---------- */
@@ -266,11 +272,13 @@ async function cancelHistory(){
 /* ---------- Penilaian ---------- */
 function recordRow(r){
  const replaced=r.status==='diganti',v2=r.versi===2;
- // Penilaian cara lama ditampilkan dengan pemetaannya, plus angka aslinya.
- const lama=v2?'':`<br><span class="muted text-small">cara lama: Uniform ${esc(uniformLabel[String(r.uniform)]||r.uniform)}, Etika ${esc(signed(r.etika))}</span>`;
- const teguran=v2?(r.teguran.length?r.teguran.map(k=>esc(typeLabel(k))).join('<br>'):'—'):(r.teguranN?`${number(r.teguranN)} (dari Etika minus)`:'—');
+ // Penilaian cara lama ditampilkan dengan pemetaannya, plus Uniform aslinya. Etika semua
+ // bentuk ada di kolom Etika; penilaian formulir 2.2 menyebut jenis tegurannya (−1 per teguran).
+ const lama=v2?'':`<br><span class="muted text-small">cara lama: Uniform ${esc(uniformLabel[String(r.uniform)]||r.uniform)}</span>`;
+ const teguran=v2&&r.teguran.length?`<br><span class="muted text-small">dari teguran: ${r.teguran.map(k=>esc(typeLabel(k))).join(', ')}</span>`:'';
+ const etika=`<strong>${esc(signed(r.etika))}</strong>${teguran}`;
  const laporan=[r.berat?`<span class="badge negative">Pelanggaran berat</span><br><span class="text-small">${esc(typeLabel(r.berat))}</span>`:'',r.apresiasi?`<span class="badge positive">Apresiasi</span><br><span class="text-small">${esc(typeLabel(r.apresiasi))}</span>`:''].filter(Boolean).join('<br>')||'—';
- return `<tr class="${replaced?'visit-dim':''}"><td>${when(r.timestamp)}</td><td>Pos ${esc(r.pos)}</td><td><strong>${esc(r.guideName)}</strong><br><span class="muted text-small">${esc(r.guideId)} · ${esc(r.regu||'—')}</span></td><td>${r.idCard?'Terpasang':'<strong>Tidak</strong>'}</td><td>${esc(seragamLabel[r.seragam]||r.seragam)}${lama}</td><td>${teguran}</td><td>${laporan}</td><td>${esc(r.petugas||'—')}</td><td><strong>${score(r.nilai)}</strong></td><td>${esc(r.catatan||'')}</td><td>${replaced?`Diganti${r.digantiOleh?`<br><span class="muted text-small">oleh ${esc(r.digantiOleh.slice(0,8))}</span>`:''}`:r.koreksiDari?`Koreksi<br><span class="muted text-small">dari ${esc(r.koreksiDari.slice(0,8))}</span>`:'Aktif'}</td></tr>`;
+ return `<tr class="${replaced?'visit-dim':''}"><td>${when(r.timestamp)}</td><td>Pos ${esc(r.pos)}</td><td><strong>${esc(r.guideName)}</strong><br><span class="muted text-small">${esc(r.guideId)} · ${esc(r.regu||'—')}</span></td><td>${r.idCard?'Terpasang':'<strong>Tidak</strong>'}</td><td>${esc(seragamLabel[r.seragam]||r.seragam)}${lama}</td><td>${etika}</td><td>${laporan}</td><td>${esc(r.petugas||'—')}</td><td><strong>${score(r.nilai)}</strong></td><td>${esc(r.catatan||'')}</td><td>${replaced?`Diganti${r.digantiOleh?`<br><span class="muted text-small">oleh ${esc(r.digantiOleh.slice(0,8))}</span>`:''}`:r.koreksiDari?`Koreksi<br><span class="muted text-small">dari ${esc(r.koreksiDari.slice(0,8))}</span>`:'Aktif'}</td></tr>`;
 }
 // Label jenis temuan dari Aturan Nilai (dimuat bersama halaman), atau kodenya.
 const typeLabel=code=>(M.scoring?.jenis||[]).find(t=>t.kode===code)?.label||code;
@@ -280,7 +288,7 @@ function recordsPage(){
  const folded=M.recordsFolded&&M.from<=M.recordsFolded?`<div class="notice">${icon('document')}<div><strong>Rincian lama ada di spreadsheet</strong><p>Portal menyimpan rincian penilaian 6 minggu terakhir. Penilaian sampai ${esc(formatDate(M.recordsFolded))} dibuka di spreadsheet tahunan (Tautan Pos → Salinan spreadsheet).</p></div></div>`:'';
  return `${head('Penilaian Guide',`${number(M.recordsTotal)} penilaian ${formatDate(M.from)} – ${formatDate(M.to)}, terbaru dulu. Hanya baca; salah pencet hari ini dibetulkan dari HP pos.`,exportButton)}
  ${filters(sel('pos','Pos',[['1','Pos 1'],['3','Pos 3']])+sel('regu','Regu',regu.map(r=>[r,r]))+sel('status','Status',[['aktif','Aktif'],['diganti','Diganti koreksi']]))}
- ${folded}${table(['Waktu WITA','Pos','Guide','ID-Card','Seragam','Teguran','Laporan','Petugas','Nilai','Catatan','Status'],M.records.map(recordRow))}
+ ${folded}${table(['Waktu WITA','Pos','Guide','ID-Card','Seragam','Etika','Laporan','Petugas','Nilai','Catatan','Status'],M.records.map(recordRow))}
  ${M.recordsMore?`<div class="actions visit-more">${btn(`Muat ${number(Math.min(1000,M.recordsTotal-M.records.length))} berikutnya`,'records-more','arrow','outlined')}</div>`:''}`;
 }
 const recordQuery=offset=>{const f=M.recordFilter,q=new URLSearchParams({from:M.from,to:M.to,limit:'1000',offset:String(offset)});for(const k of ['pos','regu','status'])if(f[k])q.set(k,f[k]);return q.toString();};
@@ -343,29 +351,31 @@ async function sheetAction(action){
 /* ---------- Laporan & Ekspor ---------- */
 function reportsPage(){
  const d=M.report,canExport=permitted('visits.reports.export'),s=d.ringkasan,a=d.aturan;
- const perGuide=d.perGuide.map(g=>`<tr><td>${number(g.peringkat)}</td><td><strong>${esc(g.nama)}</strong><br><span class="muted text-small">${esc(g.guideId)}</span></td><td>${esc(g.regu)}</td><td>${number(g.antar)}</td><td><strong>${score(g.nilai)}</strong></td><td>${rewardCell(g)}</td><td>${pct(g.persenId)}</td><td>${pct(g.persenSeragam)}</td><td>${number(g.teguran)}</td><td>${number(g.berat)}</td><td>${number(g.apresiasi)}</td></tr>`);
+ const perGuide=d.perGuide.map(g=>`<tr><td>${number(g.peringkat)}</td><td><strong>${esc(g.nama)}</strong><br><span class="muted text-small">${esc(g.guideId)}</span></td><td>${esc(g.regu)}</td><td>${number(g.antar)}</td><td><strong>${score(g.nilai)}</strong></td><td>${rewardCell(g)}</td><td>${pct(g.persenId)}</td><td>${pct(g.persenSeragam)}</td><td>${etikaAvg(g.etikaRata)}</td><td>${number(g.berat)}</td><td>${number(g.apresiasi)}</td></tr>`);
  return `${head('Laporan & Ekspor',`Ringkasan bulan ${monthLabel(M.month)} per guide. ${ruleNote(d)}`,canExport?btn('Ekspor Excel','export-report','download','primary'):'')}
  <div class="toolbar"><label class="field"><span>Bulan</span><input type="month" data-visit-field="month" value="${esc(M.month)}" max="${localToday().slice(0,7)}"></label>${btn('Tampilkan','apply-month','filter','outlined')}</div>
  <div class="stats-grid">${stat('Pengantaran',number(s.pengantaran))}${stat('Guide dinilai',number(s.guideDinilai))}${stat('Nilai rata-rata',score(s.nilai))}${stat('Layak reward',s.layak==null?'—':number(s.layak),a?`nilai ≥ ${a.ambang}, minimal ${a.minimal} pengantaran, tanpa pelanggaran berat`:'')}</div>
  ${s.berat.menunggu?`<div class="notice warning">${icon('incident')}<div><strong>${number(s.berat.menunggu)} laporan pelanggaran berat belum diputuskan</strong><p>Putuskan di Verifikasi sebelum reward bulan ini dibagikan.</p></div></div>`:''}
- <div class="visit-stack">${card('Ringkasan per guide','Diurut menurut nilai. Bila reward terbatas: nilai lebih tinggi didahulukan, lalu apresiasi terverifikasi; selebihnya setara. Jumlah hari dan rincian temuan ada di Ekspor Excel.',table(['#','Guide','Regu','Antar','Nilai','Status reward','% ID','% seragam','Teguran','Berat','Apresiasi'],perGuide))}
+ <div class="visit-stack">${card('Ringkasan per guide','Diurut menurut nilai. Bila reward terbatas: nilai lebih tinggi didahulukan, lalu apresiasi terverifikasi; selebihnya setara. Jumlah hari dan rincian temuan ada di Ekspor Excel.',table(['#','Guide','Regu','Antar','Nilai','Status reward','% ID','% seragam','Etika rata-rata','Berat','Apresiasi'],perGuide))}
  ${historyCard(M.history)}</div>
  <p class="muted visit-note">${esc(periodNote(d).trim())} Diperbarui ${when(d.diperbarui)}.</p>`;
 }
 const monthEnd=month=>{const [y,m]=month.split('-').map(Number);const last=new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);return last>localToday()?localToday():last;};
 function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}
 const guideColumns=[{header:'Peringkat',key:'peringkat',kind:'number'},{header:'guideId',key:'guideId'},{header:'Nama',key:'nama',width:30},{header:'Regu',key:'regu'},{header:'Kategori',key:'kategori'},{header:'Pengantaran',key:'antar',kind:'number'},{header:'Hari',key:'hari',kind:'number'},
- {header:'Nilai (100 − potongan)',key:'nilai',kind:'number'},{header:'Tanpa ID',key:'tanpaId',kind:'number'},{header:'Kurang lengkap',key:'kurangLengkap',kind:'number'},{header:'Tidak berseragam',key:'tidakBerseragam',kind:'number'},{header:'Teguran',key:'teguran',kind:'number'},
+ {header:'Nilai (100 − potongan + Etika)',key:'nilai',kind:'number'},{header:'Tanpa ID',key:'tanpaId',kind:'number'},{header:'Kurang lengkap',key:'kurangLengkap',kind:'number'},{header:'Tidak berseragam',key:'tidakBerseragam',kind:'number'},
+ {header:'Jumlah Etika',key:'etika',kind:'number'},{header:'Etika rata-rata',key:'etikaRata',kind:'number'},
  {header:'% ID terpasang',key:'persenId',kind:'number'},{header:'% seragam lengkap',key:'persenSeragam',kind:'number'},{header:'Pelanggaran berat terverifikasi',key:'berat',kind:'number'},{header:'Laporan berat menunggu',key:'beratMenunggu',kind:'number'},{header:'Apresiasi terverifikasi',key:'apresiasi',kind:'number'},{header:'Status reward',key:'statusReward',width:28}];
 const rewardText=g=>g.status?`${(rewardBadge[g.status]||[null,g.status])[1]}${g.beratMenunggu?' (ada laporan berat menunggu)':''}`:'';
-const guideRows=list=>list.map(g=>({...g,nilai:g.nilai==null?null:Math.round(g.nilai*100)/100,statusReward:rewardText(g)}));
+const guideRows=list=>list.map(g=>({...g,nilai:g.nilai==null?null:Math.round(g.nilai*100)/100,etikaRata:g.etikaRata==null?null:Math.round(g.etikaRata*100)/100,statusReward:rewardText(g)}));
 async function exportRecords(){
  const rows=[];
  for(let offset=0;;offset+=1000){const page=await api(`visits/records?${recordQuery(offset)}`);rows.push(...page.items);if(!page.more)break;if(offset>=49000)throw new Error('Lebih dari 50.000 baris. Persempit rentang tanggal.');}
  if(!rows.length)throw new Error('Tidak ada penilaian pada saringan ini.');
  // Rentang yang memotong data lama (422) tetap bisa diekspor rinciannya, tanpa ringkasan.
  const summary=await api(`visits/overview?${range()}`).catch(error=>{if(error.status===422)return null;throw error;});
- const columns=['evaluationId','timestamp','tanggal','pos','guideId','guideName','regu','versi','idCard','seragam','teguran','berat','apresiasi','petugas','nilai','uniform','etika','catatan','receivedAt','koreksiDari','status','digantiOleh'].map(key=>({header:key,key,kind:['pos','versi','uniform','idCard','etika','nilai'].includes(key)?'number':key==='catatan'?'notes':'text',width:key==='catatan'?40:undefined}));
+ // Etika untuk semua bentuk; kolom teguran hanya terisi pada penilaian formulir 2.2.
+ const columns=['evaluationId','timestamp','tanggal','pos','guideId','guideName','regu','versi','idCard','seragam','etika','teguran','berat','apresiasi','petugas','nilai','uniform','catatan','receivedAt','koreksiDari','status','digantiOleh'].map(key=>({header:key,key,kind:['pos','versi','uniform','idCard','etika','nilai'].includes(key)?'number':key==='catatan'?'notes':'text',width:key==='catatan'?40:undefined}));
  const flat=rows.map(r=>({...r,teguran:r.teguran.join(', ')}));
  download(createXlsx([{name:'Penilaian',columns,rows:flat},...(summary?[{name:'Ringkasan per guide',columns:guideColumns,rows:guideRows(summary.perGuide)}]:[])]),`penilaian-guide-${M.from}-sd-${M.to}.xlsx`);
  await post('visits/exports',{kind:'records',from:M.from,to:M.to,rows:rows.length});
@@ -414,24 +424,26 @@ async function flagAction(action,id){
 const kindLabel={teguran:'Teguran',berat:'Pelanggaran berat',apresiasi:'Apresiasi'};
 function scoringPage(){
  const d=M.scoring,manage=d.can_manage,a=d.aturan,now=a.berlaku,next=a.bulan_depan_aturan;
- const ruleRow=r=>`<tr><td>${esc(monthLabel(r.berlaku_mulai))}</td><td>−${number(r.pot_id)}</td><td>−${number(r.pot_kurang)}</td><td>−${number(r.pot_tidak)}</td><td>−${number(r.pot_teguran)}</td><td>${number(r.ambang)}</td><td>${number(r.minimal)}</td><td>${r.berlaku_mulai>a.bulan_ini?`<span class="badge warm">Rencana</span>${manage?` ${btn('Batalkan','rule-delete','close','text',`data-month="${esc(r.berlaku_mulai)}"`)}`:''}`:r.berlaku_mulai===now.berlaku_mulai?'<span class="badge positive">Berlaku</span>':'<span class="muted">Riwayat</span>'}</td></tr>`;
+ const ruleRow=r=>`<tr><td>${esc(monthLabel(r.berlaku_mulai))}</td><td>−${number(r.pot_id)}</td><td>−${number(r.pot_kurang)}</td><td>−${number(r.pot_tidak)}</td><td>${number(r.ambang)}</td><td>${number(r.minimal)}</td><td>${r.berlaku_mulai>a.bulan_ini?`<span class="badge warm">Rencana</span>${manage?` ${btn('Batalkan','rule-delete','close','text',`data-month="${esc(r.berlaku_mulai)}"`)}`:''}`:r.berlaku_mulai===now.berlaku_mulai?'<span class="badge positive">Berlaku</span>':'<span class="muted">Riwayat</span>'}</td></tr>`;
  const types=k=>d.jenis.filter(t=>t.jenis===k).map(t=>`<tr class="${t.aktif?'':'visit-dim'}"><td>${esc(t.label)}<br><span class="muted text-small">${esc(t.kode)}</span></td><td>${t.perlu_catatan?'Wajib':'Tidak'}</td><td>${t.aktif?'Aktif':'Nonaktif'}</td>${manage?`<td>${btn('Ubah','type-edit','settings','text',`data-kode="${esc(t.kode)}"`)}</td>`:''}</tr>`);
- const typeCard=k=>card(kindLabel[k],k==='teguran'?'Dipilih petugas, paling banyak 2 per pengantaran. Setiap teguran dipotong sesuai aturan.':k==='berat'?'Tidak dirata-rata. Bila disetujui Pengelola, guide gugur reward bulan itu.':'Tidak masuk nilai. Bila disetujui, menjadi penentu saat nilai sama.',
+ const typeCard=k=>card(kindLabel[k],k==='berat'?'Tidak dirata-rata. Bila disetujui Pengelola, guide gugur reward bulan itu.':'Tidak masuk nilai. Bila disetujui, menjadi penentu saat nilai sama.',
   table(['Jenis','Catatan','Status',...(manage?['']:[])],types(k)),manage?btn('Tambah','type-new','plus','outlined',`data-jenis="${k}"`):'');
- return `${head('Aturan Nilai','Nilai pengantaran = 100 − potongan. Petugas pos hanya mencatat fakta; besar potongan ditetapkan di sini. Perubahan berlaku mulai bulan depan dan diaudit.')}
- <div class="stats-grid">${stat('Tanpa ID-Card',`−${now.pot_id}`)}${stat('Seragam kurang lengkap',`−${now.pot_kurang}`)}${stat('Tidak berseragam',`−${now.pot_tidak}`)}${stat('Per teguran',`−${now.pot_teguran}`,'paling banyak 2 per pengantaran')}${stat('Ambang layak reward',number(now.ambang))}${stat('Minimal pengantaran',number(now.minimal),'di bawahnya: belum cukup data')}</div>
+ // Teguran perilaku diganti Etika (−10…+10) sejak 17 November 2026; jenis teguran lama
+ // tetap tersimpan untuk label penilaian formulir 2.2, tetapi tidak lagi diatur di sini.
+ return `${head('Aturan Nilai','Nilai pengantaran = 100 − potongan + Etika. Petugas pos mencatat ID-Card, seragam, dan Etika; besar potongan ditetapkan di sini. Perubahan berlaku mulai bulan depan dan diaudit.')}
+ <div class="stats-grid">${stat('Tanpa ID-Card',`−${now.pot_id}`)}${stat('Seragam kurang lengkap',`−${now.pot_kurang}`)}${stat('Tidak berseragam',`−${now.pot_tidak}`)}${stat('Etika','−10 … +10','ditambahkan langsung; 0 = standar')}${stat('Ambang layak reward',number(now.ambang))}${stat('Minimal pengantaran',number(now.minimal),'di bawahnya: belum cukup data')}</div>
  <div class="visit-stack">${card(`Aturan bulan ${monthLabel(a.bulan_ini)} dan sesudahnya`,`${monthLabel(a.bulan_depan)}: ${ruleLine(next)}, ambang ${next.ambang}, minimal ${next.minimal} pengantaran. Aturan bulan berjalan tidak bisa diubah.`,
-  table(['Berlaku mulai','Tanpa ID','Kurang lengkap','Tidak berseragam','Per teguran','Ambang','Minimal','Status'],a.riwayat.slice().reverse().map(ruleRow)),manage?btn(`Atur ${monthLabel(a.bulan_depan)}`,'rule-edit','settings','primary'):'')}
- <div class="visit-grid">${typeCard('teguran')}${typeCard('berat')}</div>${typeCard('apresiasi')}
+  table(['Berlaku mulai','Tanpa ID','Kurang lengkap','Tidak berseragam','Ambang','Minimal','Status'],a.riwayat.slice().reverse().map(ruleRow)),manage?btn(`Atur ${monthLabel(a.bulan_depan)}`,'rule-edit','settings','primary'):'')}
+ <div class="visit-grid">${typeCard('berat')}${typeCard('apresiasi')}</div>
  ${manage?card('Petugas penilai','Dipilih petugas sekali per shift di HP pos (berlaku 8 jam). Nama yang dinonaktifkan tidak muncul lagi di HP.',table(['Nama','Keterangan','Status',''],d.petugas.map(p=>`<tr class="${p.aktif?'':'visit-dim'}"><td><strong>${esc(p.nama)}</strong></td><td>${esc(p.keterangan||'—')}</td><td>${p.aktif?'Aktif':'Nonaktif'}</td><td>${btn('Ubah','assessor-edit','settings','text',`data-id="${esc(p.id)}"`)}</td></tr>`),'Belum ada petugas. Tanpa daftar ini, HP pos menyimpan penilaian tanpa nama petugas.'),btn('Tambah petugas','assessor-new','plus','outlined')):''}
- ${card('Petunjuk di formulir pos','Tampil di bawah tombol ID-Card dan Seragam, supaya Pos 1 dan Pos 3 memakai patokan yang sama.',`<div class="card-body"><p><strong>ID-Card:</strong> ${esc(d.petunjuk.petunjuk_id)}</p><p><strong>Seragam:</strong> ${esc(d.petunjuk.petunjuk_seragam)}</p></div>`,manage?btn('Ubah petunjuk','form-edit','settings','outlined'):'')}</div>
+ ${card('Petunjuk di formulir pos','Tampil di bawah tombol masing-masing, supaya Pos 1 dan Pos 3 memakai patokan yang sama. Patokan Etika berlaku untuk semua pos dan tidak diubah di sini.',`<div class="card-body"><p><strong>ID-Card:</strong> ${esc(d.petunjuk.petunjuk_id)}</p><p><strong>Seragam:</strong> ${esc(d.petunjuk.petunjuk_seragam)}</p><p><strong>Etika:</strong> ${esc(etikaPatokan)}</p></div>`,manage?btn('Ubah petunjuk','form-edit','settings','outlined'):'')}</div>
  <p class="muted visit-note">HP pos memperbarui daftar jenis, petugas, dan petunjuk bersama daftar guide (paling lama 10 menit, atau lewat Pengaturan → Tes Koneksi).</p>`;
 }
 function ruleDialog(){
  const a=M.scoring.aturan,r=a.bulan_depan_aturan,num=(name,label,min,max)=>`<label class="field"><span>${label}</span><input type="number" name="${name}" min="${min}" max="${max}" step="1" required value="${esc(r[name])}"></label>`;
- formDialog(`Aturan mulai ${monthLabel(a.bulan_depan)}`,`${num('pot_id','Potongan tanpa ID-Card',0,50)}${num('pot_kurang','Potongan seragam kurang lengkap',0,50)}${num('pot_tidak','Potongan tidak berseragam',0,50)}${num('pot_teguran','Potongan per teguran',0,50)}${num('ambang','Ambang layak reward',50,100)}${num('minimal','Minimal pengantaran sebulan',1,60)}`,
+ formDialog(`Aturan mulai ${monthLabel(a.bulan_depan)}`,`${num('pot_id','Potongan tanpa ID-Card',0,50)}${num('pot_kurang','Potongan seragam kurang lengkap',0,50)}${num('pot_tidak','Potongan tidak berseragam',0,50)}${num('ambang','Ambang layak reward',50,100)}${num('minimal','Minimal pengantaran sebulan',1,60)}`,
   async data=>{await post('visits/scoring/rule',{...data,berlaku_mulai:a.bulan_depan});toast(`Aturan ${monthLabel(a.bulan_depan)} disimpan.`);refresh();},
-  {note:'Potongan terbesar per pengantaran (tanpa ID + tidak berseragam + 2 teguran) paling banyak 100, dan "kurang lengkap" tidak boleh lebih besar dari "tidak berseragam". Bulan berjalan tetap memakai aturannya.'});
+  {note:'Tanpa ID + tidak berseragam paling banyak 90 (supaya Etika −10 tidak membawa nilai di bawah 0), dan "kurang lengkap" tidak boleh lebih besar dari "tidak berseragam". Etika −10…+10 ditambahkan langsung ke nilai. Bulan berjalan tetap memakai aturannya.'});
 }
 function typeDialog(t,jenis){
  const k=t?t.jenis:jenis;

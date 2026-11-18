@@ -14,7 +14,7 @@
   'use strict';
 
   const App = window.App;
-  const { APP_VERSION, $, $$, TEGURAN_MAKS } = App;
+  const { APP_VERSION, $, $$ } = App;
 
   App.bind = function bind() {
     $('#btnMenu').addEventListener('click', App.openDrawer);
@@ -177,17 +177,11 @@
         berubah();
       }));
     });
-    // Chip teguran digambar ulang dari daftar portal, jadi ditangkap di induknya.
-    const teguranList = $('#teguranList');
-    if (teguranList) teguranList.addEventListener('click', e => {
-      const chip = e.target.closest('[data-teguran]');
-      if (!chip) return;
-      const kode = chip.dataset.teguran, list = App.state.form.crit.teguran || [];
-      if (list.includes(kode)) App.state.form.crit.teguran = list.filter(x => x !== kode);
-      else if (list.length < TEGURAN_MAKS) App.state.form.crit.teguran = [...list, kode];
-      else { App.toast(`Paling banyak ${TEGURAN_MAKS} teguran per pengantaran`, 'warn', '⚠️'); return; }
+    // Penghitung Etika: −10 … +10 lewat tombol besar, tanpa mengetik.
+    $$('[data-crit="etika"] .stepbtn').forEach(btn => btn.addEventListener('click', () => {
+      App.ubahEtika(Number(btn.dataset.step));
       berubah();
-    });
+    }));
     for (const [sel, kunci] of [['#beratSelect', 'berat'], ['#apresiasiSelect', 'apresiasi']]) {
       const el = $(sel);
       if (el) el.addEventListener('change', () => { App.state.form.crit[kunci] = el.value; berubah(); });
@@ -380,6 +374,9 @@
           'warn', '🚫');
       }
       if (state === 'tautan' || state === 'tautanDicabut') App.muatTautan();
+      // Penilaian 2.3 menunggu server yang menyimpan Etika: spanduk, bukan toast tiap menit.
+      if (state === 'menungguServer') App.tampilkanMenungguServer(d.ditunda);
+      else if (state === 'done' || state === 'idle') App.tampilkanMenungguServer(0);
       if (state === 'offline') { /* badge saja */ }
       if (state === 'progress' || state === 'syncing') return;
       App.refreshStats();
