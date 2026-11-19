@@ -4,7 +4,7 @@ import {randomBytes} from 'node:crypto';
 import {all, one, insert, update, tx, audit as localAudit, assert, date, now, today} from './db.mjs';
 import {digest, has as localHas} from './auth.mjs';
 import {guidePosts} from './guide-form.mjs';
-import {reguCodes, parseGuideId, visitGuideList, saveVisitGuide, importVisitGuides, visitRecordPage, visitOverview, visitHistoryStatus, importVisitHistory, finishVisitHistory, cancelVisitHistory} from './visit-data.mjs';
+import {reguCodes, parseGuideId, visitGuideList, saveVisitGuide, importVisitGuides, visitRecordPage, visitOverview, visitReport, visitHistoryStatus, importVisitHistory, finishVisitHistory, cancelVisitHistory} from './visit-data.mjs';
 import {visitSheetStatus} from './visit-sheets.mjs';
 import {scoreRuleState, saveScoreRule, deleteScoreRule, findingTypeList, saveFindingType, assessorList, saveAssessor, formSettings, saveFormSettings, flagList, decideFlag, flagStatuses} from './visit-scoring.mjs';
 const localDeps = {
@@ -171,6 +171,15 @@ export async function visitRoutes({db, user, p, method, body: b = {}, url}, deps
     await requireAny(db, user, ['visits.dashboard.read', 'visits.reports.read'], has);
     const r = range(url);
     return await visitOverview(db, r.from, r.to);
+  }
+  if (p[1] === 'report' && p.length === 2 && method === 'GET') {
+    await requireAny(db, user, ['visits.dashboard.read', 'visits.reports.read'], has);
+    const q = url.searchParams, jenis = q.get('jenis');
+    assert(['hari', 'minggu', 'bulan'].includes(jenis), 'Jenis laporan harus hari, minggu, atau bulan.');
+    if (jenis !== 'bulan') return await visitReport(db, jenis, date(q.get('tanggal') || today(), 'Tanggal'));
+    const bulan = q.get('bulan') || today().slice(0, 7);
+    assert((/^\d{4}-(0[1-9]|1[0-2])$/).test(bulan), 'Bulan tidak valid.');
+    return await visitReport(db, jenis, bulan);
   }
   if (p[1] === 'records' && p.length === 2 && method === 'GET') {
     await requireAny(db, user, ['visits.records.read'], has);

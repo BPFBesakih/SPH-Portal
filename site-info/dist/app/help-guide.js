@@ -47,7 +47,7 @@ export const ROUTE_HELP={
   'visits-flags':'<strong>Verifikasi</strong> — periksa laporan pelanggaran berat dan apresiasi dari pos. Pelanggaran berat yang disetujui menggugurkan reward guide pada bulan itu.',
   'visits-links':'<strong>Tautan Pos</strong> — satu tautan aktif per pos. Buka tautan itu sekali di HP pos; petugas pos tidak perlu login.',
   'visits-scoring':'<strong>Aturan Nilai</strong> — nilai pengantaran = 100 − potongan + Etika. Perubahan aturan berlaku mulai bulan berikutnya.',
-  'visits-reports':'<strong>Laporan &amp; Ekspor</strong> — ringkasan bulanan dan berkas ekspornya.',
+  'visits-reports':'<strong>Laporan &amp; Ekspor</strong> — pilih laporan <strong>Harian</strong>, <strong>Mingguan</strong>, atau <strong>Bulanan</strong>, lalu tentukan periodenya. Setiap laporan memuat perbandingan dengan periode sebelumnya, grafik tren, dan <strong>Ekspor Excel</strong>. Status reward hanya ada di laporan bulanan.',
   // Humas · E-Arsip
   archives:'<strong>Ringkasan</strong> — arsip terbaru dan hal yang perlu ditindaklanjuti.',
   'archive-list':'<strong>Daftar Arsip</strong> — cari arsip, lalu buka detail, pratinjau, atau unduh sesuai hak Anda.',

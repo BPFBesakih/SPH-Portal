@@ -81,6 +81,37 @@ Alasannya dari data lama (evaluasi 4 November): Pos 1 sebelum pukul 15.00 umumny
 - **PWA 2.3.0**: kartu Etika dengan tombol − / + (−10 … +10, bawaan 0) dan patokan di bawahnya; baris patokan yang sesuai angka sekarang disorot, dan pengingat muncul bila Etika minus diberikan pada pengantaran yang seragam atau ID-Card-nya sudah dipotong (hanya pengingat, tetap bisa disimpan). Riwayat dan CSV HP menampilkan Etika (CSV: kolom JUMLAH ETIKA dan rincian Etika per penilaian). Koreksi dan draf dari versi sebelumnya dibuka sebagai formulir Etika: formulir 2.2 membawa Etika −1 per teguran, cara lama membawa Etika apa adanya — tanpa pertanyaan tambahan. **Pengaman urutan rilis:** HP hanya mengirim penilaian Etika bila server `guide-form` menyatakan menyimpan Etika (tanda `penilaian.etika` pada konteks). Selama belum, penilaian itu menunggu di HP (tidak hilang dan tidak dihitung ditolak), Beranda menampilkan "N penilaian menunggu portal diperbarui", dan HP memeriksa ulang setiap 10 menit atau lewat Tes Koneksi. Penilaian 2.2/cara lama yang masih di antrean tetap terkirim.
 - PWA 2.2.2 (rilis sebelumnya) memakai daftar teguran; HP yang belum diperbarui tetap mengirim formulir 2.2 dan tetap diterima.
 
+## Laporan harian, mingguan, dan bulanan, grafik tren
+
+Laporan & Ekspor punya tiga pilihan: **Harian**, **Mingguan**, dan **Bulanan**. Setiap pilihan punya tombol ‹ › untuk pindah periode, pemilih tanggal/bulan, dan tombol kembali ke hari/minggu/bulan ini. Pilihan terakhir diingat di peramban; tampilan pertama tetap Bulanan.
+
+| | Harian | Mingguan | Bulanan |
+| --- | --- | --- | --- |
+| Periode | Satu tanggal WITA | Senin–Minggu WITA (seperti Rekap Mingguan NilaiGuide), boleh melintasi bulan | Bulan kalender |
+| Kegunaan | Memantau pos; **tanpa** status reward | Memantau; **tanpa** status reward | Dasar reward dan arsip; status reward seperti sebelumnya |
+| Pembanding (▲/▼) | Hari sebelumnya. Hari ini dibandingkan dengan kemarin sampai jam yang sama | Minggu sebelumnya. Minggu berjalan dibandingkan dengan minggu lalu sampai hari dan jam yang sama | Bulan sebelumnya. Bulan berjalan dibandingkan dengan bulan lalu sampai tanggal dan jam yang sama |
+| Grafik tren | Per jam (07.00–17.59, ditambah jam lain yang berisi); 30 hari terakhir | Per hari di minggu itu; 12 minggu terakhir | Per hari; per minggu (Senin–Minggu, dipotong ke bulan); 12 bulan terakhir |
+
+- **Periode pembanding.** Bulan yang sudah selesai dibandingkan dengan seluruh bulan sebelumnya. Untuk periode berjalan, pembanding berhenti pada hari dan jam WITA yang sama selama tanggal itu ada. Pada 30 Oktober pukul 10.00, perbandingan mencakup September sampai tanggal 30 pukul 10.00. Pada 31 Oktober, perbandingan mencakup seluruh September. Bila rincian hari pembanding sudah diringkas, hari itu dihitung penuh.
+- **Layak reward.** Kartu bulanan dan lembar Ringkasan Excel menampilkan jumlah guide yang layak dan selisihnya. Setiap bulan memakai aturan nilai dan minimal pengantarannya sendiri. Pelanggaran berat terverifikasi diperhitungkan berdasarkan waktu penilaian dalam periode pembanding.
+- **Kartu angka**: pengantaran (laporan harian: per pos), guide dinilai, nilai rata-rata, % ID terpasang, % seragam lengkap, Etika rata-rata, ditambah layak reward pada laporan bulanan. Ukuran mutu yang naik berwarna hijau dan yang turun merah; jumlah tanpa warna. Panah dan teks tetap ada, jadi artinya tidak bergantung pada warna.
+- **Grafik tren** (`public/visit-trend.js`, SVG tanpa pustaka, sesuai CSP portal): tiga panel bersumbu waktu sama — nilai rata-rata, ketaatan (% ID terpasang dan % seragam lengkap), dan pengantaran.
+  - Arahkan kursor, ketuk, atau fokus lalu pakai ← → Home End untuk membaca semua angka di satu titik. Di HP angka titik tampil tetap di bawah grafik.
+  - Sisa periode yang belum berjalan tetap di sumbu dan diarsir. Titik periode, hari, atau jam yang masih berjalan digambar berongga.
+  - **Lihat angka dalam tabel** memuat angka yang sama.
+  - Warna marun–emas lulus validator palet buta warna (protan/deutan) pada tema terang dan gelap.
+  - Per jam dihitung dari jam penilaian di rincian, jadi hanya ada untuk ±6 minggu terakhir. Hari yang sudah diringkas hanya menampilkan 30 hari.
+- **Di bawah grafik**: per pos, per regu, per petugas penilai (laporan harian), ringkasan per guide (status reward hanya bulanan), dan kartu Migrasi awal NilaiGuide. Laporan harian punya tombol **Rincian penilaian** yang membuka halaman Penilaian untuk tanggal itu.
+- **Ekspor Excel**:
+  - Harian: Ringkasan (hari itu, pembanding, selisih), Per jam, Tren 30 hari, Per pos, Per regu, Per petugas, Ringkasan per guide, dan Penilaian (rincian tiap penilaian hari itu, bila masih ada dan pengguna boleh melihat Penilaian).
+  - Mingguan/bulanan: Ringkasan, Per hari, Per minggu (bulanan), Tren 12 minggu/12 bulan, Per pos, Per regu, Ringkasan per guide.
+  - Persen disimpan sebagai pecahan berformat %, juga untuk ekspor Penilaian.
+- **Sumber angka**: rute baru `GET visits/report?jenis=hari&tanggal=…`, `jenis=minggu&tanggal=…`, atau `jenis=bulan&bulan=YYYY-MM` (izin sama dengan Dashboard/Laporan).
+  - Satu bacaan `visitDayRows` untuk 30 hari/12 minggu/12 bulan terakhir memuat periode, pembanding, dan tren. Karena itu rumus dan aturan potongan per bulan sama persis dengan Dashboard, juga setelah rincian dilipat ke rekap harian dan untuk riwayat NilaiGuide hasil migrasi awal.
+  - Per jam dan potongan jam pembanding membaca rincian `visit_evaluations`.
+  - Tanpa migrasi basis data dan tanpa perubahan `guide-form`.
+- **Urutan rilis bebas**: ruang kerja baru dengan `portal-api` lama tetap menampilkan laporan dari `visits/overview` (tanpa pembanding dan grafik, dengan keterangan). Ruang kerja lama dengan `portal-api` baru tidak berubah.
+
 ## Isi modul
 
 | Bagian | Berkas | Keterangan |
@@ -88,14 +119,14 @@ Alasannya dari data lama (evaluasi 4 November): Pos 1 sebelum pukul 15.00 umumny
 | Formulir lapangan | `public/penilaian-guide/` → `site-info/dist/penilaian-guide/` | PWA NilaiGuide yang dipindah: offline, tanpa login. Pos ditentukan tautan pos (token di fragmen URL). |
 | Gateway publik | `site-info/lib/guide-form.mjs`, `site-info/functions/api/guide-form/[[action]].js` | `POST /api/guide-form/{context,submit}`: origin, `CF-Connecting-IP`, badan ≤ 24 KB, lalu ke Edge `guide-form` dengan secret server. |
 | Edge publik | `supabase/functions/guide-form/index.ts` → `supabase/deploy/guide-form/index.ts` (`scripts/build-guide-form.mjs`) | Batas frekuensi, token → tautan aktif, aturan terima di bawah kunci khusus modul, salinan di latar belakang. Tanpa kunci global portal. |
-| Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap "100 − potongan", peringkat dan status reward, rekap per hari untuk rentang bebas, migrasi awal NilaiGuide. |
+| Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap "100 − potongan", peringkat dan status reward, rekap per hari untuk rentang bebas, laporan mingguan/bulanan dan tren (`visitReport`, `visitTrend`), migrasi awal NilaiGuide. |
 | Aturan nilai & verifikasi | `lib/visit-scoring.mjs` | Besar potongan per bulan (`visit_score_rules`), daftar teguran/pelanggaran berat/apresiasi (`visit_finding_types`), petugas penilai (`visit_assessors`), petunjuk formulir (`visit_form_settings`), laporan yang menunggu keputusan (`visit_flags`). |
 | Salinan & retensi | `lib/visit-sheets.mjs` | Google Sheets/Drive lewat OAuth yang sama dengan unggah berkas (`GOOGLE_DRIVE_*`), lease, tulis posisional, verifikasi, pelipatan bulanan, pemeriksaan koneksi. |
 | Rute pengelolaan | `lib/visits.mjs` → `_shared/portal/*.mjs`, disuntikkan ke snapshot `portal-api` oleh `scripts/build-visits-deploy.mjs` (snapshot sebelum Kunjungan) atau diperbarui oleh `scripts/build-visits-update.mjs` (snapshot yang sudah memuat Kunjungan, misalnya setelah Absensi) | Rute basis data di `routeOperation`; `visits/sheet/sync` dan `visits/sheet/check` dicegat sebelum transaksi permintaan. |
 | Formulir pos | `lib/guide-form.mjs` | Pemeriksaan bentuk, batas 60 `context` dan 300 penilaian per 10 menit per tautan dan per IP, catatan kiriman tanpa isi nilai (90 hari). |
-| Ruang kerja | `public/visits.js`, `public/visit-import.js` (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Verifikasi, Tautan Pos + Salinan spreadsheet, Aturan Nilai, Laporan & Ekspor (+ kartu Migrasi awal NilaiGuide). |
+| Ruang kerja | `public/visits.js`, `public/visit-import.js`, `public/visit-trend.js` (grafik tren) (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Verifikasi, Tautan Pos + Salinan spreadsheet, Aturan Nilai, Laporan & Ekspor (+ kartu Migrasi awal NilaiGuide). |
 | Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `…/20261104120000_visit_daily_totals_history.sql`, `…/20261113100000_visit_objective_scoring.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_daily_totals`, `visit_history_import`, `visit_history_ids`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`, `visit_score_rules`, `visit_finding_types`, `visit_assessors`, `visit_flags`, `visit_form_settings`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
-| Uji | `tests/visits.test.mjs`, `tests/visit-history.test.mjs`, `tests/guide-form-transport.test.mjs`, `scripts/verify-visits-postgres.mjs`, `scripts/verify-guide-form-ui.mjs`, `scripts/fake-google-sheets.mjs` | Google tiruan yang ketat (batas grid, galat bergaya Google); tidak pernah menghubungi Google. |
+| Uji | `tests/visits.test.mjs`, `tests/visit-report.test.mjs`, `tests/visit-history.test.mjs`, `tests/guide-form-transport.test.mjs`, `scripts/verify-visits-postgres.mjs`, `scripts/verify-guide-form-ui.mjs`, `scripts/fake-google-sheets.mjs` | Google tiruan yang ketat (batas grid, galat bergaya Google); tidak pernah menghubungi Google. |
 
 ## Izin
 
@@ -120,6 +151,7 @@ Tidak perlu folder NilaiGuide dan tidak perlu layanan cloud:
 cd $HOME\Documents\GitHub\SPH-Portal-uji
 node scripts/preview-kunjungan.mjs            # lanjutkan data pratinjau
 node scripts/preview-kunjungan.mjs --reset    # mulai dari awal
+node scripts/preview-kunjungan.mjs --reset --contoh   # mulai dari awal dengan penilaian fiktif untuk Laporan
 ```
 
 - Portal: http://127.0.0.1:4615/#visits — akun `kunjungan.preview`, `pimpinan.preview`, `admin.preview`, `sdm.preview` (password `Preview2026!`).
@@ -136,6 +168,13 @@ Yang layak dicoba:
 5. Data Guide → Impor berkas (.xlsx dari Google Sheets atau .csv) → pratinjau → Terapkan.
 6. Tautan Pos → **Periksa koneksi** (empat langkah hijau) dan **Sinkronkan sekarang**. Ganti tautan Pos 1: HP dengan tautan lama menunggu tautan baru; antreannya tidak hilang.
 7. Dashboard, Penilaian, Laporan: ekspor Excel.
+   - Laporan & Ekspor (paling mudah dengan `--reset --contoh`: penilaian fiktif 5 minggu terakhir dan rekap harian sejak Januari):
+     - **Harian**, **Mingguan**, dan **Bulanan**, dengan tombol ‹ ›;
+     - pembanding ▲/▼ di kartu angka (periode berjalan: sampai jam yang sama);
+     - grafik tren (arahkan kursor, ketuk, atau Tab lalu panah ← →) dengan pilihan Per jam / 30 hari, Per hari / Per minggu, dan 12 minggu atau 12 bulan;
+     - **Lihat angka dalam tabel**, **Rincian penilaian** (harian), tema gelap, dan tampilan HP (lebar ±390 px).
+
+     Ekspor Excel ketiganya lalu buka sheet-sheetnya.
 8. Laporan & Ekspor → **Mulai migrasi awal** → pilih unduhan .xlsx spreadsheet NilaiGuide (atau salinannya) → pratinjau per bulan → Terapkan. Pilih bulan Maret, dll. di Laporan: angka NilaiGuide ikut terhitung. **Batalkan migrasi** mengembalikan angka seperti semula. Data pratinjau tetap di `data/` dan tidak dikirim ke mana pun.
 9. Masuk sebagai `pimpinan.preview` (tanpa Tautan Pos, ubah guide, atau sinkronkan) dan `sdm.preview` (tanpa ruang kerja Kunjungan).
 10. Penilaian "100 − potongan + Etika": di HP pilih nama petugas, isi ID-Card, Seragam, Etika (tombol − / +, bawaan 0), dan laporan pelanggaran berat/apresiasi (catatan wajib). Lihat nilai di Penilaian (mis. tanpa ID + kurang lengkap + Etika −2 = 68; tanpa temuan + Etika +3 = 103), lalu putuskan laporannya di **Verifikasi** dan lihat status reward di Laporan & Ekspor. Di **Aturan Nilai**, rencanakan potongan bulan depan, tambah petugas atau jenis pelanggaran berat/apresiasi; HP mendapatkannya setelah Pengaturan → Tes Koneksi.
@@ -143,7 +182,7 @@ Yang layak dicoba:
 Pemeriksaan otomatis:
 
 ```powershell
-node --test tests/*.test.mjs                                    # termasuk tests/visits.test.mjs
+node --test tests/*.test.mjs                                    # termasuk tests/visits.test.mjs dan tests/visit-report.test.mjs
 node scripts/verify-visits-postgres.mjs <pglite\dist\index.js>  # PGlite: migrasi, Edge guide-form, snapshot portal-api, retensi, migrasi awal
 node scripts/verify-guide-form-ui.mjs                           # Playwright: HP pos dan ruang kerja (termasuk migrasi awal dan pengaman Etika)
 node scripts/verify-visit-resume-ui.mjs                         # Playwright: kelanjutan migrasi awal
@@ -224,6 +263,28 @@ Rollback:
 - Pages → deployment sebelumnya (HP kembali ke PWA 2.2.2 saat dibuka online). **Sebelumnya pastikan antrean HP kosong** (Beranda: Tertunda 0): PWA 2.2.2 mengirim penilaian Etika yang masih tertahan tanpa Etika-nya (tercatat Etika 0).
 - Migrasi dibiarkan; batas −10..+10 menerima semua data lama.
 
+### Rilis laporan harian/mingguan/bulanan + grafik tren (branch `claude/kunjungan-laporan-mingguan-bulanan`)
+
+Dibangun di atas master `fa080f8` (PR #40, sesudah rilis Etika PR #39). **Tanpa migrasi basis data dan tanpa `guide-form` baru**; hanya lingkup `__visits` di `portal-api` dan ruang kerja (Pages). Urutan bebas (lihat di atas), tetapi `portal-api` lebih dulu supaya grafik langsung tampil saat Pages tayang:
+
+1. Pastikan rilis Etika (PR #39) sudah lengkap: migrasi, `guide-form` `5dab0844…`, dan `portal-api`.
+2. Edge Function `portal-api`: unduh versi aktif, simpan salinannya sebagai titik kembali, hitung SHA-256-nya.
+   - Bila sama dengan `0a074d2340f3ae393c81d4b8e0aba090bebed5514802cb9defc1d9ea7782f323` (paket PR #39), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `b0e773a6c73cbe3b5b4edfbf56afe1673d567213be368b2f36752bfe03b05bf7`).
+   - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya (hanya lingkup `__visits` yang diganti).
+3. Merge ke `master`: Pages menayangkan Laporan & Ekspor yang baru (bundel `portal-a0e3c2e88d44.js` + `portal-b47dab8bb9fa.css`).
+4. Periksa: buka Laporan & Ekspor → Harian, Mingguan, dan Bulanan. Kartu angka menampilkan "vs …" dan grafik tren tampil; Harian menampilkan grafik per jam. Bila muncul "Grafik tren dan pembanding belum tersedia", `portal-api` baru belum aktif.
+
+Rollback: `portal-api` → salinan langkah 2 (ruang kerja baru otomatis kembali ke laporan tanpa grafik), Pages → deployment sebelumnya. Tidak ada data atau tabel yang berubah.
+
+Validasi (19 November, Node 24.22.3):
+
+- 399/399 tes aplikasi, termasuk pembanding pada akhir bulan, aturan reward bulan sebelumnya, batas waktu WITA serta kesesuaian tren sebelum dan sesudah pelipatan.
+- 20/20 pemeriksaan PostgreSQL. Termasuk rute laporan harian/mingguan/bulanan lewat paket `portal-api` dan laporan yang sama sebelum/sesudah retensi.
+- 33/33 alur formulir/ruang kerja. Termasuk Laporan harian/mingguan/bulanan, grafik dengan papan ketik, ekspor Excel, Rincian penilaian, dan `portal-api` lama.
+- 5/5 kelanjutan migrasi dan 5/5 PWA.
+
+Paket `portal-api` dapat dibangun ulang dengan hash yang sama; `guide-form` tidak berubah.
+
 ## Keputusan yang dipakai
 
 - Penyimpanan: basis data portal + salinan spreadsheet baru (keputusan pemilik, 3 November). Retensi 42 hari, umur kiriman 30 hari, rekap harian untuk periode lama (4 November; sebelumnya ringkasan bulanan).
@@ -269,7 +330,7 @@ Validasi rilis Etika (18 November): 385/385 tes aplikasi (termasuk `tests/visit-
 
 ## Tindak lanjut
 
-- Dashboard (rentang preset, pembanding, tren, cakupan), laporan mingguan dan bulanan, ekspor Excel, dan tampilan cetak A4 — PR berikutnya. Format NILAI REWARD rekap regu menunggu revisi pemilik.
+- Laporan harian, mingguan, dan bulanan dengan pembanding, grafik tren, dan ekspor Excel: branch `claude/kunjungan-laporan-mingguan-bulanan` (lihat Rilis). Berikutnya: Dashboard (rentang preset, pembanding, tren, cakupan guide yang belum dinilai) dan tampilan cetak A4 dengan kop serta tanda tangan jabatan. Format NILAI REWARD rekap regu menunggu revisi pemilik.
 - Menunggu pemilik: daftar resmi atribut seragam (untuk petunjuk "Kurang lengkap"), daftar resmi jenis pelanggaran berat/apresiasi (daftar awal masih contoh), jawaban apakah Pos 3 memeriksa ID-Card dengan cara yang sama, dan konfirmasi rincian Etika (lihat Keputusan). Setelah pilot, periksa Etika rata-rata per petugas di Dashboard: rata-rata yang jauh dari 0 berarti patokan petugas itu perlu disamakan lagi.
 - Penyalinan terjadwal (pg_cron + pg_net) bila kiriman pos jarang; sekarang penyalinan dipicu kiriman dan tombol portal.
 - Layar Pengaturan modul untuk batas frekuensi dan nama pos.

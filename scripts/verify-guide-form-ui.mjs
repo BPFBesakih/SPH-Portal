@@ -14,7 +14,7 @@
 // (periksa koneksi, sinkronkan) di portal.
 // Playwright diambil dari PLAYWRIGHT_MODULE bila diisi, selain itu dari `playwright`.
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,rmSync,writeFileSync,readFileSync} from 'node:fs';
 import {deflateRawSync,crc32} from 'node:zlib';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
@@ -188,6 +188,95 @@ try{
     await portal.click('[data-visit="flag-approve"]');await portal.waitForSelector('dialog [data-confirm]');await portal.click('dialog [data-confirm]');await portal.waitForSelector('text=Laporan disetujui.');
     assert.equal(one(db,"SELECT status FROM visit_flags WHERE guide_id='G-091'").status,'disetujui');
     await portal.goto(base+'/#visits-reports');await portal.waitForSelector('text=Ringkasan per guide');assert.match(await portal.textContent('main'),/Gugur — pelanggaran berat/);
+  });
+  // Isi berkas .xlsx unduhan (ZIP tanpa kompresi, ditulis public/xlsx-export.js).
+  const xlsxFiles=async download=>{const bytes=readFileSync(await download.path()),view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),files=new Map();
+    for(let at=0;view.getUint32(at,true)===0x04034b50;){const size=view.getUint32(at+18,true),nameLength=view.getUint16(at+26,true),extra=view.getUint16(at+28,true),begin=at+30+nameLength+extra;
+      files.set(bytes.subarray(at+30,at+30+nameLength).toString(),bytes.subarray(begin,begin+size).toString());at=begin+size;}
+    return files;};
+  const sheetNames=files=>[...files.get('xl/workbook.xml').matchAll(/<sheet name="([^"]+)"/g)].map(m=>m[1]);
+  await check('Penilaian: Ekspor Excel memuat rincian dan ringkasan per guide, persen berformat %',async()=>{
+    await portal.goto(base+'/#visits-records');await portal.waitForSelector('[data-visit="export-records"]');
+    const [download]=await Promise.all([portal.waitForEvent('download'),portal.click('[data-visit="export-records"]')]);
+    const files=await xlsxFiles(download);assert.deepEqual(sheetNames(files),['Penilaian','Ringkasan per guide']);
+    assert.match(files.get('xl/worksheets/sheet2.xml'),/ s="12"><v>/,'% ID dan % seragam berformat persen');
+    await portal.waitForSelector('text=penilaian diekspor.');
+  });
+  await check('Laporan & Ekspor: bulanan (bawaan), mingguan, dan harian dengan pembanding, grafik tren yang terbaca papan ketik, dan ekspor Excel bersheet tren',async()=>{
+    await portal.goto(base+'/#visits-reports');await portal.waitForSelector('[data-trend] svg');
+    let main=await portal.textContent('main');
+    assert.match(main,/Laporan bulanan .+ dasar reward dan arsip/);assert.match(main,/Status reward/);assert.match(main,/vs /,'kartu angka memuat pembanding');
+    assert.match(await portal.getAttribute('.visit-trend','aria-label'),/^Grafik tren \d+ hari/);
+    // Papan ketik: fokus ke grafik membuka angka titik terakhir yang berisi; panah berpindah titik.
+    await portal.focus('.visit-trend');await portal.waitForSelector('.visit-trend-tip:not([hidden])');
+    const tipToday=await portal.textContent('.visit-trend-tip');assert.match(tipToday,/Nilai rata-rata/);assert.match(tipToday,/Pengantaran · \d+ guide/);
+    assert.equal(await portal.locator('.viz-hover:not([hidden]) .viz-cross').count(),1,'garis bantu tampil');
+    await portal.keyboard.press('Home');assert.notEqual(await portal.textContent('.visit-trend-tip'),tipToday);
+    await portal.keyboard.press('Escape');assert.equal(await portal.locator('.visit-trend-tip[hidden]').count(),1);
+    // Tabel padanan grafik.
+    await portal.click('.visit-trend-table summary');assert(await portal.locator('.visit-trend-table tbody tr').count()>=1);
+    // Mingguan: Senin–Minggu, tanpa status reward; pilihan diingat setelah dimuat ulang.
+    await portal.click('[data-visit="report-mode"][data-mode="minggu"]');await portal.waitForSelector('text=Laporan mingguan');await portal.waitForSelector('[data-trend] svg');
+    main=await portal.textContent('main');assert.doesNotMatch(main,/Layak reward/);assert.match(main,/Senin–Minggu WITA/);
+    assert.equal(await portal.locator('th',{hasText:'Status reward'}).count(),0,'status reward hanya di laporan bulanan');
+    assert.equal(await portal.locator('[data-visit="report-next"][disabled]').count(),1,'minggu depan belum bisa dibuka');
+    await portal.reload();await portal.waitForSelector('[data-trend] svg');assert.match(await portal.textContent('main'),/Laporan mingguan/);
+    await portal.click('[data-visit="trend-scope"][data-scope="tren"]');await portal.waitForFunction(()=>/^Grafik tren 12 minggu/.test(document.querySelector('.visit-trend')?.getAttribute('aria-label')||''));
+    await portal.click('[data-visit="report-prev"]');await portal.waitForSelector('[data-visit="report-current"]');await portal.waitForSelector('[data-trend]');
+    await portal.click('[data-visit="report-current"]');await portal.waitForFunction(()=>!document.querySelector('[data-visit="report-current"]'));await portal.waitForSelector('[data-trend] svg');
+    // Ekspor mingguan: ringkasan + pembanding, per hari, tren 12 minggu, per regu/pos/guide; persen berformat %.
+    const [download]=await Promise.all([portal.waitForEvent('download'),portal.click('[data-visit="export-report"]')]);
+    assert.match(download.suggestedFilename(),/^laporan-mingguan-penilaian-guide-\d{4}-\d{2}-\d{2}-sd-\d{4}-\d{2}-\d{2}\.xlsx$/);
+    const files=await xlsxFiles(download);
+    assert.deepEqual(sheetNames(files),['Ringkasan','Per hari','Tren 12 minggu','Per pos','Per regu','Ringkasan per guide']);
+    assert.match(files.get('xl/worksheets/sheet1.xml'),/Pembanding: /);assert.match(files.get('xl/worksheets/sheet1.xml'),/ s="12"><v>/);
+    assert.doesNotMatch(files.get('xl/worksheets/sheet6.xml'),/Status reward/);assert.match(files.get('xl/styles.xml'),/formatCode="0\.0%"/);
+    await portal.waitForSelector('text=Laporan mingguan diekspor.');
+    // Harian: per jam (WITA) bawaan, pembanding kemarin sampai jam yang sama, per petugas, rincian penilaian.
+    await portal.click('[data-visit="report-mode"][data-mode="hari"]');await portal.waitForSelector('text=Laporan harian');await portal.waitForSelector('[data-trend] svg');
+    assert.match(await portal.getAttribute('.visit-trend','aria-label'),/^Grafik tren \d+ jam/);
+    main=await portal.textContent('main');assert.match(main,/Hari berjalan: angka sampai pukul \d\d\.\d\d, dibanding kemarin s\.d\. \d\d\.\d\d\./);
+    assert.match(main,/Per petugas penilai/);assert.match(main,/Petugas Uji Satu/);assert.match(main,/Pos 1: \d+ · Pos 3: \d+/);
+    assert.equal(await portal.locator('th',{hasText:'Status reward'}).count(),0);assert.equal(await portal.locator('[data-visit="report-next"][disabled]').count(),1,'besok belum bisa dibuka');
+    await portal.focus('.visit-trend');await portal.waitForSelector('.visit-trend-tip:not([hidden])');assert.match(await portal.textContent('.visit-trend-tip'),/pukul \d\d\.00–\d\d\.59/);
+    await portal.click('[data-visit="trend-scope"][data-scope="tren"]');await portal.waitForFunction(()=>/^Grafik tren 30 hari/.test(document.querySelector('.visit-trend')?.getAttribute('aria-label')||''));
+    const exportDay=await portal.locator('[data-visit-field="reportDayPick"]').inputValue();
+    const details='**/api/visits/records?**',gate=Promise.withResolvers();
+    await portal.route(details,async route=>{await gate.promise;await route.continue();},{times:1});
+    const downloadReady=portal.waitForEvent('download');
+    try{
+      await Promise.all([portal.waitForRequest(details),portal.click('[data-visit="export-report"]')]);
+      await portal.click('[data-visit="report-prev"]');
+    }finally{gate.resolve();}
+    const daily=await downloadReady;
+    assert.equal(daily.suggestedFilename(),`laporan-harian-penilaian-guide-${exportDay}.xlsx`);
+    const dayFiles=await xlsxFiles(daily);
+    assert.deepEqual(sheetNames(dayFiles),['Ringkasan','Per jam','Tren 30 hari','Per pos','Per regu','Per petugas','Ringkasan per guide','Penilaian']);
+    assert.match(dayFiles.get('xl/worksheets/sheet1.xml'),/Pembanding: kemarin s\.d\. /);
+    await portal.waitForSelector('text=Laporan harian diekspor.');
+    await portal.waitForSelector('[data-visit="report-current"]');await portal.waitForSelector('text=hari sebelumnya');
+    await portal.click('[data-visit="report-current"]');await portal.waitForFunction(()=>!document.querySelector('[data-visit="report-current"]'));
+    await portal.click('[data-visit="report-records"]');await portal.waitForSelector('[data-visit="export-records"]');
+    const today=await portal.evaluate(()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Makassar'}).format(new Date()));
+    assert.deepEqual(await portal.$$eval('[data-visit-field="from"],[data-visit-field="to"]',els=>els.map(e=>e.value)),[today,today],'rincian penilaian hari itu');
+    await portal.goto(base+'/#visits-reports');await portal.waitForSelector('text=Laporan harian');
+    // Kembali ke bulanan untuk pemeriksaan berikutnya.
+    await portal.click('[data-visit="report-mode"][data-mode="bulan"]');await portal.waitForSelector('text=Laporan bulanan');await portal.waitForSelector('[data-trend] svg');
+    // Ekspor bulanan: ditambah per minggu dan status reward.
+    const [monthly]=await Promise.all([portal.waitForEvent('download'),portal.click('[data-visit="export-report"]')]);
+    assert.match(monthly.suggestedFilename(),/^laporan-bulanan-penilaian-guide-\d{4}-\d{2}\.xlsx$/);
+    const monthFiles=await xlsxFiles(monthly);
+    assert.deepEqual(sheetNames(monthFiles),['Ringkasan','Per hari','Per minggu','Tren 12 bulan','Per pos','Per regu','Ringkasan per guide']);
+    assert.match(monthFiles.get('xl/worksheets/sheet1.xml'),/Layak reward/);assert.match(monthFiles.get('xl/worksheets/sheet7.xml'),/Status reward/);
+    assert.match(await portal.locator('.visit-stat').filter({hasText:'Layak reward'}).locator('.visit-stat-delta').textContent(),/vs /);
+    const rewardCells=[...monthFiles.get('xl/worksheets/sheet1.xml').matchAll(/<c r="P[234]"><v>(-?\d+)<\/v>/g)].map(m=>Number(m[1]));
+    assert.equal(rewardCells.length,3);assert.equal(rewardCells[2],rewardCells[0]-rewardCells[1]);
+    // portal-api versi sebelumnya (tanpa rute laporan): rekap tetap tampil dari visits/overview, tanpa grafik.
+    await portal.route('**/api/visits/report?**',r=>r.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Alamat API tidak ditemukan.'})}));
+    await portal.reload();await portal.waitForSelector('text=Grafik tren dan pembanding belum tersedia');
+    assert.equal(await portal.locator('[data-trend]').count(),0);assert.match(await portal.textContent('main'),/Ringkasan per guide/);
+    assert.notEqual(await portal.textContent('.stat-card .stat-value'),'—');
+    await portal.unroute('**/api/visits/report?**');
   });
   await check('Aturan Nilai: Etika −10…+10 tanpa potongan teguran; rencana bulan depan disimpan dan dibatalkan; petugas dan jenis apresiasi ditambah',async()=>{
     await portal.goto(base+'/#visits-scoring');await portal.waitForSelector('[data-visit="rule-edit"]');const main=await portal.textContent('main');
