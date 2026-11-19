@@ -205,7 +205,17 @@ try{
   await check('Laporan & Ekspor: bulanan (bawaan), mingguan, dan harian dengan pembanding, grafik tren yang terbaca papan ketik, dan ekspor Excel bersheet tren',async()=>{
     await portal.goto(base+'/#visits-reports');await portal.waitForSelector('[data-trend] svg');
     let main=await portal.textContent('main');
-    assert.match(main,/Laporan bulanan .+ dasar reward dan arsip/);assert.match(main,/Status reward/);assert.match(main,/vs /,'kartu angka memuat pembanding');
+    assert.match(main,/Laporan bulanan per guide untuk penetapan reward dan arsip/);assert.match(main,/Status reward/);assert.match(main,/vs /,'kartu angka memuat pembanding');
+    const periodBar=portal.locator('.visit-period'),monthPicker=periodBar.getByRole('combobox',{name:'Bulan laporan'});
+    const selectedMonth=await monthPicker.inputValue(),monthText=await monthPicker.locator('option:checked').textContent();
+    assert.equal(await periodBar.locator('.visit-stepper select').count(),1);
+    assert.equal(await periodBar.getByText(monthText,{exact:true}).evaluateAll(elements=>elements.filter(el=>el.tagName!=='OPTION').length),0);
+    await periodBar.getByRole('button',{name:'Bulan sebelumnya'}).click();
+    await periodBar.getByRole('button',{name:'Bulan ini',exact:true}).waitFor();
+    assert.notEqual(await monthPicker.inputValue(),selectedMonth);
+    await monthPicker.selectOption(selectedMonth);
+    await periodBar.getByRole('button',{name:'Bulan ini',exact:true}).waitFor({state:'detached'});
+    assert(await periodBar.getByRole('button',{name:'Bulan berikutnya'}).isDisabled());
     assert.match(await portal.getAttribute('.visit-trend','aria-label'),/^Grafik tren \d+ hari/);
     // Papan ketik: fokus ke grafik membuka angka titik terakhir yang berisi; panah berpindah titik.
     await portal.focus('.visit-trend');await portal.waitForSelector('.visit-trend-tip:not([hidden])');

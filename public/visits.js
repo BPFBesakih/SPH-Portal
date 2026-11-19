@@ -388,13 +388,14 @@ function periodBar(){
  const mode=M.reportMode,{from,to}=reportPeriod(),today=localToday(),unit={hari:'Hari',minggu:'Minggu',bulan:'Bulan'}[mode];
  const next=mode==='hari'?shiftDay(from,1):mode==='minggu'?shiftDay(from,7):`${addMonth(M.month,1)}-01`;
  const current=mode==='hari'?from===today:mode==='minggu'?from===weekStartOf(today):M.month===today.slice(0,7);
- const label=mode==='hari'?formatDate(from,{weekday:'short',day:'numeric',month:'short',year:'numeric'}):mode==='minggu'?rangeLabel(from,to):monthLabel(M.month);
- const picker=mode==='bulan'?`<label class="field"><span>Bulan</span><select data-visit-field="month">${monthChoices()}</select></label>`
-  :`<label class="field"><span>${mode==='hari'?'Tanggal':'Minggu yang memuat tanggal'}</span><input type="date" data-visit-field="${mode==='hari'?'reportDayPick':'reportWeekPick'}" value="${esc(from)}" min="2025-01-01" max="${today}"></label>`;
+ const periodControl=mode==='bulan'
+  ? `<div class="field"><select aria-label="Bulan laporan" data-visit-field="month">${monthChoices()}</select></div>`
+  : `<strong aria-live="polite">${esc(mode==='hari'?formatDate(from,{weekday:'short',day:'numeric',month:'short',year:'numeric'}):rangeLabel(from,to))}</strong>`;
+ const datePicker=mode==='bulan'?'':`<label class="field"><span>${mode==='hari'?'Tanggal':'Minggu yang memuat tanggal'}</span><input type="date" data-visit-field="${mode==='hari'?'reportDayPick':'reportWeekPick'}" value="${esc(from)}" min="2025-01-01" max="${today}"></label>`;
  return `<div class="toolbar visit-period">
  <div class="visit-mode" role="group" aria-label="Jenis laporan">${reportModes.map(([key,text])=>`<button type="button" class="chip ${mode===key?'active':''}" data-visit="report-mode" data-mode="${key}" aria-pressed="${mode===key}">${text}</button>`).join('')}</div>
- <div class="visit-stepper"><button type="button" class="icon-button" data-visit="report-prev" aria-label="${unit} sebelumnya" title="${unit} sebelumnya">${icon('chevron','flip')}</button><strong aria-live="polite">${esc(label)}</strong><button type="button" class="icon-button" data-visit="report-next" aria-label="${unit} berikutnya" title="${unit} berikutnya" ${next>today?'disabled':''}>${icon('chevron')}</button></div>
- ${picker}
+ <div class="visit-stepper"><button type="button" class="icon-button" data-visit="report-prev" aria-label="${unit} sebelumnya" title="${unit} sebelumnya">${icon('chevron','flip')}</button>${periodControl}<button type="button" class="icon-button" data-visit="report-next" aria-label="${unit} berikutnya" title="${unit} berikutnya" ${next>today?'disabled':''}>${icon('chevron')}</button></div>
+ ${datePicker}
  ${current?'':btn(`${unit} ini`,'report-current','calendar','outlined')}</div>`;
 }
 // Pembanding: periode sebelumnya yang utuh, atau — bila periode ini masih berjalan — periode lalu
@@ -485,7 +486,7 @@ const petugasRow=r=>`<tr><td>${r.petugas?esc(r.petugas):'<span class="muted">Tan
 function reportsPage(){
  const d=M.report,mode=M.reportMode,daily=mode==='hari',monthly=mode==='bulan',canExport=permitted('visits.reports.export'),s=d.ringkasan,L=d.laporan,{from,to}=reportPeriod();
  const intro=daily?`Laporan harian ${dayTitle(from)} untuk memantau pos; reward memakai laporan bulanan.`
-  :mode==='minggu'?`Laporan mingguan ${rangeLabel(from,to)} (Senin–Minggu WITA) untuk memantau; reward memakai laporan bulanan.`:`Laporan bulanan ${monthLabel(M.month)} per guide, dasar reward dan arsip.`;
+  :mode==='minggu'?`Laporan mingguan ${rangeLabel(from,to)} (Senin–Minggu WITA) untuk memantau; reward memakai laporan bulanan.`:'Laporan bulanan per guide untuk penetapan reward dan arsip.';
  const perGuide=d.perGuide.map(g=>`<tr><td>${number(g.peringkat)}</td><td><strong>${esc(g.nama)}</strong><br><span class="muted text-small">${esc(g.guideId)}</span></td><td>${esc(g.regu)}</td><td>${number(g.antar)}</td><td><strong>${score(g.nilai)}</strong></td>${monthly?`<td>${rewardCell(g)}</td>`:''}<td>${pct(g.persenId)}</td><td>${pct(g.persenSeragam)}</td><td>${etikaAvg(g.etikaRata)}</td><td>${number(g.berat)}</td><td>${number(g.apresiasi)}</td></tr>`);
  const guideHeads=['#','Guide','Regu','Antar','Nilai',...(monthly?['Status reward']:[]),'% ID','% seragam','Etika rata-rata','Berat','Apresiasi'];
  const guideNote=monthly?'Diurut menurut nilai. Bila reward terbatas: nilai lebih tinggi didahulukan, lalu apresiasi terverifikasi; selebihnya setara. Jumlah hari dan rincian temuan ada di Ekspor Excel.'
