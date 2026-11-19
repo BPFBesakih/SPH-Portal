@@ -155,6 +155,22 @@ try{
     const status=await route(leader,'visits/sheet');assert.equal(status.pending,0);assert.equal(status.can_sync,false);
     await assert.rejects(route(manager,'visits/sheet/sync','POST'),e=>e instanceof api.AppError&&e.status===404,'penyalinan tidak pernah lewat transaksi permintaan');
   });
+  await check('weekly and monthly reports through the patched gateway: figures equal the overview of the same range, trend buckets, errors and permissions',async()=>{
+    const today=witaDate(Date.now()),weekFrom=shiftDate(today,-((new Date(today+'T00:00:00Z').getUTCDay()+6)%7));
+    const week=await route(leader,'visits/report','GET',{},`jenis=minggu&tanggal=${today}`);
+    assert.deepEqual([week.laporan.from,week.laporan.to,week.laporan.sampai,week.laporan.sebelumnya.from],[weekFrom,shiftDate(weekFrom,6),today,shiftDate(weekFrom,-7)]);
+    const overview=await route(leader,'visits/overview','GET',{},`from=${weekFrom}&to=${today}`);
+    for(const key of ['pengantaran','nilai','persenId','persenSeragam','guideDinilai','hariDinilai'])assert.equal(week.ringkasan[key],overview.ringkasan[key],key);
+    assert(week.ringkasan.pengantaran>0,'ada penilaian minggu ini');assert.equal(week.ringkasan.layak,null,'status reward hanya bulanan');
+    assert.equal(week.perHari.reduce((n,b)=>n+b.pengantaran,0),week.ringkasan.pengantaran);
+    assert.deepEqual([week.tren.length,week.tren.at(-1).pengantaran,week.perMinggu],[12,week.ringkasan.pengantaran,null]);
+    const month=await route(manager,'visits/report','GET',{},`jenis=bulan&bulan=${today.slice(0,7)}`);
+    assert.deepEqual([month.laporan.from,month.aturan.satu_bulan,month.tren.length],[`${today.slice(0,7)}-01`,true,12]);
+    assert.equal(month.perMinggu.reduce((n,b)=>n+b.pengantaran,0),month.ringkasan.pengantaran);
+    await assert.rejects(route(leader,'visits/report','GET',{},'jenis=tahun'),e=>e instanceof api.AppError&&e.status===422);
+    await assert.rejects(route(leader,'visits/report','GET',{},`jenis=minggu&tanggal=${shiftDate(weekFrom,7)}`),e=>e instanceof api.AppError&&e.status===422);
+    await assert.rejects(route(itAdmin,'visits/report','GET',{},'jenis=minggu'),e=>e instanceof api.AppError&&e.status===403);
+  });
   await check('100 − potongan + Etika on PostgreSQL: packaged form takes Etika (2.3), teguran (2.2) and old shapes, flags wait for the manager, rules per month, nilai and sheet columns N–T',async()=>{
     const fresh=await route(manager,'visits/links','POST',{action:'create',pos:1});
     const petugas=await route(manager,'visits/scoring/assessors','POST',{nama:'Petugas Uji',keterangan:'Pos 1',aktif:true});
@@ -229,6 +245,9 @@ try{
     // Angka per petugas hanya dari rincian 6 minggu (rekap harian sengaja tanpa identitas petugas).
     const today=witaDate(Date.now()),from=`${oldDay.slice(0,7)}-01`,figures=o=>JSON.stringify({...o,diperbarui:null,periode:null,perPetugas:null});
     const before=await atomic(()=>visitOverview(db,from,today)),beforeDay=await atomic(()=>visitOverview(db,oldDay,oldDay));
+    // Laporan mingguan dan bulanan yang memuat hari yang akan dilipat, lewat gateway.
+    const reports=[`jenis=minggu&tanggal=${oldDay}`,`jenis=bulan&bulan=${oldDay.slice(0,7)}`],reportsBefore=[];
+    for(const q of reports)reportsBefore.push(figures(await route(leader,'visits/report','GET',{},q)));
     let r=await runVisitSheetSync({runTx,env,trigger:'manual',retention:'skip'});assert.equal(r.ok,true,r.error);
     // Pengguna mengurutkan tab lama: posisi dibaca ulang (UPDATE … FROM VALUES) sebelum verifikasi.
     google.sortTab(oldDay.slice(0,7),4);
@@ -245,6 +264,7 @@ try{
     assert.equal((await one(db,"SELECT sum(antar)::int n FROM visit_daily_totals WHERE sumber='portal' AND day=?",oldDay)).n,5,'rekap harian ikut terisi');
     assert.deepEqual({...await one(db,"SELECT sum(n_id)::int n_id,sum(n_tidak)::int n_tidak,sum(n_teguran)::int n_teguran FROM visit_daily_totals WHERE sumber='portal' AND day=?",oldDay)},{n_id:1,n_tidak:1,n_teguran:2+1},'cacah temuan ikut dilipat (Etika −1 dengan seragam sesuai = 1 teguran)');
     assert.equal(figures(await atomic(()=>visitOverview(db,oldDay,oldDay))),figures(beforeDay),'satu hari yang sudah dilipat tetap bisa dihitung');
+    for(const [i,q] of reports.entries())assert.equal(figures(await route(leader,'visits/report','GET',{},q)),reportsBefore[i],`laporan ${q} sama sebelum dan sesudah pelipatan`);
     assert.equal(google.rows(oldDay.slice(0,7)).filter(x=>x.length).length,5,'spreadsheet tetap memuat rinciannya');
     assert.equal((await one(db,'SELECT event_id FROM visit_flags WHERE evaluation_id=?',items.at(-1).evaluationId)).event_id,items.at(-1).evaluationId,'retensi mengisi identitas laporan lama sebelum menghapus rincian');
   });

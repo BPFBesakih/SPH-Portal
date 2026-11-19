@@ -1020,10 +1020,14 @@ export async function visitAssessorStats(db, from, to, ruleOf) {
   })).sort((a, b) => b.pengantaran - a.pengantaran);
 }
 export async function visitOverview(db, from, to) {
+  const singleMonth = monthsBetween(from.slice(0, 7), to.slice(0, 7)).length === 1 && from.endsWith('-01') && (to === monthLastDay(to.slice(0, 7)) || to === today());
+  return await overviewOf(db, from, to, await visitDayRows(db, from, to), singleMonth);
+}
+async function overviewOf(db, from, to, dayRows, singleMonth) {
   const guides = await all(db, 'SELECT id,name,kategori,regu,is_active FROM visit_guides ORDER BY seq');
   const byId = new Map(guides.map(g => [g.id, g]));
   const total = new Map(), byPos = new Map(), guideDays = new Map(), days = new Set();
-  for (const r of await visitDayRows(db, from, to)) {
+  for (const r of dayRows) {
     addStat(statFor(total, r.guide_id), r.n);
     addStat(statFor(byPos, `${r.guide_id}|${r.pos}`), r.n);
     days.add(r.day);
@@ -1035,7 +1039,6 @@ export async function visitOverview(db, from, to) {
     set.add(r.day);
   }
   const ruleOf = await scoreRuleFinder(db), months = monthsBetween(from.slice(0, 7), to.slice(0, 7)), rule = ruleOf(to.slice(0, 7));
-  const singleMonth = months.length === 1 && from.endsWith('-01') && (to === monthLastDay(to.slice(0, 7)) || to === today());
   const flags = await flagCounts(db, from, to);
   const noFlags = {
     berat: {
@@ -1162,5 +1165,100 @@ export async function visitOverview(db, from, to) {
       bulan_ringkasan: []
     },
     diperbarui: now()
+  };
+}
+export const weekStart = day => shiftDate(day, -((new Date(day + 'T00:00:00Z').getUTCDay() + 6) % 7));
+const addMonths = (month, n) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1 + n, 1)).toISOString().slice(0, 7);
+const dayCount = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86400000);
+export const reportRules = Object.freeze({
+  trenMinggu: 12,
+  trenBulan: 12
+});
+function sumFigures(rows) {
+  const s = emptyStat(), perGuide = new Map(), days = new Set();
+  for (const r of rows) {
+    addStat(s, r.n);
+    perGuide.set(r.guide_id, (perGuide.get(r.guide_id) || 0) + r.n.antar);
+    days.add(r.day);
+  }
+  let guides = 0;
+  for (const n of perGuide.values()) if (n) guides++;
+  return {
+    ...visitFigures(s),
+    guideDinilai: guides,
+    hariDinilai: days.size
+  };
+}
+const bucketKey = {
+  hari: day => day,
+  minggu: weekStart,
+  bulan: day => day.slice(0, 7)
+};
+export function visitTrend(rows, from, to, unit) {
+  const key = bucketKey[unit], buckets = [], byKey = new Map();
+  for (let day = from; day <= to; ) {
+    const k = key(day), end = unit === 'hari' ? day : unit === 'minggu' ? shiftDate(k, 6) : monthLastDay(k);
+    const b = {
+      mulai: day,
+      sampai: end < to ? end : to,
+      rows: []
+    };
+    buckets.push(b);
+    byKey.set(k, b);
+    day = shiftDate(b.sampai, 1);
+  }
+  for (const r of rows) {
+    const b = byKey.get(key(r.day));
+    if (b && r.day >= b.mulai && r.day <= b.sampai) b.rows.push(r);
+  }
+  return buckets.map(b => ({
+    mulai: b.mulai,
+    sampai: b.sampai,
+    ...sumFigures(b.rows)
+  }));
+}
+export async function visitReport(db, jenis, anchor) {
+  const now = today(), weekly = jenis === 'minggu';
+  let from, to, prevFrom, prevEnd, trendFrom;
+  if (weekly) {
+    from = weekStart(anchor);
+    to = shiftDate(from, 6);
+    prevFrom = shiftDate(from, -7);
+    prevEnd = shiftDate(from, -1);
+    trendFrom = shiftDate(from, -7 * (reportRules.trenMinggu - 1));
+  } else {
+    const prev = addMonths(anchor, -1);
+    from = `${anchor}-01`;
+    to = monthLastDay(anchor);
+    prevFrom = `${prev}-01`;
+    prevEnd = monthLastDay(prev);
+    trendFrom = `${addMonths(anchor, 1 - reportRules.trenBulan)}-01`;
+  }
+  assert(from <= now, 'Periode ini belum dimulai.', 422);
+  const sampai = to < now ? to : now, prevTo = [shiftDate(prevFrom, dayCount(from, sampai)), prevEnd].sort()[0];
+  const rows = await visitDayRows(db, trendFrom, sampai), within = (a, b) => rows.filter(r => r.day >= a && r.day <= b), period = within(from, sampai);
+  return {
+    ...await overviewOf(db, from, sampai, period, !weekly),
+    laporan: {
+      jenis,
+      from,
+      to,
+      sampai,
+      berjalan: sampai < to,
+      sebelumnya: {
+        from: prevFrom,
+        to: prevTo,
+        utuh: prevTo === prevEnd
+      },
+      tren: {
+        unit: weekly ? 'minggu' : 'bulan',
+        from: trendFrom,
+        to: sampai
+      }
+    },
+    sebelumnya: sumFigures(within(prevFrom, prevTo)),
+    perHari: visitTrend(period, from, sampai, 'hari'),
+    perMinggu: weekly ? null : visitTrend(period, from, sampai, 'minggu'),
+    tren: visitTrend(rows, trendFrom, sampai, weekly ? 'minggu' : 'bulan')
   };
 }

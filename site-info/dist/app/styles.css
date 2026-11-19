@@ -120,6 +120,64 @@
 .visit-check li p{margin:2px 0 0;color:var(--md-sys-color-on-surface-variant)}
 .visit-check li.ok>.icon{color:var(--md-sys-color-primary)}
 .visit-check li.fail>.icon{color:var(--md-sys-color-error)}
+.visit-period{align-items:flex-end;gap:12px 20px;margin-bottom:8px}
+.visit-mode{display:flex;gap:8px}
+.visit-mode .chip,.visit-scope .chip{cursor:pointer}
+.visit-stepper{display:flex;align-items:center;gap:4px;min-height:40px}
+.visit-stepper strong{min-width:150px;text-align:center;font-weight:600}
+.visit-stepper .icon-button:disabled{opacity:.38;cursor:default}
+.icon.flip{transform:scaleX(-1)}
+.visit-stat-delta{flex-wrap:wrap;margin-bottom:2px}
+.visit-delta{font-weight:600;font-variant-numeric:tabular-nums}
+.visit-delta.good{color:#1d6b2f}
+.visit-delta.bad{color:var(--md-sys-color-error)}
+.visit-delta.flat{color:var(--md-sys-color-on-surface-variant)}
+:root[data-theme=dark] .visit-delta.good{color:#7fd38e}
+/* Grafik tren Laporan Kunjungan (public/visit-trend.js). Warna seri diperiksa dengan validator
+   palet (OKLab, buta warna protan/deutan): marun–emas lulus pada permukaan terang dan gelap. */
+.visit-trend-body{padding-top:16px}
+.visit-scope{margin:0 0 12px}
+.visit-trend{position:relative;--viz-1:#9a2e48;--viz-2:#a67c1c;--viz-3:#85797c;--viz-grid:#efe9ea;--viz-axis:#cbc0c3;--viz-surface:var(--md-sys-color-surface-container-lowest);touch-action:pan-y}
+:root[data-theme=dark] .visit-trend{--viz-1:#c95a74;--viz-2:#b98d2a;--viz-3:#a39499;--viz-grid:#352c2f;--viz-axis:#514148}
+.visit-trend:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:6px;border-radius:var(--md-sys-shape-corner-small)}
+.visit-trend svg{display:block;max-width:100%;height:auto;overflow:visible;font-family:inherit}
+.visit-trend-empty{margin:24px 0;color:var(--md-sys-color-on-surface-variant);font-size:var(--md-sys-typescale-body-small-size)}
+.viz-grid{stroke:var(--viz-grid);stroke-width:1}
+.viz-axis{stroke:var(--viz-axis);stroke-width:1}
+.viz-tick{fill:var(--md-sys-color-on-surface-variant);font-size:11px;font-variant-numeric:tabular-nums}
+.viz-title{fill:var(--md-sys-color-on-surface);font-size:12px;font-weight:600}
+.viz-legend{fill:var(--md-sys-color-on-surface-variant);font-size:11px}
+.viz-end{fill:var(--md-sys-color-on-surface);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+.viz-key{stroke-width:2;stroke-linecap:round}
+.viz-line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.viz-line.s1,.viz-key.s1{stroke:var(--viz-1)}
+.viz-line.s2,.viz-key.s2{stroke:var(--viz-2)}
+.viz-dot{stroke:var(--viz-surface);stroke-width:2}
+.viz-dot.s1{fill:var(--viz-1)}
+.viz-dot.s2{fill:var(--viz-2)}
+.viz-dot.open{fill:var(--viz-surface);stroke-width:2}
+.viz-dot.open.s1{stroke:var(--viz-1)}
+.viz-dot.open.s2{stroke:var(--viz-2)}
+.viz-bar{fill:var(--viz-3)}
+.viz-bar.on{fill:var(--viz-1)}
+.viz-future{fill:var(--md-sys-color-surface-container-low)}
+.viz-cross{stroke:var(--md-sys-color-outline);stroke-width:1}
+.viz-hit{fill:transparent;cursor:crosshair}
+.visit-trend-tip{position:absolute;top:0;left:0;z-index:2;min-width:190px;max-width:260px;padding:10px 12px;pointer-events:none;background:var(--md-sys-color-surface-container-lowest);border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-medium);box-shadow:0 6px 18px #17141526;font-size:var(--md-sys-typescale-label-small-size)}
+.visit-trend-tip[hidden]{display:none}
+.visit-trend.docked .visit-trend-tip{position:static;max-width:none;margin-top:4px;box-shadow:none;background:var(--md-sys-color-surface-container-low);border-color:transparent}
+.visit-trend-tip>strong{display:block;font-size:var(--md-sys-typescale-body-small-size)}
+.visit-trend-tip>.muted{display:block;margin-top:2px}
+.visit-trend-tip dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:8px 0 0}
+.visit-trend-tip dt{font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.visit-trend-tip dd{display:flex;align-items:center;gap:6px;margin:0;color:var(--md-sys-color-on-surface-variant)}
+.visit-trend-tip .key{display:inline-block;width:12px;height:2px;border-radius:1px;background:var(--viz-1)}
+.visit-trend-tip .key.s2{background:var(--viz-2)}
+.visit-trend-tip .key.s3{background:var(--viz-3)}
+.visit-trend-table{margin-top:12px}
+.visit-trend-table summary{cursor:pointer;color:var(--md-sys-color-primary);font-size:var(--md-sys-typescale-body-small-size);font-weight:600;padding:6px 0}
+.visit-trend-table .table-wrap{margin-top:8px}
+@media print{.visit-period .button,.visit-stepper .icon-button,.visit-scope{display:none}.visit-trend-table{display:none}}
 #attendance-content>.card,#attendance-content>.notice{margin-bottom:16px}
 #attendance-content>.stats-grid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:8px}
 .link-button{background:none;border:0;padding:0;margin:0;text-align:left;color:inherit;font:inherit;cursor:pointer}
