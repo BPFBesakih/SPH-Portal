@@ -148,6 +148,7 @@ h1, h2, h3, .page-heading h1, .hero h1 { font-weight: 700; }
   .page-heading h1 { font-size: 1.75rem; }
 }
 @media (max-width: 599px) {
+  .help-theme-tip { display: none; }
   main { padding: 24px 16px; }
   .topbar { padding-inline: 12px; gap: 4px; }
   .breadcrumb { font-size: .875rem; line-height: 1.4; min-width: 0; }

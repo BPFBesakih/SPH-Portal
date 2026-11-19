@@ -29,6 +29,13 @@ test('panduan hanya memuat menu yang tampil untuk akun',()=>{
   for(const hidden of ['Data Pegawai','Akun Pengguna','Absensi','Antrean Purchasing','Pengaturan akses','Modul kerja','Modul aktif'])assert.doesNotMatch(html,new RegExp(hidden));
 });
 
+test('panduan menjelaskan syarat tombol serta pemilihan tanggal cuti',()=>{
+  assert.match(ROUTE_HELP.briefings,/satu penempatan utama aktif/);
+  assert.match(ROUTE_HELP.leaves,/berhak cuti dan memiliki jalur persetujuan/);
+  assert.match(ROUTE_HELP.leaves,/cuti tahunan dan cuti khusus singkat.*centang hari kerja/);
+  assert.match(ROUTE_HELP.leaves,/melahirkan dan keguguran.*hari kalender.*hari libur/);
+});
+
 test('modul yang sedang dibuka tampil pertama dan terbuka',()=>{
   const html=helpGuideHtml({current:'visits',modules:[{key:'hr',label:'SDM',routes:['training']},{key:'visits',label:'Kunjungan',routes:['visits','visits-links']}],common:['leaves'],admin:['accounts']});
   const visits=html.indexOf('<span>Kunjungan</span>'),hr=html.indexOf('<span>SDM</span>');

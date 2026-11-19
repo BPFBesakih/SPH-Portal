@@ -9,8 +9,8 @@ const MODULE_ICONS={hr:'people',security:'shield',purchasing:'building',merchand
 export const ROUTE_HELP={
   // Menu umum
   announcements:'<strong>Informasi Internal</strong> — pengumuman resmi BP Besakih. Buka pengumuman, lalu tekan <strong>Tandai sudah dibaca</strong>. Jumlah yang belum dibaca tampil di menu dan di lonceng.',
-  briefings:'<strong>Briefing Pagi</strong> — tekan <strong>Isi briefing pagi</strong> untuk membuka formulirnya: tanggal, pemberi briefing, pegawai tidak hadir (isi Nihil bila lengkap), materi dan kendala, serta satu foto dari kamera. Rekap bisa dilihat untuk bidang Anda.',
-  leaves:'<strong>Cuti</strong> — tekan <strong>Ajukan cuti</strong>, pilih rentang tanggal, centang hari yang memang hari kerja Anda, isi alasan, lalu kirim. Persetujuan berjenjang: atasan langsung, lalu atasan satu tingkat di atasnya. Bila Anda atasan, pengajuan yang menunggu keputusan Anda muncul di lonceng dan di menu Cuti.',
+  briefings:'<strong>Briefing Pagi</strong> — lihat rekap sesuai akses Anda. Tombol <strong>Isi briefing pagi</strong> tersedia jika akun terhubung ke pegawai dengan satu penempatan utama aktif. Jika penempatan perlu diperbarui, hubungi SDM. Pada formulir, isi tanggal, pemberi briefing, pegawai yang tidak hadir (isi Nihil bila semua hadir), materi dan kendala, lalu ambil satu foto.',
+  leaves:'<strong>Cuti</strong> — kalender mengikuti akses akun Anda, termasuk untuk THL. Tombol <strong>Ajukan cuti</strong> tersedia bagi pegawai aktif yang berhak cuti dan memiliki jalur persetujuan. Pilih jenis cuti dan rentang tanggal. Untuk cuti tahunan dan cuti khusus singkat, pilih <strong>Tampilkan tanggal</strong> lalu centang hari kerja Anda. Untuk cuti melahirkan dan keguguran, formulir menghitung seluruh hari kalender dalam rentang tersebut, termasuk hari libur. Isi alasan, pilih <strong>Periksa pengajuan</strong>, lalu <strong>Kirim ke atasan</strong>. Atasan dapat melihat pengajuan yang menunggu keputusan di lonceng dan menu Cuti.',
   attendance:'<strong>Absensi</strong> — absen harian dilakukan di HP yang sudah didaftarkan: pilih nama, tekan <strong>MASUK</strong> atau <strong>PULANG</strong>, lalu selfie; lokasi diambil otomatis. Di menu ini Anda dapat melihat catatan absen sesuai akses Anda.',
   // SDM
   dashboard:'<strong>Dashboard</strong> — ringkasan tim, kegiatan, dan pengumuman terbaru.',
@@ -84,7 +84,7 @@ export function helpGuideHtml({current,modules=[],common=[],admin=[]}){
     modules.length>1?'<li>Pindah modul lewat kotak <strong>Modul kerja</strong> di bagian atas menu. Daftar menu berganti sesuai modul yang dipilih.</li>':'',
     '<li>Di HP, buka menu dengan tombol <strong>☰</strong> di kiri atas.</li>',
     '<li>Ikon <strong>lonceng</strong> di kanan atas menampilkan pemberitahuan, misalnya pengumuman baru atau pengajuan yang menunggu keputusan Anda.</li>',
-    '<li>Ikon <strong>bulan</strong> mengganti tampilan terang atau gelap.</li>',
+    '<li class="help-theme-tip">Ikon <strong>bulan</strong> mengganti tampilan terang atau gelap.</li>',
     '<li>Portal dapat dipasang seperti aplikasi. Android (Chrome): menu <strong>⋮</strong> → <strong>Instal aplikasi</strong>. iPhone (Safari): <strong>Bagikan</strong> → <strong>Tambahkan ke Layar Utama</strong>.</li>'
   ].filter(Boolean);
   const ordered=[...modules.filter(m=>m.key===current),...modules.filter(m=>m.key!==current)];
