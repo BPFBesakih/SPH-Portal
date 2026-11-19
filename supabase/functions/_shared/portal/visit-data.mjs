@@ -1190,6 +1190,25 @@ function sumFigures(rows) {
     hariDinilai: days.size
   };
 }
+async function previousRewardCount(db, rows, from, to, until) {
+  const totals = new Map();
+  for (const row of rows) addStat(statFor(totals, row.guide_id), row.n);
+  if (!totals.size) return 0;
+  const ruleOf = await scoreRuleFinder(db), rule = ruleOf(from.slice(0, 7));
+  const flags = await flagCounts(db, from, to, until);
+  let count = 0;
+  for (const {id} of await all(db, 'SELECT id FROM visit_guides WHERE is_active=1')) {
+    const stat = totals.get(id);
+    if (!stat?.antar) continue;
+    const guide = {
+      antar: stat.antar,
+      nilai: visitFigures(stat).nilai,
+      berat: flags.get(id)?.berat.disetujui || 0
+    };
+    if (rewardStatus(guide, rule).status === 'layak') count++;
+  }
+  return count;
+}
 const bucketKey = {
   hari: day => day,
   minggu: weekStart,
@@ -1277,14 +1296,20 @@ export async function visitReport(db, jenis, anchor, nowMs = Date.now()) {
     trendFrom = `${addMonths(anchor, 1 - reportRules.trenBulan)}-01`;
   }
   assert(from <= now, 'Periode ini belum dimulai.', 422);
-  const sampai = to < now ? to : now, berjalan = sampai === now, prevTo = [shiftDate(prevFrom, dayCount(from, sampai)), prevEnd].sort()[0];
+  const sampai = to < now ? to : now, berjalan = sampai === now;
+  const matchingDay = shiftDate(prevFrom, dayCount(from, sampai));
+  const hasMatchingDay = berjalan && matchingDay <= prevEnd;
+  const prevTo = hasMatchingDay ? matchingDay : prevEnd;
   const rows = await visitDayRows(db, trendFrom, sampai), within = (a, b) => rows.filter(r => r.day >= a && r.day <= b), period = within(from, sampai);
-  let previous = within(prevFrom, prevTo), sampaiJam = null;
-  if (berjalan && !await summarizedDay(db, prevTo)) {
-    const sinceMidnight = nowMs - Date.parse(`${now}T00:00:00+08:00`), until = new Date(Date.parse(`${prevTo}T00:00:00+08:00`) + sinceMidnight).toISOString();
+  let previous = within(prevFrom, prevTo), sampaiJam = null, until = null;
+  if (hasMatchingDay && !await summarizedDay(db, prevTo)) {
+    const sinceMidnight = nowMs - Date.parse(`${now}T00:00:00+08:00`);
+    until = new Date(Date.parse(`${prevTo}T00:00:00+08:00`) + sinceMidnight).toISOString();
     previous = [...within(prevFrom, shiftDate(prevTo, -1)), ...await visitDayRows(db, prevTo, prevTo, until)];
     sampaiJam = new Date(nowMs + witaOffset).toISOString().slice(11, 16);
   }
+  const sebelumnya = sumFigures(previous);
+  if (jenis === 'bulan') sebelumnya.layak = await previousRewardCount(db, previous, prevFrom, prevTo, until);
   return {
     ...await overviewOf(db, from, sampai, period, jenis === 'bulan'),
     laporan: {
@@ -1305,7 +1330,7 @@ export async function visitReport(db, jenis, anchor, nowMs = Date.now()) {
         to: sampai
       }
     },
-    sebelumnya: sumFigures(previous),
+    sebelumnya,
     perJam: jenis === 'hari' ? await visitHourly(db, from) : null,
     perHari: visitTrend(period, from, sampai, 'hari'),
     perMinggu: jenis === 'bulan' ? visitTrend(period, from, sampai, 'minggu') : null,

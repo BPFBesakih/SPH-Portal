@@ -6314,16 +6314,18 @@ async function decideFlag(db, user, b, audit2) {
   }, note);
   return flagView(saved);
 }
-async function flagCounts(db, from, to) {
+async function flagCounts(db, from, to, until = null) {
   const out = /* @__PURE__ */ new Map();
-  for (const r of await all(db, `${flagLineage("f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')")}
+  const where = "f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')" + (until ? " AND f.evaluated_at<=?" : "");
+  const args = until ? [from, to, until] : [from, to];
+  for (const r of await all(db, `${flagLineage(where)}
  SELECT guide_id,jenis,status,count(*) AS n FROM (
   SELECT f.guide_id,f.jenis,coalesce(f.event_id,r.event_id,f.evaluation_id) AS event_id,
    CASE WHEN max(CASE WHEN f.status='disetujui' THEN 1 ELSE 0 END)=1 THEN 'disetujui' ELSE 'menunggu' END AS status
   FROM visit_flags f LEFT JOIN flag_roots r ON r.flag_id=f.id
-  WHERE f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')
+  WHERE ${where}
   GROUP BY f.guide_id,f.jenis,coalesce(f.event_id,r.event_id,f.evaluation_id)
- ) AS events GROUP BY guide_id,jenis,status`, from, to, from, to)) {
+ ) AS events GROUP BY guide_id,jenis,status`, ...args, ...args)) {
     let g = out.get(r.guide_id);
     if (!g) {
       g = {
@@ -7368,6 +7370,25 @@ function sumFigures(rows) {
     hariDinilai: days.size
   };
 }
+async function previousRewardCount(db, rows, from, to, until) {
+  const totals = /* @__PURE__ */ new Map();
+  for (const row of rows) addStat(statFor(totals, row.guide_id), row.n);
+  if (!totals.size) return 0;
+  const ruleOf = await scoreRuleFinder(db), rule = ruleOf(from.slice(0, 7));
+  const flags = await flagCounts(db, from, to, until);
+  let count = 0;
+  for (const { id } of await all(db, "SELECT id FROM visit_guides WHERE is_active=1")) {
+    const stat = totals.get(id);
+    if (!stat?.antar) continue;
+    const guide = {
+      antar: stat.antar,
+      nilai: visitFigures(stat).nilai,
+      berat: flags.get(id)?.berat.disetujui || 0
+    };
+    if (rewardStatus(guide, rule).status === "layak") count++;
+  }
+  return count;
+}
 var bucketKey = {
   hari: (day) => day,
   minggu: weekStart,
@@ -7455,14 +7476,20 @@ async function visitReport(db, jenis, anchor, nowMs = Date.now()) {
     trendFrom = `${addMonths(anchor, 1 - reportRules.trenBulan)}-01`;
   }
   assert(from <= now2, "Periode ini belum dimulai.", 422);
-  const sampai = to < now2 ? to : now2, berjalan = sampai === now2, prevTo = [shiftDate(prevFrom, dayCount(from, sampai)), prevEnd].sort()[0];
+  const sampai = to < now2 ? to : now2, berjalan = sampai === now2;
+  const matchingDay = shiftDate(prevFrom, dayCount(from, sampai));
+  const hasMatchingDay = berjalan && matchingDay <= prevEnd;
+  const prevTo = hasMatchingDay ? matchingDay : prevEnd;
   const rows = await visitDayRows(db, trendFrom, sampai), within = (a, b) => rows.filter((r) => r.day >= a && r.day <= b), period = within(from, sampai);
-  let previous = within(prevFrom, prevTo), sampaiJam = null;
-  if (berjalan && !await summarizedDay(db, prevTo)) {
-    const sinceMidnight = nowMs - Date.parse(`${now2}T00:00:00+08:00`), until = new Date(Date.parse(`${prevTo}T00:00:00+08:00`) + sinceMidnight).toISOString();
+  let previous = within(prevFrom, prevTo), sampaiJam = null, until = null;
+  if (hasMatchingDay && !await summarizedDay(db, prevTo)) {
+    const sinceMidnight = nowMs - Date.parse(`${now2}T00:00:00+08:00`);
+    until = new Date(Date.parse(`${prevTo}T00:00:00+08:00`) + sinceMidnight).toISOString();
     previous = [...within(prevFrom, shiftDate(prevTo, -1)), ...await visitDayRows(db, prevTo, prevTo, until)];
     sampaiJam = new Date(nowMs + witaOffset).toISOString().slice(11, 16);
   }
+  const sebelumnya = sumFigures(previous);
+  if (jenis === "bulan") sebelumnya.layak = await previousRewardCount(db, previous, prevFrom, prevTo, until);
   return {
     ...await overviewOf(db, from, sampai, period, jenis === "bulan"),
     laporan: {
@@ -7483,7 +7510,7 @@ async function visitReport(db, jenis, anchor, nowMs = Date.now()) {
         to: sampai
       }
     },
-    sebelumnya: sumFigures(previous),
+    sebelumnya,
     perJam: jenis === "hari" ? await visitHourly(db, from) : null,
     perHari: visitTrend(period, from, sampai, "hari"),
     perMinggu: jenis === "bulan" ? visitTrend(period, from, sampai, "minggu") : null,

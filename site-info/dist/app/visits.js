@@ -370,12 +370,12 @@ function reportPeriod(){
  return {from:`${M.month}-01`,to:lastDayOf(M.month)};
 }
 async function loadReport(){
+ const mode=M.reportMode,{from,to}=reportPeriod();
  const query=M.reportMode==='bulan'?`jenis=bulan&bulan=${M.month}`:`jenis=${M.reportMode}&tanggal=${M.reportMode==='hari'?M.reportDay:M.reportWeek}`;
  try{return await api(`visits/report?${query}`);}
  catch(error){
   if(error.status!==404)throw error;
-  const {from,to}=reportPeriod();
-  return {...await api(`visits/overview?from=${from}&to=${to>localToday()?localToday():to}`),laporan:null};
+  return {...await api(`visits/overview?from=${from}&to=${to>localToday()?localToday():to}`),laporan:null,jenis:mode};
  }
 }
 // Pilihan bulan: Januari 2026 (awal data) sampai bulan berjalan, terbaru dulu.
@@ -430,7 +430,7 @@ function reportStats(d,mode){
   reportStat('ID terpasang',pct(s.persenId),delta('persenId','pct'),`${number(s.tanpaId)} kali tanpa ID`),
   reportStat('Seragam lengkap',pct(s.persenSeragam),delta('persenSeragam','pct'),`${number(s.kurangLengkap)} kurang · ${number(s.tidakBerseragam)} tidak`),
   reportStat('Etika rata-rata',etikaAvg(s.etikaRata),delta('etikaRata','etika'),`jumlah ${etikaSum(s.etika)}`),
-  ...(mode==='bulan'?[reportStat('Layak reward',s.layak==null?'—':number(s.layak),'',a?`nilai ≥ ${a.ambang}, minimal ${a.minimal} pengantaran, tanpa pelanggaran berat`:'')]:[])].join('');
+  ...(mode==='bulan'?[reportStat('Layak reward',s.layak==null?'-':number(s.layak),delta('layak','count'),a?`nilai ≥ ${a.ambang}, minimal ${a.minimal} pengantaran, tanpa pelanggaran berat`:'')]:[])].join('');
 }
 // Rentang grafik per jenis laporan. Laporan harian: per jam (dari rincian ±6 minggu terakhir) dan 30 hari.
 function trendScopes(mode,d){
@@ -521,10 +521,10 @@ const trendRow=(b,label)=>({...b,periode:label,nilai:round2(b.nilai),etikaRata:r
 const figureColumns=first=>[...first,{header:'Guide dinilai',key:'guideDinilai',kind:'number'},{header:'Pengantaran',key:'pengantaran',kind:'number'},{header:'Nilai rata-rata',key:'nilai',kind:'number'},{header:'% ID terpasang',key:'persenId',kind:'percent'},{header:'% seragam lengkap',key:'persenSeragam',kind:'percent'},
  {header:'Etika rata-rata',key:'etikaRata',kind:'number'},{header:'Tanpa ID',key:'tanpaId',kind:'number'},{header:'Kurang lengkap',key:'kurangLengkap',kind:'number'},{header:'Tidak berseragam',key:'tidakBerseragam',kind:'number'}];
 function summaryRows(d,mode){
- const L=d.laporan,s=d.ringkasan,label=mode==='hari'?`Hari ${dayTitle(L.from)}`:mode==='minggu'?`Minggu ${rangeLabel(L.from,L.to)}`:monthLabel(M.month);
+ const L=d.laporan,s=d.ringkasan,label=mode==='hari'?`Hari ${dayTitle(L.from)}`:mode==='minggu'?`Minggu ${rangeLabel(L.from,L.to)}`:monthLabel(L.from.slice(0,7));
  const rows=[trendRow({...s,mulai:L.from,sampai:L.sampai,layak:mode==='bulan'?s.layak:null},`${label}${L.berjalan?' (berjalan)':''}`)];
  const p=d.sebelumnya;rows.push(trendRow({...p,mulai:L.sebelumnya.from,sampai:L.sebelumnya.to},`Pembanding: ${comparison(L)}`));
- const diff={};for(const key of ['pengantaran','guideDinilai','hariDinilai','nilai','persenId','persenSeragam','etikaRata','tanpaId','kurangLengkap','tidakBerseragam','etika','potongan'])diff[key]=s[key]==null||p[key]==null?null:s[key]-p[key];
+ const diff={};for(const key of ['pengantaran','guideDinilai','hariDinilai','nilai','persenId','persenSeragam','etikaRata','tanpaId','kurangLengkap','tidakBerseragam','etika','potongan','layak'])diff[key]=s[key]==null||p[key]==null?null:s[key]-p[key];
  rows.push(trendRow(diff,'Selisih (periode laporan − pembanding)'));
  return rows;
 }
@@ -543,7 +543,7 @@ async function exportRecords(){
  toast(`${number(rows.length)} penilaian diekspor.`);
 }
 async function exportReport(){
- const d=M.report,mode=M.reportMode,daily=mode==='hari',monthly=mode==='bulan',L=d.laporan,sheets=[];
+ const d=M.report,L=d.laporan,mode=L?.jenis||d.jenis,daily=mode==='hari',monthly=mode==='bulan',sheets=[];
  if(L){
   sheets.push({name:'Ringkasan',columns:monthly?[...trendColumns,{header:'Layak reward',key:'layak',kind:'number'}]:trendColumns,rows:summaryRows(d,mode)});
   if(daily){
@@ -566,8 +566,8 @@ async function exportReport(){
   for(let offset=0;;offset+=1000){const page=await api(`visits/records?from=${d.from}&to=${d.to}&limit=1000&offset=${offset}`);rows.push(...page.items);if(!page.more||offset>=49000)break;}
   if(rows.length)sheets.push({name:'Penilaian',columns:recordColumns,rows:rows.map(recordExportRow)});
  }
- const {from,to}=reportPeriod();
- download(createXlsx(sheets),daily?`laporan-harian-penilaian-guide-${from}.xlsx`:monthly?`laporan-bulanan-penilaian-guide-${M.month}.xlsx`:`laporan-mingguan-penilaian-guide-${from}-sd-${to}.xlsx`);
+ const from=d.from;
+ download(createXlsx(sheets),daily?`laporan-harian-penilaian-guide-${from}.xlsx`:monthly?`laporan-bulanan-penilaian-guide-${from.slice(0,7)}.xlsx`:`laporan-mingguan-penilaian-guide-${from}-sd-${L?.to||shiftDay(from,6)}.xlsx`);
  await post('visits/exports',{kind:'summary',from:d.from,to:d.to,rows:d.perGuide.length});
  toast(`Laporan ${daily?'harian':monthly?'bulanan':'mingguan'} diekspor.`);
 }

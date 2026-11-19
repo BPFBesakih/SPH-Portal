@@ -389,16 +389,18 @@ export async function decideFlag(db, user, b, audit) {
 export async function cancelPendingFlags(db, evaluationId) {
   return (await run(db, "UPDATE visit_flags SET status='dibatalkan',updated_at=?,row_version=row_version+1 WHERE evaluation_id=? AND status='menunggu'", now(), evaluationId)).changes;
 }
-export async function flagCounts(db, from, to) {
+export async function flagCounts(db, from, to, until = null) {
   const out = new Map();
-  for (const r of await all(db, `${flagLineage("f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')")}
+  const where = "f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')" + (until ? ' AND f.evaluated_at<=?' : '');
+  const args = until ? [from, to, until] : [from, to];
+  for (const r of await all(db, `${flagLineage(where)}
  SELECT guide_id,jenis,status,count(*) AS n FROM (
   SELECT f.guide_id,f.jenis,coalesce(f.event_id,r.event_id,f.evaluation_id) AS event_id,
    CASE WHEN max(CASE WHEN f.status='disetujui' THEN 1 ELSE 0 END)=1 THEN 'disetujui' ELSE 'menunggu' END AS status
   FROM visit_flags f LEFT JOIN flag_roots r ON r.flag_id=f.id
-  WHERE f.wita_date>=? AND f.wita_date<=? AND f.status IN('menunggu','disetujui')
+  WHERE ${where}
   GROUP BY f.guide_id,f.jenis,coalesce(f.event_id,r.event_id,f.evaluation_id)
- ) AS events GROUP BY guide_id,jenis,status`, from, to, from, to)) {
+ ) AS events GROUP BY guide_id,jenis,status`, ...args, ...args)) {
     let g = out.get(r.guide_id);
     if (!g) {
       g = {

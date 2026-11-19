@@ -137,10 +137,11 @@ test('laporan bulanan: rekap identik dengan Dashboard termasuk status reward; pe
   assert.deepEqual(withoutComparison(f.route(f.users.leader,`jenis=bulan&bulan=${month}`)),withoutComparison(r),'rute = visitReport');
   for(const key of Object.keys(o))if(!['diperbarui'].includes(key))assert.deepEqual(r[key],o[key],`rekap bulanan: ${key}`);
   assert.equal(r.aturan.satu_bulan,true);assert.notEqual(r.ringkasan.layak,null);
-  const prev=monthOf(T,-1),prevTo=[shiftDate(`${prev}-01`,days(from,T)),monthLastDay(prev)].sort()[0];
-  assert.deepEqual(r.laporan,{jenis:'bulan',from,to:monthLastDay(month),sampai:T,berjalan:true,sebelumnya:{from:`${prev}-01`,to:prevTo,utuh:false,sampaiJam:'10:00'},
+  const prev=monthOf(T,-1),matching=shiftDate(`${prev}-01`,days(from,T)),whole=matching>monthLastDay(prev);
+  const prevTo=whole?monthLastDay(prev):matching;
+  assert.deepEqual(r.laporan,{jenis:'bulan',from,to:monthLastDay(month),sampai:T,berjalan:true,sebelumnya:{from:`${prev}-01`,to:prevTo,utuh:whole,sampaiJam:whole?null:'10:00'},
     tren:{unit:'bulan',from:`${monthOf(T,1-reportRules.trenBulan)}-01`,to:T}});
-  assert.deepEqual(figures(r.sebelumnya),cutFigures(f.db,`${prev}-01`,prevTo,sameTime(prevTo,nowMs)),'pembanding: bulan lalu sampai pukul 10.00 di tanggal yang sama');
+  assert.deepEqual(figures(r.sebelumnya),whole?overviewFigures(f.db,`${prev}-01`,prevTo):cutFigures(f.db,`${prev}-01`,prevTo,sameTime(prevTo,nowMs)));
   assert.deepEqual([r.perJam,r.perMinggu.length>0],[null,true]);
   assertBuckets(f.db,r.perHari,from,T,'per hari');
   assertBuckets(f.db,r.perMinggu,from,T,'per minggu');
@@ -168,12 +169,37 @@ test('laporan bulan lampau: 31 hari dibanding bulan pendek, dan minggu lintas ta
   assert.deepEqual(march.perMinggu.map(b=>[b.mulai,b.sampai]),[['2026-03-01','2026-03-01'],['2026-03-02','2026-03-08'],['2026-03-09','2026-03-15'],['2026-03-16','2026-03-22'],['2026-03-23','2026-03-29'],['2026-03-30','2026-03-31']]);
   assert(march.perHari.every(b=>b.pengantaran===0&&b.nilai===null),'bulan tanpa data: angka kosong, bukan nol palsu');
   const april=f.route(f.users.leader,'jenis=bulan&bulan=2026-04');
-  assert.deepEqual(april.laporan.sebelumnya,{from:'2026-03-01',to:'2026-03-30',utuh:false,sampaiJam:null},'30 hari April dibanding 1–30 Maret');
+  assert.deepEqual(april.laporan.sebelumnya,{from:'2026-03-01',to:'2026-03-31',utuh:true,sampaiJam:null},'April selesai dibanding seluruh Maret');
   const newYear=f.route(f.users.leader,'jenis=minggu&tanggal=2026-01-01');
   assert.deepEqual(newYear.laporan,{jenis:'minggu',from:'2025-12-29',to:'2026-01-04',sampai:'2026-01-04',berjalan:false,sebelumnya:{from:'2025-12-22',to:'2025-12-28',utuh:true,sampaiJam:null},tren:{unit:'minggu',from:'2025-10-13',to:'2026-01-04'}});
   const marchFirst=f.route(f.users.leader,'jenis=hari&tanggal=2026-03-01');
   assert.deepEqual(marchFirst.laporan,{jenis:'hari',from:'2026-03-01',to:'2026-03-01',sampai:'2026-03-01',berjalan:false,sebelumnya:{from:'2026-02-28',to:'2026-02-28',utuh:true,sampaiJam:null},tren:{unit:'hari',from:'2026-01-31',to:'2026-03-01'}});
   assert.deepEqual([marchFirst.tren.length,marchFirst.perJam.length,marchFirst.perJam.every(h=>h.pengantaran===0)],[reportRules.trenHari,24,true]);
+});
+
+test('pembanding reward bulanan memakai aturan bulan asal dan batas waktu WITA yang sama dengan pengantaran',t=>{
+  const {db}=fixture(t),day='2026-09-30';
+  run(db,'INSERT INTO visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_at) VALUES(?,20,10,20,0,95,1,?)','2026-09',now());
+  run(db,'INSERT INTO visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_at) VALUES(?,20,10,20,0,95,3,?)','2026-10',now());
+  const evaluation=(guide,hour,idCard,flag)=>{
+    const stamp=new Date(`${day}T${hour}:00:00+08:00`).toISOString(),id=crypto.randomUUID();
+    run(db,`INSERT INTO visit_evaluations(id,pos,guide_id,guide_name,versi,uniform,id_card,seragam,review,etika,catatan,evaluated_at,wita_date,received_at,status)
+      VALUES(?,1,?,?,2,1,?,'lengkap',0,0,'',?,?,?,'aktif')`,id,guide,guide,idCard,stamp,day,stamp);
+    if(flag)insert(db,'visit_flags',{evaluation_id:id,jenis:'berat',kode:'pungutan',guide_id:guide,guide_name:guide,pos:1,wita_date:day,evaluated_at:stamp,
+      catatan:'Catatan uji',status:flag,decided_at:flag==='disetujui'?stamp:null});
+  };
+  evaluation('G-001','09',1,'menunggu');
+  evaluation('G-001','16',1,'disetujui');
+  evaluation('G-002','09',1); // Nonaktif.
+  evaluation('G-003','09',1,'disetujui');
+  evaluation('G-004','09',0); // Nilai 80, di bawah ambang.
+  evaluation('G-005','09',1);
+  const sameDay=visitReport(db,'bulan','2026-10',tenOClock('2026-10-30'));
+  assert.deepEqual([sameDay.sebelumnya.pengantaran,sameDay.sebelumnya.layak],[5,2]);
+  const shorterMonth=visitReport(db,'bulan','2026-10',tenOClock('2026-10-31'));
+  assert.deepEqual(shorterMonth.laporan.sebelumnya,{from:'2026-09-01',to:day,utuh:true,sampaiJam:null});
+  assert.deepEqual([shorterMonth.sebelumnya.pengantaran,shorterMonth.sebelumnya.layak],[6,1]);
+  assert.equal(shorterMonth.sebelumnya.layak,visitOverview(db,'2026-09-01',day).ringkasan.layak);
 });
 
 test('laporan: periode yang belum dimulai, parameter salah, dan izin',t=>{

@@ -240,13 +240,21 @@ try{
     assert.equal(await portal.locator('th',{hasText:'Status reward'}).count(),0);assert.equal(await portal.locator('[data-visit="report-next"][disabled]').count(),1,'besok belum bisa dibuka');
     await portal.focus('.visit-trend');await portal.waitForSelector('.visit-trend-tip:not([hidden])');assert.match(await portal.textContent('.visit-trend-tip'),/pukul \d\d\.00–\d\d\.59/);
     await portal.click('[data-visit="trend-scope"][data-scope="tren"]');await portal.waitForFunction(()=>/^Grafik tren 30 hari/.test(document.querySelector('.visit-trend')?.getAttribute('aria-label')||''));
-    const [daily]=await Promise.all([portal.waitForEvent('download'),portal.click('[data-visit="export-report"]')]);
-    assert.match(daily.suggestedFilename(),/^laporan-harian-penilaian-guide-\d{4}-\d{2}-\d{2}\.xlsx$/);
+    const exportDay=await portal.locator('[data-visit-field="reportDayPick"]').inputValue();
+    const details='**/api/visits/records?**',gate=Promise.withResolvers();
+    await portal.route(details,async route=>{await gate.promise;await route.continue();},{times:1});
+    const downloadReady=portal.waitForEvent('download');
+    try{
+      await Promise.all([portal.waitForRequest(details),portal.click('[data-visit="export-report"]')]);
+      await portal.click('[data-visit="report-prev"]');
+    }finally{gate.resolve();}
+    const daily=await downloadReady;
+    assert.equal(daily.suggestedFilename(),`laporan-harian-penilaian-guide-${exportDay}.xlsx`);
     const dayFiles=await xlsxFiles(daily);
     assert.deepEqual(sheetNames(dayFiles),['Ringkasan','Per jam','Tren 30 hari','Per pos','Per regu','Per petugas','Ringkasan per guide','Penilaian']);
     assert.match(dayFiles.get('xl/worksheets/sheet1.xml'),/Pembanding: kemarin s\.d\. /);
     await portal.waitForSelector('text=Laporan harian diekspor.');
-    await portal.click('[data-visit="report-prev"]');await portal.waitForSelector('[data-visit="report-current"]');await portal.waitForSelector('text=hari sebelumnya');
+    await portal.waitForSelector('[data-visit="report-current"]');await portal.waitForSelector('text=hari sebelumnya');
     await portal.click('[data-visit="report-current"]');await portal.waitForFunction(()=>!document.querySelector('[data-visit="report-current"]'));
     await portal.click('[data-visit="report-records"]');await portal.waitForSelector('[data-visit="export-records"]');
     const today=await portal.evaluate(()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Makassar'}).format(new Date()));
@@ -260,6 +268,9 @@ try{
     const monthFiles=await xlsxFiles(monthly);
     assert.deepEqual(sheetNames(monthFiles),['Ringkasan','Per hari','Per minggu','Tren 12 bulan','Per pos','Per regu','Ringkasan per guide']);
     assert.match(monthFiles.get('xl/worksheets/sheet1.xml'),/Layak reward/);assert.match(monthFiles.get('xl/worksheets/sheet7.xml'),/Status reward/);
+    assert.match(await portal.locator('.visit-stat').filter({hasText:'Layak reward'}).locator('.visit-stat-delta').textContent(),/vs /);
+    const rewardCells=[...monthFiles.get('xl/worksheets/sheet1.xml').matchAll(/<c r="P[234]"><v>(-?\d+)<\/v>/g)].map(m=>Number(m[1]));
+    assert.equal(rewardCells.length,3);assert.equal(rewardCells[2],rewardCells[0]-rewardCells[1]);
     // portal-api versi sebelumnya (tanpa rute laporan): rekap tetap tampil dari visits/overview, tanpa grafik.
     await portal.route('**/api/visits/report?**',r=>r.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Alamat API tidak ditemukan.'})}));
     await portal.reload();await portal.waitForSelector('text=Grafik tren dan pembanding belum tersedia');

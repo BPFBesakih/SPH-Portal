@@ -92,7 +92,8 @@ Laporan & Ekspor punya tiga pilihan: **Harian**, **Mingguan**, dan **Bulanan**. 
 | Pembanding (▲/▼) | Hari sebelumnya. Hari ini dibandingkan dengan kemarin sampai jam yang sama | Minggu sebelumnya. Minggu berjalan dibandingkan dengan minggu lalu sampai hari dan jam yang sama | Bulan sebelumnya. Bulan berjalan dibandingkan dengan bulan lalu sampai tanggal dan jam yang sama |
 | Grafik tren | Per jam (07.00–17.59, ditambah jam lain yang berisi); 30 hari terakhir | Per hari di minggu itu; 12 minggu terakhir | Per hari; per minggu (Senin–Minggu, dipotong ke bulan); 12 bulan terakhir |
 
-- **Pembanding sampai jam yang sama.** Selama periode masih berjalan, hari terakhir pembanding dipotong pada jam sekarang. Contoh: Kamis pukul 10.16 dibandingkan dengan Senin–Kamis pukul 10.16 minggu lalu, bukan Kamis lalu sehari penuh. Potongan memakai jam penilaian dari rincian (±6 minggu terakhir). Bila hari itu sudah diringkas (rekap harian tanpa jam), dihitung sehari penuh.
+- **Periode pembanding.** Bulan yang sudah selesai dibandingkan dengan seluruh bulan sebelumnya. Untuk periode berjalan, pembanding berhenti pada hari dan jam WITA yang sama selama tanggal itu ada. Pada 30 Oktober pukul 10.00, perbandingan mencakup September sampai tanggal 30 pukul 10.00. Pada 31 Oktober, perbandingan mencakup seluruh September. Bila rincian hari pembanding sudah diringkas, hari itu dihitung penuh.
+- **Layak reward.** Kartu bulanan dan lembar Ringkasan Excel menampilkan jumlah guide yang layak dan selisihnya. Setiap bulan memakai aturan nilai dan minimal pengantarannya sendiri. Pelanggaran berat terverifikasi diperhitungkan berdasarkan waktu penilaian dalam periode pembanding.
 - **Kartu angka**: pengantaran (laporan harian: per pos), guide dinilai, nilai rata-rata, % ID terpasang, % seragam lengkap, Etika rata-rata, ditambah layak reward pada laporan bulanan. Ukuran mutu yang naik berwarna hijau dan yang turun merah; jumlah tanpa warna. Panah dan teks tetap ada, jadi artinya tidak bergantung pada warna.
 - **Grafik tren** (`public/visit-trend.js`, SVG tanpa pustaka, sesuai CSP portal): tiga panel bersumbu waktu sama — nilai rata-rata, ketaatan (% ID terpasang dan % seragam lengkap), dan pengantaran.
   - Arahkan kursor, ketuk, atau fokus lalu pakai ← → Home End untuk membaca semua angka di satu titik. Di HP angka titik tampil tetap di bawah grafik.
@@ -268,16 +269,16 @@ Dibangun di atas master `fa080f8` (PR #40, sesudah rilis Etika PR #39). **Tanpa 
 
 1. Pastikan rilis Etika (PR #39) sudah lengkap: migrasi, `guide-form` `5dab0844…`, dan `portal-api`.
 2. Edge Function `portal-api`: unduh versi aktif, simpan salinannya sebagai titik kembali, hitung SHA-256-nya.
-   - Bila sama dengan `0a074d2340f3ae393c81d4b8e0aba090bebed5514802cb9defc1d9ea7782f323` (paket PR #39), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `7868d6c3d60c73d30728d1ee6761f788361a643b0fe8093e35053f64bebdda20`).
+   - Bila sama dengan `0a074d2340f3ae393c81d4b8e0aba090bebed5514802cb9defc1d9ea7782f323` (paket PR #39), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `b0e773a6c73cbe3b5b4edfbf56afe1673d567213be368b2f36752bfe03b05bf7`).
    - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya (hanya lingkup `__visits` yang diganti).
-3. Merge ke `master`: Pages menayangkan Laporan & Ekspor yang baru (bundel `portal-49043f0d4982.js` + `portal-b47dab8bb9fa.css`).
+3. Merge ke `master`: Pages menayangkan Laporan & Ekspor yang baru (bundel `portal-a0e3c2e88d44.js` + `portal-b47dab8bb9fa.css`).
 4. Periksa: buka Laporan & Ekspor → Harian, Mingguan, dan Bulanan. Kartu angka menampilkan "vs …" dan grafik tren tampil; Harian menampilkan grafik per jam. Bila muncul "Grafik tren dan pembanding belum tersedia", `portal-api` baru belum aktif.
 
 Rollback: `portal-api` → salinan langkah 2 (ruang kerja baru otomatis kembali ke laporan tanpa grafik), Pages → deployment sebelumnya. Tidak ada data atau tabel yang berubah.
 
 Validasi (19 November, Node 24.22.3):
 
-- 398/398 tes aplikasi. Termasuk `tests/visit-report.test.mjs`: batas hari/minggu/bulan, pembanding sampai jam yang sama, per jam WITA, setiap ember tren sama dengan rekap rentangnya, sama persis sebelum/sesudah pelipatan, dan izin.
+- 399/399 tes aplikasi, termasuk pembanding pada akhir bulan, aturan reward bulan sebelumnya, batas waktu WITA serta kesesuaian tren sebelum dan sesudah pelipatan.
 - 20/20 pemeriksaan PostgreSQL. Termasuk rute laporan harian/mingguan/bulanan lewat paket `portal-api` dan laporan yang sama sebelum/sesudah retensi.
 - 33/33 alur formulir/ruang kerja. Termasuk Laporan harian/mingguan/bulanan, grafik dengan papan ketik, ekspor Excel, Rincian penilaian, dan `portal-api` lama.
 - 5/5 kelanjutan migrasi dan 5/5 PWA.

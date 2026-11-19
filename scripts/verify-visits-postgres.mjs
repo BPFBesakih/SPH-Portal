@@ -167,6 +167,10 @@ try{
     const month=await route(manager,'visits/report','GET',{},`jenis=bulan&bulan=${today.slice(0,7)}`);
     assert.deepEqual([month.laporan.from,month.aturan.satu_bulan,month.tren.length],[`${today.slice(0,7)}-01`,true,12]);
     assert.equal(month.perMinggu.reduce((n,b)=>n+b.pengantaran,0),month.ringkasan.pengantaran);
+    await pg.query("INSERT INTO portal.visit_daily_totals(day,guide_id,pos,sumber,antar,uniform,uniform_patuh,id_card,review,etika,updated_at) VALUES('2026-03-31','G-001',1,'portal',10,10,10,10,0,0,$1)",[now()]);
+    const april=await route(manager,'visits/report','GET',{},'jenis=bulan&bulan=2026-04');
+    assert.deepEqual([april.laporan.sebelumnya.to,april.sebelumnya.pengantaran,april.sebelumnya.layak],['2026-03-31',10,1]);
+    await pg.exec("DELETE FROM portal.visit_daily_totals WHERE day='2026-03-31' AND guide_id='G-001' AND pos=1 AND sumber='portal'");
     // Harian: per jam WITA dari rincian PostgreSQL, tren 30 hari, pembanding kemarin sampai jam yang sama.
     const day=await route(leader,'visits/report','GET',{},`jenis=hari&tanggal=${today}`),dayOverview=await route(leader,'visits/overview','GET',{},`from=${today}&to=${today}`);
     assert.deepEqual([day.laporan.from,day.laporan.to,day.laporan.berjalan,day.tren.length,day.perJam.length,day.ringkasan.pengantaran],[today,today,true,30,24,dayOverview.ringkasan.pengantaran]);
