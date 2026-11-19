@@ -175,8 +175,8 @@ export async function visitRoutes({db, user, p, method, body: b = {}, url}, deps
   if (p[1] === 'report' && p.length === 2 && method === 'GET') {
     await requireAny(db, user, ['visits.dashboard.read', 'visits.reports.read'], has);
     const q = url.searchParams, jenis = q.get('jenis');
-    assert(jenis === 'minggu' || jenis === 'bulan', 'Jenis laporan harus minggu atau bulan.');
-    if (jenis === 'minggu') return await visitReport(db, jenis, date(q.get('tanggal') || today(), 'Tanggal'));
+    assert(['hari', 'minggu', 'bulan'].includes(jenis), 'Jenis laporan harus hari, minggu, atau bulan.');
+    if (jenis !== 'bulan') return await visitReport(db, jenis, date(q.get('tanggal') || today(), 'Tanggal'));
     const bulan = q.get('bulan') || today().slice(0, 7);
     assert((/^\d{4}-(0[1-9]|1[0-2])$/).test(bulan), 'Bulan tidak valid.');
     return await visitReport(db, jenis, bulan);

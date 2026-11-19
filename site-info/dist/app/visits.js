@@ -35,7 +35,7 @@ export const visitNav=[
 const firstOfMonth=()=>localToday().slice(0,8)+'01';
 const shiftDay=(day,days)=>new Date(Date.parse(day+'T00:00:00Z')+days*86400000).toISOString().slice(0,10);
 const M={from:firstOfMonth(),to:localToday(),month:localToday().slice(0,7),overview:null,activity:null,sheet:null,guides:[],guideQuery:'',guideKategori:'',guideRegu:'',guideAktif:'1',
- records:[],recordsMore:false,recordsTotal:0,recordsFolded:null,recordFilter:{pos:'',regu:'',status:''},links:null,report:null,reportMode:null,reportWeek:null,trendScope:'hari',
+ records:[],recordsMore:false,recordsTotal:0,recordsFolded:null,recordFilter:{pos:'',regu:'',status:''},links:null,report:null,reportMode:null,reportDay:null,reportWeek:null,trendScope:'hari',
  flags:null,flagFrom:shiftDay(localToday(),-90),flagTo:localToday(),flagStatus:'menunggu',flagJenis:'',scoring:null};
 const regu=['A1','A2','D1','D2'];
 const head=(title,note,actions='')=>`<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(note)}</p></div><div class="actions">${actions}</div></div>`;
@@ -357,12 +357,20 @@ async function sheetAction(action){
 const weekStartOf=day=>shiftDay(day,-((new Date(day+'T00:00:00Z').getUTCDay()+6)%7));
 const addMonth=(month,n)=>new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5,7))-1+n,1)).toISOString().slice(0,7);
 const lastDayOf=month=>new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5,7)),0)).toISOString().slice(0,10);
+const reportModes=[['hari','Harian'],['minggu','Mingguan'],['bulan','Bulanan']];
 const reportModeKey='sph-kunjungan-laporan';
 function rememberMode(mode){try{localStorage.setItem(reportModeKey,mode);}catch{}}
-function rememberedMode(){try{return localStorage.getItem(reportModeKey)==='minggu'?'minggu':'bulan';}catch{return 'bulan';}}
-const reportPeriod=()=>M.reportMode==='minggu'?{from:M.reportWeek,to:shiftDay(M.reportWeek,6)}:{from:`${M.month}-01`,to:lastDayOf(M.month)};
+function rememberedMode(){try{const mode=localStorage.getItem(reportModeKey);return mode==='hari'||mode==='minggu'?mode:'bulan';}catch{return 'bulan';}}
+const dayTitle=day=>formatDate(day,{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+const clock=t=>t?t.replace(':','.'):'';
+const hourLabel=h=>{const hh=String(h.jam).padStart(2,'0');return `${hh}.00–${hh}.59`;};
+function reportPeriod(){
+ if(M.reportMode==='hari')return {from:M.reportDay,to:M.reportDay};
+ if(M.reportMode==='minggu')return {from:M.reportWeek,to:shiftDay(M.reportWeek,6)};
+ return {from:`${M.month}-01`,to:lastDayOf(M.month)};
+}
 async function loadReport(){
- const query=M.reportMode==='minggu'?`jenis=minggu&tanggal=${M.reportWeek}`:`jenis=bulan&bulan=${M.month}`;
+ const query=M.reportMode==='bulan'?`jenis=bulan&bulan=${M.month}`:`jenis=${M.reportMode}&tanggal=${M.reportMode==='hari'?M.reportDay:M.reportWeek}`;
  try{return await api(`visits/report?${query}`);}
  catch(error){
   if(error.status!==404)throw error;
@@ -377,16 +385,31 @@ function monthChoices(){
  return out.join('');
 }
 function periodBar(){
- const weekly=M.reportMode==='minggu',{from,to}=reportPeriod(),today=localToday(),unit=weekly?'Minggu':'Bulan';
- const next=weekly?shiftDay(from,7):`${addMonth(M.month,1)}-01`,current=weekly?from===weekStartOf(today):M.month===today.slice(0,7);
+ const mode=M.reportMode,{from,to}=reportPeriod(),today=localToday(),unit={hari:'Hari',minggu:'Minggu',bulan:'Bulan'}[mode];
+ const next=mode==='hari'?shiftDay(from,1):mode==='minggu'?shiftDay(from,7):`${addMonth(M.month,1)}-01`;
+ const current=mode==='hari'?from===today:mode==='minggu'?from===weekStartOf(today):M.month===today.slice(0,7);
+ const label=mode==='hari'?formatDate(from,{weekday:'short',day:'numeric',month:'short',year:'numeric'}):mode==='minggu'?rangeLabel(from,to):monthLabel(M.month);
+ const picker=mode==='bulan'?`<label class="field"><span>Bulan</span><select data-visit-field="month">${monthChoices()}</select></label>`
+  :`<label class="field"><span>${mode==='hari'?'Tanggal':'Minggu yang memuat tanggal'}</span><input type="date" data-visit-field="${mode==='hari'?'reportDayPick':'reportWeekPick'}" value="${esc(from)}" min="2025-01-01" max="${today}"></label>`;
  return `<div class="toolbar visit-period">
- <div class="visit-mode" role="group" aria-label="Jenis laporan">${[['minggu','Mingguan'],['bulan','Bulanan']].map(([mode,label])=>`<button type="button" class="chip ${M.reportMode===mode?'active':''}" data-visit="report-mode" data-mode="${mode}" aria-pressed="${M.reportMode===mode}">${label}</button>`).join('')}</div>
- <div class="visit-stepper"><button type="button" class="icon-button" data-visit="report-prev" aria-label="${unit} sebelumnya" title="${unit} sebelumnya">${icon('chevron','flip')}</button><strong aria-live="polite">${esc(weekly?rangeLabel(from,to):monthLabel(M.month))}</strong><button type="button" class="icon-button" data-visit="report-next" aria-label="${unit} berikutnya" title="${unit} berikutnya" ${next>today?'disabled':''}>${icon('chevron')}</button></div>
- ${weekly?`<label class="field"><span>Minggu yang memuat tanggal</span><input type="date" data-visit-field="reportDay" value="${esc(from)}" min="2025-01-01" max="${today}"></label>`:`<label class="field"><span>Bulan</span><select data-visit-field="month">${monthChoices()}</select></label>`}
- ${current?'':btn(weekly?'Minggu ini':'Bulan ini','report-current','calendar','outlined')}</div>`;
+ <div class="visit-mode" role="group" aria-label="Jenis laporan">${reportModes.map(([key,text])=>`<button type="button" class="chip ${mode===key?'active':''}" data-visit="report-mode" data-mode="${key}" aria-pressed="${mode===key}">${text}</button>`).join('')}</div>
+ <div class="visit-stepper"><button type="button" class="icon-button" data-visit="report-prev" aria-label="${unit} sebelumnya" title="${unit} sebelumnya">${icon('chevron','flip')}</button><strong aria-live="polite">${esc(label)}</strong><button type="button" class="icon-button" data-visit="report-next" aria-label="${unit} berikutnya" title="${unit} berikutnya" ${next>today?'disabled':''}>${icon('chevron')}</button></div>
+ ${picker}
+ ${current?'':btn(`${unit} ini`,'report-current','calendar','outlined')}</div>`;
 }
-// Pembanding: periode sebelumnya yang utuh, atau hari-hari yang sama bila periode ini masih berjalan.
-const comparison=L=>L.sebelumnya.utuh?(L.jenis==='minggu'?'minggu sebelumnya':'bulan sebelumnya'):rangeLabel(L.sebelumnya.from,L.sebelumnya.to);
+// Pembanding: periode sebelumnya yang utuh, atau — bila periode ini masih berjalan — periode lalu
+// sampai jam yang sama (kemarin s.d. 10.16; 9–12 Nov s.d. 10.16).
+function comparison(L){
+ const p=L.sebelumnya,jam=p.sampaiJam?` s.d. ${clock(p.sampaiJam)}`:'';
+ if(L.jenis==='hari')return p.utuh?'hari sebelumnya':`kemarin${jam}`;
+ if(p.utuh)return L.jenis==='minggu'?'minggu sebelumnya':'bulan sebelumnya';
+ return `${rangeLabel(p.from,p.to)}${jam}`;
+}
+function runningNote(L){
+ const jam=L.sebelumnya.sampaiJam?`pukul ${clock(L.sebelumnya.sampaiJam)}`:'';
+ if(L.jenis==='hari')return `Hari berjalan: angka sampai ${jam||'saat ini'}, dibanding ${comparison(L)}.`;
+ return `${L.jenis==='minggu'?'Minggu':'Bulan'} berjalan: angka sampai ${formatDate(L.sampai,{weekday:'long',day:'numeric',month:'long'})}${jam?` ${jam}`:''}, dibanding periode yang sama ${L.jenis==='minggu'?'minggu':'bulan'} lalu (${comparison(L)}).`;
+}
 // Selisih dengan pembanding. Untuk ukuran mutu naik = membaik (hijau), turun = memburuk (merah);
 // jumlah tidak diberi warna. Panah dan teks tetap ada, jadi arti tidak bergantung pada warna.
 function deltaLine(current,previous,kind){
@@ -398,23 +421,34 @@ function deltaLine(current,previous,kind){
  return `<span class="visit-delta ${tone}"><span aria-hidden="true">${up?'▲':'▼'}</span><span class="sr-only">${up?'naik':'turun'}</span> ${text}</span>`;
 }
 const reportStat=(label,value,delta,detail)=>`<section class="stat-card visit-stat"><div class="stat-top"><span>${esc(label)}</span></div><div class="stat-value">${value==null?'—':esc(String(value))}</div>${delta?`<div class="stat-bottom visit-stat-delta">${delta}</div>`:''}${detail?`<div class="stat-bottom"><span>${esc(detail)}</span></div>`:''}</section>`;
-function reportStats(d,weekly){
+function reportStats(d,mode){
  const s=d.ringkasan,L=d.laporan,p=d.sebelumnya,a=d.aturan;
  const vs=L?` <span>vs ${esc(comparison(L))}</span>`:'',delta=(key,kind)=>!L?'':s[key]==null||p[key]==null?deltaLine(null,null,kind):deltaLine(s[key],p[key],kind)+vs;
- return [reportStat('Pengantaran',number(s.pengantaran),delta('pengantaran','count'),`${number(s.hariDinilai)} hari berpenilaian`),
+ return [reportStat('Pengantaran',number(s.pengantaran),delta('pengantaran','count'),mode==='hari'?d.perPos.map(r=>`Pos ${r.pos}: ${number(r.pengantaran)}`).join(' · '):`${number(s.hariDinilai)} hari berpenilaian`),
   reportStat('Guide dinilai',number(s.guideDinilai),delta('guideDinilai','count'),`dari ${number(s.guideAktif)} guide aktif`),
   reportStat('Nilai rata-rata',score(s.nilai),delta('nilai','nilai'),'100 − potongan + Etika per pengantaran'),
   reportStat('ID terpasang',pct(s.persenId),delta('persenId','pct'),`${number(s.tanpaId)} kali tanpa ID`),
   reportStat('Seragam lengkap',pct(s.persenSeragam),delta('persenSeragam','pct'),`${number(s.kurangLengkap)} kurang · ${number(s.tidakBerseragam)} tidak`),
   reportStat('Etika rata-rata',etikaAvg(s.etikaRata),delta('etikaRata','etika'),`jumlah ${etikaSum(s.etika)}`),
-  ...(weekly?[]:[reportStat('Layak reward',s.layak==null?'—':number(s.layak),'',a?`nilai ≥ ${a.ambang}, minimal ${a.minimal} pengantaran, tanpa pelanggaran berat`:'')])].join('');
+  ...(mode==='bulan'?[reportStat('Layak reward',s.layak==null?'—':number(s.layak),'',a?`nilai ≥ ${a.ambang}, minimal ${a.minimal} pengantaran, tanpa pelanggaran berat`:'')]:[])].join('');
+}
+// Rentang grafik per jenis laporan. Laporan harian: per jam (dari rincian ±6 minggu terakhir) dan 30 hari.
+function trendScopes(mode,d){
+ if(mode==='hari')return [...(d.perJam?[['jam','Per jam']]:[]),['tren','30 hari']];
+ if(mode==='minggu')return [['hari','Per hari'],['tren','12 minggu']];
+ return [['hari','Per hari'],['minggu','Per minggu'],['tren','12 bulan']];
 }
 // Titik grafik untuk rentang yang dipilih. Sisa periode yang belum berjalan tetap ada di sumbu
 // (kosong), dan titik periode yang masih berjalan ditandai.
-const trendScopes=weekly=>weekly?[['hari','Per hari'],['tren','12 minggu']]:[['hari','Per hari'],['minggu','Per minggu'],['tren','12 bulan']];
-function trendSlots(d,weekly,scope){
+function trendSlots(d,mode,scope){
  const L=d.laporan,today=localToday();
- if(scope==='tren')return {unit:weekly?'minggu':'bulan',slots:d.tren.map((b,i,list)=>({...b,berjalan:L.berjalan&&i===list.length-1}))};
+ if(scope==='jam'){
+  // Jam 07.00–17.59 selalu tampil; jam lain hanya bila ada penilaian.
+  const filled=d.perJam.filter(h=>h.pengantaran).map(h=>h.jam),first=Math.min(7,...filled),last=Math.max(17,...filled);
+  const hour=L.berjalan?Number(new Date(Date.now()+8*3600000).toISOString().slice(11,13)):24;
+  return {unit:'jam',slots:d.perJam.slice(first,last+1).map(h=>({...h,mendatang:h.jam>hour,berjalan:h.jam===hour}))};
+ }
+ if(scope==='tren')return {unit:mode,slots:d.tren.map((b,i,list)=>({...b,berjalan:L.berjalan&&i===list.length-1}))};
  const unit=scope==='minggu'?'minggu':'hari',slots=(unit==='minggu'?d.perMinggu:d.perHari).map(b=>({...b}));
  let resume=shiftDay(L.sampai,1);
  const last=slots.at(-1);
@@ -425,40 +459,49 @@ function trendSlots(d,weekly,scope){
  for(let day=resume;day<=L.to;){const end=unit==='hari'?day:[shiftDay(weekStartOf(day),6),L.to].sort()[0];slots.push({mulai:day,sampai:end,mendatang:true});day=shiftDay(end,1);}
  return {unit,slots};
 }
-const slotRowLabel=(s,unit)=>unit==='hari'?formatDate(s.mulai,{weekday:'short',day:'numeric',month:'short',year:'numeric'}):unit==='bulan'?monthLabel(s.mulai.slice(0,7)):rangeLabel(s.mulai,s.sampai);
-function trendCard(d,weekly){
- const scopes=trendScopes(weekly);if(!scopes.some(([key])=>key===M.trendScope))M.trendScope='hari';
- const L=d.laporan,{unit,slots}=trendSlots(d,weekly,M.trendScope),period=weekly?rangeLabel(L.from,L.to):monthLabel(M.month);
- const sub={hari:`Per hari, ${period}.`,minggu:`Per minggu (Senin–Minggu) di ${period}.`,tren:`${weekly?'12 minggu':'12 bulan'} terakhir sampai ${period}.`}[M.trendScope];
+const slotRowLabel=(s,unit)=>unit==='jam'?hourLabel(s):unit==='hari'?formatDate(s.mulai,{weekday:'short',day:'numeric',month:'short',year:'numeric'}):unit==='bulan'?monthLabel(s.mulai.slice(0,7)):rangeLabel(s.mulai,s.sampai);
+function trendCard(d,mode){
+ const scopes=trendScopes(mode,d);if(!scopes.some(([key])=>key===M.trendScope))M.trendScope=scopes[0][0];
+ const L=d.laporan,{unit,slots}=trendSlots(d,mode,M.trendScope);
+ const period=mode==='hari'?formatDate(L.from,{weekday:'long',day:'numeric',month:'long',year:'numeric'}):mode==='minggu'?rangeLabel(L.from,L.to):monthLabel(M.month);
+ const span={hari:'30 hari',minggu:'12 minggu',bulan:'12 bulan'}[mode],each={hari:'hari',minggu:'minggu',bulan:'bulan'}[mode];
+ const sub={jam:`Per jam (WITA), ${period}.`,hari:`Per hari, ${period}.`,minggu:`Per minggu (Senin–Minggu) di ${period}.`,tren:`${span} terakhir sampai ${period}.`}[M.trendScope];
  const filled=slots.filter(s=>!s.mendatang&&s.pengantaran).length;
  // Tren yang masih jarang: jelaskan kenapa, termasuk riwayat NilaiGuide yang belum dimigrasikan.
  const migrated=M.history?.current?.status==='aktif',history=migrated?'':M.history?.can_manage?' Riwayat NilaiGuide sebelum peralihan ikut tampil setelah migrasi awal diterapkan (kartu Migrasi awal di bawah).':' Riwayat NilaiGuide sebelum peralihan ikut tampil setelah Pengelola Kunjungan menjalankan migrasi awal.';
- const sparse=M.trendScope==='tren'&&filled<2?`<p class="muted visit-note">${icon('help')} Tren antar${weekly?'minggu':'bulan'} terbaca setelah ada data minimal dua ${weekly?'minggu':'bulan'}.${history}</p>`:'';
- const rows=slots.filter(s=>!s.mendatang).map(s=>`<tr><td>${esc(slotRowLabel(s,unit))}${s.berjalan?' <span class="muted text-small">(berjalan)</span>':''}</td><td>${number(s.pengantaran)}</td><td>${number(s.guideDinilai)}</td><td><strong>${score(s.nilai)}</strong></td><td>${pct(s.persenId)}</td><td>${pct(s.persenSeragam)}</td><td>${etikaAvg(s.etikaRata)}</td></tr>`);
+ const sparse=M.trendScope==='tren'&&filled<2?`<p class="muted visit-note">${icon('help')} Tren antar${each} terbaca setelah ada data minimal dua ${each}.${history}</p>`:'';
+ const noHours=mode==='hari'&&!d.perJam?`<p class="muted visit-note">${icon('help')} Rincian per jam hanya ada untuk ±6 minggu terakhir; penilaian tanggal ini sudah diringkas per hari.</p>`:'';
+ const rows=slots.filter(s=>!s.mendatang&&(unit!=='jam'||s.pengantaran)).map(s=>`<tr><td>${esc(slotRowLabel(s,unit))}${s.berjalan?' <span class="muted text-small">(berjalan)</span>':''}</td><td>${number(s.pengantaran)}</td><td>${number(s.guideDinilai)}</td><td><strong>${score(s.nilai)}</strong></td><td>${pct(s.persenId)}</td><td>${pct(s.persenSeragam)}</td><td>${etikaAvg(s.etikaRata)}</td></tr>`);
  return card('Grafik tren',`${sub} Arahkan kursor, ketuk, atau pakai panah kiri/kanan untuk melihat angka tiap titik.`,`<div class="card-body visit-trend-body">
  <div class="chips visit-scope" role="group" aria-label="Rentang grafik">${scopes.map(([key,label])=>`<button type="button" class="chip ${M.trendScope===key?'active':''}" data-visit="trend-scope" data-scope="${key}" aria-pressed="${M.trendScope===key}">${label}</button>`).join('')}</div>
- <div class="visit-trend" data-trend></div>${sparse}
- <details class="visit-trend-table"><summary>Lihat angka dalam tabel</summary>${table([unit==='hari'?'Tanggal':unit==='minggu'?'Minggu':'Bulan','Pengantaran','Guide dinilai','Nilai rata-rata','% ID terpasang','% seragam lengkap','Etika rata-rata'],rows)}</details></div>`);
+ ${noHours}<div class="visit-trend" data-trend></div>${sparse}
+ <details class="visit-trend-table"><summary>Lihat angka dalam tabel</summary>${table([{jam:'Jam',hari:'Tanggal',minggu:'Minggu',bulan:'Bulan'}[unit],'Pengantaran','Guide dinilai','Nilai rata-rata','% ID terpasang','% seragam lengkap','Etika rata-rata'],rows)}</details></div>`);
 }
 function mountReportChart(){
  const el=document.querySelector('#main [data-trend]');if(!el||!M.report?.laporan)return;
- const {slots,unit}=trendSlots(M.report,M.reportMode==='minggu',M.trendScope);mountTrend(el,slots,unit);
+ const {slots,unit}=trendSlots(M.report,M.reportMode,M.trendScope);mountTrend(el,slots,unit);
 }
+const petugasRow=r=>`<tr><td>${r.petugas?esc(r.petugas):'<span class="muted">Tanpa nama petugas</span>'}</td><td>${esc(r.pos.map(x=>'Pos '+x).join(', '))}</td>${figureCells(r)}</tr>`;
 function reportsPage(){
- const d=M.report,weekly=M.reportMode==='minggu',canExport=permitted('visits.reports.export'),s=d.ringkasan,L=d.laporan,{from,to}=reportPeriod();
- const intro=weekly?`Laporan mingguan ${rangeLabel(from,to)} (Senin–Minggu WITA) untuk memantau; reward memakai laporan bulanan.`:`Laporan bulanan ${monthLabel(M.month)} per guide, dasar reward dan arsip.`;
- const perGuide=d.perGuide.map(g=>`<tr><td>${number(g.peringkat)}</td><td><strong>${esc(g.nama)}</strong><br><span class="muted text-small">${esc(g.guideId)}</span></td><td>${esc(g.regu)}</td><td>${number(g.antar)}</td><td><strong>${score(g.nilai)}</strong></td>${weekly?'':`<td>${rewardCell(g)}</td>`}<td>${pct(g.persenId)}</td><td>${pct(g.persenSeragam)}</td><td>${etikaAvg(g.etikaRata)}</td><td>${number(g.berat)}</td><td>${number(g.apresiasi)}</td></tr>`);
- const guideHeads=['#','Guide','Regu','Antar','Nilai',...(weekly?[]:['Status reward']),'% ID','% seragam','Etika rata-rata','Berat','Apresiasi'];
+ const d=M.report,mode=M.reportMode,daily=mode==='hari',monthly=mode==='bulan',canExport=permitted('visits.reports.export'),s=d.ringkasan,L=d.laporan,{from,to}=reportPeriod();
+ const intro=daily?`Laporan harian ${dayTitle(from)} untuk memantau pos; reward memakai laporan bulanan.`
+  :mode==='minggu'?`Laporan mingguan ${rangeLabel(from,to)} (Senin–Minggu WITA) untuk memantau; reward memakai laporan bulanan.`:`Laporan bulanan ${monthLabel(M.month)} per guide, dasar reward dan arsip.`;
+ const perGuide=d.perGuide.map(g=>`<tr><td>${number(g.peringkat)}</td><td><strong>${esc(g.nama)}</strong><br><span class="muted text-small">${esc(g.guideId)}</span></td><td>${esc(g.regu)}</td><td>${number(g.antar)}</td><td><strong>${score(g.nilai)}</strong></td>${monthly?`<td>${rewardCell(g)}</td>`:''}<td>${pct(g.persenId)}</td><td>${pct(g.persenSeragam)}</td><td>${etikaAvg(g.etikaRata)}</td><td>${number(g.berat)}</td><td>${number(g.apresiasi)}</td></tr>`);
+ const guideHeads=['#','Guide','Regu','Antar','Nilai',...(monthly?['Status reward']:[]),'% ID','% seragam','Etika rata-rata','Berat','Apresiasi'];
+ const guideNote=monthly?'Diurut menurut nilai. Bila reward terbatas: nilai lebih tinggi didahulukan, lalu apresiasi terverifikasi; selebihnya setara. Jumlah hari dan rincian temuan ada di Ekspor Excel.'
+  :`Diurut menurut nilai ${daily?'hari':'minggu'} ini. Status reward hanya di laporan bulanan. ${daily?'Rincian tiap penilaian ada di halaman Penilaian dan di Ekspor Excel.':'Jumlah hari dan rincian temuan ada di Ekspor Excel.'}`;
+ const records=daily&&permitted('visits.records.read')?btn('Rincian penilaian','report-records','log','outlined'):'';
  return `${head('Laporan & Ekspor',`${intro} ${ruleNote(d)}`,canExport?btn('Ekspor Excel','export-report','download','primary'):'')}
  ${periodBar()}
- ${L?.berjalan?`<p class="muted visit-note">${icon('clock')} ${weekly?'Minggu':'Bulan'} berjalan: angka sampai ${esc(formatDate(L.sampai,{weekday:'long',day:'numeric',month:'long'}))}, dibanding hari yang sama ${weekly?'minggu':'bulan'} lalu (${esc(rangeLabel(L.sebelumnya.from,L.sebelumnya.to))}).</p>`:''}
- ${L?'':`<div class="notice">${icon('incident')}<div><strong>Grafik tren dan pembanding belum tersedia</strong><p>Server portal belum diperbarui untuk laporan mingguan dan bulanan. Angka di bawah tetap benar.</p></div></div>`}
- <div class="stats-grid">${reportStats(d,weekly)}</div>
- ${s.berat.menunggu?`<div class="notice warning">${icon('incident')}<div><strong>${number(s.berat.menunggu)} laporan pelanggaran berat belum diputuskan</strong><p>${weekly?'Putuskan di Verifikasi; yang disetujui menggugurkan reward bulan itu.':'Putuskan di Verifikasi sebelum reward bulan ini dibagikan.'}</p><p><a href="#visits-flags">Buka Verifikasi</a></p></div></div>`:''}
- ${L?trendCard(d,weekly):''}
- <div class="visit-stack">${card('Per regu','',table(['Regu','Kategori','Guide',...figureHeads],d.perRegu.map(r=>`<tr><td>${esc(r.regu)}</td><td>${esc(r.kategori)}</td><td>${number(r.guideDinilai)}</td>${figureCells(r)}</tr>`)))}
- ${card('Per pos','Pos 1 dan Pos 3 dihitung masing-masing. Selisih besar biasanya tanda patokan antarpos belum sama.',table(['Pos','Guide',...figureHeads],d.perPos.map(r=>`<tr><td>Pos ${esc(r.pos)}</td><td>${number(r.guideDinilai)}</td>${figureCells(r)}</tr>`)))}
- ${card('Ringkasan per guide',weekly?'Diurut menurut nilai minggu ini. Status reward hanya di laporan bulanan. Jumlah hari dan rincian temuan ada di Ekspor Excel.':'Diurut menurut nilai. Bila reward terbatas: nilai lebih tinggi didahulukan, lalu apresiasi terverifikasi; selebihnya setara. Jumlah hari dan rincian temuan ada di Ekspor Excel.',table(guideHeads,perGuide))}
+ ${L?.berjalan?`<p class="muted visit-note">${icon('clock')} ${esc(runningNote(L))}</p>`:''}
+ ${L?'':`<div class="notice">${icon('incident')}<div><strong>Grafik tren dan pembanding belum tersedia</strong><p>Server portal belum diperbarui untuk laporan harian, mingguan, dan bulanan. Angka di bawah tetap benar.</p></div></div>`}
+ <div class="stats-grid">${reportStats(d,mode)}</div>
+ ${s.berat.menunggu?`<div class="notice warning">${icon('incident')}<div><strong>${number(s.berat.menunggu)} laporan pelanggaran berat belum diputuskan</strong><p>${monthly?'Putuskan di Verifikasi sebelum reward bulan ini dibagikan.':'Putuskan di Verifikasi; yang disetujui menggugurkan reward bulan itu.'}</p><p><a href="#visits-flags">Buka Verifikasi</a></p></div></div>`:''}
+ ${L?trendCard(d,mode):''}
+ <div class="visit-stack">${card('Per pos','Pos 1 dan Pos 3 dihitung masing-masing. Selisih besar biasanya tanda patokan antarpos belum sama.',table(['Pos','Guide',...figureHeads],d.perPos.map(r=>`<tr><td>Pos ${esc(r.pos)}</td><td>${number(r.guideDinilai)}</td>${figureCells(r)}</tr>`)))}
+ ${card('Per regu','',table(['Regu','Kategori','Guide',...figureHeads],d.perRegu.map(r=>`<tr><td>${esc(r.regu)}</td><td>${esc(r.kategori)}</td><td>${number(r.guideDinilai)}</td>${figureCells(r)}</tr>`)))}
+ ${daily&&d.perPetugas?.length?card('Per petugas penilai','Dari rincian penilaian. Petugas yang jauh lebih longgar atau ketat dari yang lain perlu dikalibrasi, termasuk patokan Etika (rata-rata jauh dari 0).',table(['Petugas','Pos',...figureHeads],d.perPetugas.map(petugasRow))):''}
+ ${card('Ringkasan per guide',guideNote,table(guideHeads,perGuide),records)}
  ${historyCard(M.history)}</div>
  <p class="muted visit-note">${esc(periodNote(d).trim())} Diperbarui ${when(d.diperbarui)}.</p>`;
 }
@@ -477,42 +520,56 @@ const trendColumns=[{header:'Periode',key:'periode',width:30},{header:'Dari',key
 const trendRow=(b,label)=>({...b,periode:label,nilai:round2(b.nilai),etikaRata:round2(b.etikaRata)});
 const figureColumns=first=>[...first,{header:'Guide dinilai',key:'guideDinilai',kind:'number'},{header:'Pengantaran',key:'pengantaran',kind:'number'},{header:'Nilai rata-rata',key:'nilai',kind:'number'},{header:'% ID terpasang',key:'persenId',kind:'percent'},{header:'% seragam lengkap',key:'persenSeragam',kind:'percent'},
  {header:'Etika rata-rata',key:'etikaRata',kind:'number'},{header:'Tanpa ID',key:'tanpaId',kind:'number'},{header:'Kurang lengkap',key:'kurangLengkap',kind:'number'},{header:'Tidak berseragam',key:'tidakBerseragam',kind:'number'}];
-function summaryRows(d,weekly){
- const L=d.laporan,s=d.ringkasan,label=weekly?`Minggu ${rangeLabel(L.from,L.to)}`:monthLabel(M.month);
- const rows=[trendRow({...s,mulai:L.from,sampai:L.sampai,layak:weekly?null:s.layak},`${label}${L.berjalan?' (berjalan)':''}`)];
+function summaryRows(d,mode){
+ const L=d.laporan,s=d.ringkasan,label=mode==='hari'?`Hari ${dayTitle(L.from)}`:mode==='minggu'?`Minggu ${rangeLabel(L.from,L.to)}`:monthLabel(M.month);
+ const rows=[trendRow({...s,mulai:L.from,sampai:L.sampai,layak:mode==='bulan'?s.layak:null},`${label}${L.berjalan?' (berjalan)':''}`)];
  const p=d.sebelumnya;rows.push(trendRow({...p,mulai:L.sebelumnya.from,sampai:L.sebelumnya.to},`Pembanding: ${comparison(L)}`));
  const diff={};for(const key of ['pengantaran','guideDinilai','hariDinilai','nilai','persenId','persenSeragam','etikaRata','tanpaId','kurangLengkap','tidakBerseragam','etika','potongan'])diff[key]=s[key]==null||p[key]==null?null:s[key]-p[key];
  rows.push(trendRow(diff,'Selisih (periode laporan − pembanding)'));
  return rows;
 }
+// Kolom rincian penilaian (Ekspor di halaman Penilaian dan laporan harian). Etika untuk semua
+// bentuk; kolom teguran hanya terisi pada penilaian formulir 2.2.
+const recordColumns=['evaluationId','timestamp','tanggal','pos','guideId','guideName','regu','versi','idCard','seragam','etika','teguran','berat','apresiasi','petugas','nilai','uniform','catatan','receivedAt','koreksiDari','status','digantiOleh'].map(key=>({header:key,key,kind:['pos','versi','uniform','idCard','etika','nilai'].includes(key)?'number':key==='catatan'?'notes':'text',width:key==='catatan'?40:undefined}));
+const recordExportRow=r=>({...r,teguran:r.teguran.join(', ')});
 async function exportRecords(){
  const rows=[];
  for(let offset=0;;offset+=1000){const page=await api(`visits/records?${recordQuery(offset)}`);rows.push(...page.items);if(!page.more)break;if(offset>=49000)throw new Error('Lebih dari 50.000 baris. Persempit rentang tanggal.');}
  if(!rows.length)throw new Error('Tidak ada penilaian pada saringan ini.');
  // Rentang yang memotong data lama (422) tetap bisa diekspor rinciannya, tanpa ringkasan.
  const summary=await api(`visits/overview?${range()}`).catch(error=>{if(error.status===422)return null;throw error;});
- // Etika untuk semua bentuk; kolom teguran hanya terisi pada penilaian formulir 2.2.
- const columns=['evaluationId','timestamp','tanggal','pos','guideId','guideName','regu','versi','idCard','seragam','etika','teguran','berat','apresiasi','petugas','nilai','uniform','catatan','receivedAt','koreksiDari','status','digantiOleh'].map(key=>({header:key,key,kind:['pos','versi','uniform','idCard','etika','nilai'].includes(key)?'number':key==='catatan'?'notes':'text',width:key==='catatan'?40:undefined}));
- const flat=rows.map(r=>({...r,teguran:r.teguran.join(', ')}));
- download(createXlsx([{name:'Penilaian',columns,rows:flat},...(summary?[{name:'Ringkasan per guide',columns:guideColumns,rows:guideRows(summary.perGuide)}]:[])]),`penilaian-guide-${M.from}-sd-${M.to}.xlsx`);
+ download(createXlsx([{name:'Penilaian',columns:recordColumns,rows:rows.map(recordExportRow)},...(summary?[{name:'Ringkasan per guide',columns:guideColumns,rows:guideRows(summary.perGuide)}]:[])]),`penilaian-guide-${M.from}-sd-${M.to}.xlsx`);
  await post('visits/exports',{kind:'records',from:M.from,to:M.to,rows:rows.length});
  toast(`${number(rows.length)} penilaian diekspor.`);
 }
 async function exportReport(){
- const d=M.report,weekly=M.reportMode==='minggu',L=d.laporan,sheets=[];
+ const d=M.report,mode=M.reportMode,daily=mode==='hari',monthly=mode==='bulan',L=d.laporan,sheets=[];
  if(L){
-  sheets.push({name:'Ringkasan',columns:weekly?trendColumns:[...trendColumns,{header:'Layak reward',key:'layak',kind:'number'}],rows:summaryRows(d,weekly)});
-  sheets.push({name:'Per hari',columns:trendColumns,rows:d.perHari.map(b=>trendRow(b,slotRowLabel(b,'hari')))});
-  if(d.perMinggu)sheets.push({name:'Per minggu',columns:trendColumns,rows:d.perMinggu.map(b=>trendRow(b,rangeLabel(b.mulai,b.sampai)))});
-  sheets.push({name:weekly?'Tren 12 minggu':'Tren 12 bulan',columns:trendColumns,rows:d.tren.map(b=>trendRow(b,weekly?`Minggu ${rangeLabel(b.mulai,b.sampai)}`:monthLabel(b.mulai.slice(0,7))))});
+  sheets.push({name:'Ringkasan',columns:monthly?[...trendColumns,{header:'Layak reward',key:'layak',kind:'number'}]:trendColumns,rows:summaryRows(d,mode)});
+  if(daily){
+   if(d.perJam)sheets.push({name:'Per jam',columns:trendColumns,rows:d.perJam.filter(h=>h.pengantaran).map(h=>trendRow(h,hourLabel(h)))});
+   sheets.push({name:'Tren 30 hari',columns:trendColumns,rows:d.tren.map(b=>trendRow(b,slotRowLabel(b,'hari')))});
+  }else{
+   sheets.push({name:'Per hari',columns:trendColumns,rows:d.perHari.map(b=>trendRow(b,slotRowLabel(b,'hari')))});
+   if(d.perMinggu)sheets.push({name:'Per minggu',columns:trendColumns,rows:d.perMinggu.map(b=>trendRow(b,rangeLabel(b.mulai,b.sampai)))});
+   sheets.push({name:monthly?'Tren 12 bulan':'Tren 12 minggu',columns:trendColumns,rows:d.tren.map(b=>trendRow(b,monthly?monthLabel(b.mulai.slice(0,7)):`Minggu ${rangeLabel(b.mulai,b.sampai)}`))});
+  }
  }
- sheets.push({name:'Per regu',columns:figureColumns([{header:'Regu',key:'regu'},{header:'Kategori',key:'kategori'}]),rows:d.perRegu.map(r=>trendRow(r,''))});
  sheets.push({name:'Per pos',columns:figureColumns([{header:'Pos',key:'pos',kind:'number'}]),rows:d.perPos.map(r=>trendRow(r,''))});
- sheets.push({name:'Ringkasan per guide',columns:weekly?guideColumns.filter(c=>c.key!=='statusReward'):guideColumns,rows:guideRows(d.perGuide)});
+ sheets.push({name:'Per regu',columns:figureColumns([{header:'Regu',key:'regu'},{header:'Kategori',key:'kategori'}]),rows:d.perRegu.map(r=>trendRow(r,''))});
+ if(daily&&d.perPetugas?.length)sheets.push({name:'Per petugas',columns:figureColumns([{header:'Petugas',key:'petugas',width:28},{header:'Pos',key:'posList'}]).filter(c=>c.key!=='guideDinilai'),
+  rows:d.perPetugas.map(r=>trendRow({...r,petugas:r.petugas||'Tanpa nama petugas',posList:r.pos.map(x=>'Pos '+x).join(', ')},''))});
+ sheets.push({name:'Ringkasan per guide',columns:monthly?guideColumns:guideColumns.filter(c=>c.key!=='statusReward'),rows:guideRows(d.perGuide)});
+ // Laporan harian ikut memuat rincian tiap penilaian hari itu (selama rinciannya masih ada).
+ if(daily&&permitted('visits.records.read')){
+  const rows=[];
+  for(let offset=0;;offset+=1000){const page=await api(`visits/records?from=${d.from}&to=${d.to}&limit=1000&offset=${offset}`);rows.push(...page.items);if(!page.more||offset>=49000)break;}
+  if(rows.length)sheets.push({name:'Penilaian',columns:recordColumns,rows:rows.map(recordExportRow)});
+ }
  const {from,to}=reportPeriod();
- download(createXlsx(sheets),weekly?`laporan-mingguan-penilaian-guide-${from}-sd-${to}.xlsx`:`laporan-bulanan-penilaian-guide-${M.month}.xlsx`);
+ download(createXlsx(sheets),daily?`laporan-harian-penilaian-guide-${from}.xlsx`:monthly?`laporan-bulanan-penilaian-guide-${M.month}.xlsx`:`laporan-mingguan-penilaian-guide-${from}-sd-${to}.xlsx`);
  await post('visits/exports',{kind:'summary',from:d.from,to:d.to,rows:d.perGuide.length});
- toast(weekly?'Laporan mingguan diekspor.':'Laporan bulanan diekspor.');
+ toast(`Laporan ${daily?'harian':monthly?'bulanan':'mingguan'} diekspor.`);
 }
 
 /* ---------- Verifikasi laporan pelanggaran berat & apresiasi ---------- */
@@ -603,7 +660,7 @@ export async function loadVisitsPage(route){
   if(route==='visits-scoring'){M.scoring=await api('visits/scoring');return scoringPage();}
   if(route==='visits-links'){const [links,sheet]=await Promise.all([api('visits/links'),api('visits/sheet').catch(()=>null)]);M.links=links;M.sheet=sheet;return linksPage();}
   if(route==='visits-reports'){
-   M.reportMode||=rememberedMode();M.reportWeek||=weekStartOf(localToday());
+   M.reportMode||=rememberedMode();M.reportDay||=localToday();M.reportWeek||=weekStartOf(localToday());
    const [report,history]=await Promise.all([loadReport(),permitted('visits.settings.manage')?api('visits/history').catch(()=>null):null]);M.report=report;M.history=history;return reportsPage();
   }
  }catch(error){if(error.name==='AbortError')throw error;return unavailable(visitTitles[route],error,route==='visits-reports'?periodBar:filters);}
@@ -616,17 +673,23 @@ export function bindVisitsPage(route){
  root.addEventListener('input',e=>{const key=e.target.dataset?.visitField;if(!key)return;M[key]=e.target.value;if(['guideQuery','guideKategori','guideRegu','guideAktif'].includes(key)&&state.route==='visits-guides')rerender(guidesPage,e.target);});
  root.addEventListener('change',e=>{const key=e.target.dataset?.visitFilter;if(key)M.recordFilter[key]=e.target.value;const field=e.target.dataset?.visitField;if(field&&e.target.tagName==='SELECT')M[field]=e.target.value;
   // Laporan: bulan dan tanggal langsung diterapkan. Tanggal setengah diketik (tahun 0002) diabaikan.
-  if(state.route==='visits-reports'&&field==='month')refresh();
-  if(state.route==='visits-reports'&&field==='reportDay'&&e.target.value>='2025-01-01'&&e.target.value<=localToday()){M.reportWeek=weekStartOf(e.target.value);refresh();}
+  if(state.route!=='visits-reports')return;
+  if(field==='month')refresh();
+  const day=e.target.value;if(!(day>='2025-01-01'&&day<=localToday()))return;
+  if(field==='reportDayPick'){M.reportDay=day;refresh();}
+  if(field==='reportWeekPick'){M.reportWeek=weekStartOf(day);refresh();}
  });
  root.addEventListener('click',async e=>{
   const el=e.target.closest('[data-visit]');if(!el||!visitRoutes.includes(state.route))return;
   const action=el.dataset.visit;el.disabled=true;
   try{
    if(action==='apply'||action==='retry'){if(M.from>M.to||M.flagFrom>M.flagTo)throw new Error('Tanggal mulai harus sebelum tanggal akhir.');refresh();return;}
-   if(action==='report-mode'){M.reportMode=el.dataset.mode==='minggu'?'minggu':'bulan';rememberMode(M.reportMode);refresh();return;}
-   if(action==='report-prev'||action==='report-next'){const step=action==='report-prev'?-1:1;if(M.reportMode==='minggu')M.reportWeek=shiftDay(M.reportWeek,7*step);else M.month=addMonth(M.month,step);refresh();return;}
-   if(action==='report-current'){M.reportWeek=weekStartOf(localToday());M.month=localToday().slice(0,7);refresh();return;}
+   // Ganti jenis laporan: grafik kembali ke rentang bawaannya (per jam untuk harian, per hari lainnya).
+   if(action==='report-mode'){M.reportMode=['hari','minggu'].includes(el.dataset.mode)?el.dataset.mode:'bulan';M.trendScope='';rememberMode(M.reportMode);refresh();return;}
+   if(action==='report-prev'||action==='report-next'){const step=action==='report-prev'?-1:1;
+    if(M.reportMode==='hari')M.reportDay=shiftDay(M.reportDay,step);else if(M.reportMode==='minggu')M.reportWeek=shiftDay(M.reportWeek,7*step);else M.month=addMonth(M.month,step);refresh();return;}
+   if(action==='report-current'){M.reportDay=localToday();M.reportWeek=weekStartOf(localToday());M.month=localToday().slice(0,7);refresh();return;}
+   if(action==='report-records'){M.from=M.to=M.reportDay;M.recordFilter={pos:'',regu:'',status:''};location.hash='#visits-records';return;}
    if(action==='trend-scope'){M.trendScope=el.dataset.scope;root.innerHTML=reportsPage();mountReportChart();root.querySelector(`[data-visit="trend-scope"][data-scope="${M.trendScope}"]`)?.focus();return;}
    if(action==='guide-new'){guideForm(null);return;}
    if(action==='guide-import'){importDialog();return;}

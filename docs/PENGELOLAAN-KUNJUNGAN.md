@@ -81,23 +81,35 @@ Alasannya dari data lama (evaluasi 4 November): Pos 1 sebelum pukul 15.00 umumny
 - **PWA 2.3.0**: kartu Etika dengan tombol − / + (−10 … +10, bawaan 0) dan patokan di bawahnya; baris patokan yang sesuai angka sekarang disorot, dan pengingat muncul bila Etika minus diberikan pada pengantaran yang seragam atau ID-Card-nya sudah dipotong (hanya pengingat, tetap bisa disimpan). Riwayat dan CSV HP menampilkan Etika (CSV: kolom JUMLAH ETIKA dan rincian Etika per penilaian). Koreksi dan draf dari versi sebelumnya dibuka sebagai formulir Etika: formulir 2.2 membawa Etika −1 per teguran, cara lama membawa Etika apa adanya — tanpa pertanyaan tambahan. **Pengaman urutan rilis:** HP hanya mengirim penilaian Etika bila server `guide-form` menyatakan menyimpan Etika (tanda `penilaian.etika` pada konteks). Selama belum, penilaian itu menunggu di HP (tidak hilang dan tidak dihitung ditolak), Beranda menampilkan "N penilaian menunggu portal diperbarui", dan HP memeriksa ulang setiap 10 menit atau lewat Tes Koneksi. Penilaian 2.2/cara lama yang masih di antrean tetap terkirim.
 - PWA 2.2.2 (rilis sebelumnya) memakai daftar teguran; HP yang belum diperbarui tetap mengirim formulir 2.2 dan tetap diterima.
 
-## Laporan mingguan dan bulanan, grafik tren
+## Laporan harian, mingguan, dan bulanan, grafik tren
 
-Laporan & Ekspor punya dua pilihan, **Mingguan** dan **Bulanan**, dengan tombol ‹ › untuk pindah periode, pemilih tanggal/bulan, dan tombol kembali ke minggu/bulan ini. Pilihan terakhir diingat di peramban.
+Laporan & Ekspor punya tiga pilihan: **Harian**, **Mingguan**, dan **Bulanan**. Setiap pilihan punya tombol ‹ › untuk pindah periode, pemilih tanggal/bulan, dan tombol kembali ke hari/minggu/bulan ini. Pilihan terakhir diingat di peramban; tampilan pertama tetap Bulanan.
 
-| | Mingguan | Bulanan |
-| --- | --- | --- |
-| Periode | Senin–Minggu WITA (seperti Rekap Mingguan NilaiGuide), boleh melintasi bulan | Bulan kalender |
-| Kegunaan | Memantau; **tanpa** status reward | Dasar reward dan arsip; status reward seperti sebelumnya |
-| Pembanding (▲/▼) | Minggu sebelumnya. Minggu berjalan dibandingkan dengan hari yang sama minggu lalu (Senin–Kamis dengan Senin–Kamis) | Bulan sebelumnya. Bulan berjalan dibandingkan dengan tanggal yang sama bulan lalu (1–19 November dengan 1–19 Oktober) |
-| Grafik tren | Per hari di minggu itu; 12 minggu terakhir | Per hari; per minggu (Senin–Minggu, dipotong ke bulan); 12 bulan terakhir |
+| | Harian | Mingguan | Bulanan |
+| --- | --- | --- | --- |
+| Periode | Satu tanggal WITA | Senin–Minggu WITA (seperti Rekap Mingguan NilaiGuide), boleh melintasi bulan | Bulan kalender |
+| Kegunaan | Memantau pos; **tanpa** status reward | Memantau; **tanpa** status reward | Dasar reward dan arsip; status reward seperti sebelumnya |
+| Pembanding (▲/▼) | Hari sebelumnya. Hari ini dibandingkan dengan kemarin sampai jam yang sama | Minggu sebelumnya. Minggu berjalan dibandingkan dengan minggu lalu sampai hari dan jam yang sama | Bulan sebelumnya. Bulan berjalan dibandingkan dengan bulan lalu sampai tanggal dan jam yang sama |
+| Grafik tren | Per jam (07.00–17.59, ditambah jam lain yang berisi); 30 hari terakhir | Per hari di minggu itu; 12 minggu terakhir | Per hari; per minggu (Senin–Minggu, dipotong ke bulan); 12 bulan terakhir |
 
-- **Kartu angka**: pengantaran, guide dinilai, nilai rata-rata, % ID terpasang, % seragam lengkap, Etika rata-rata, ditambah layak reward pada laporan bulanan. Ukuran mutu yang naik berwarna hijau dan yang turun merah; jumlah tanpa warna. Panah dan teks tetap ada, jadi artinya tidak bergantung pada warna.
-- **Grafik tren** (`public/visit-trend.js`, SVG tanpa pustaka, sesuai CSP portal): tiga panel bersumbu waktu sama — nilai rata-rata, ketaatan (% ID terpasang dan % seragam lengkap), dan pengantaran. Arahkan kursor, ketuk, atau fokus lalu pakai ← → Home End untuk membaca semua angka di satu titik. Di HP angka titik tampil tetap di bawah grafik. Sisa periode yang belum berjalan tetap di sumbu dan diarsir; titik periode yang masih berjalan digambar berongga. **Lihat angka dalam tabel** memuat angka yang sama. Warna marun–emas lulus validator palet buta warna (protan/deutan) pada tema terang dan gelap.
-- Di bawahnya: per regu, per pos, ringkasan per guide (status reward hanya bulanan), dan kartu Migrasi awal NilaiGuide.
-- **Ekspor Excel**: sheet Ringkasan (periode ini, pembanding, selisih), Per hari, Per minggu (bulanan), Tren 12 minggu/12 bulan, Per regu, Per pos, dan Ringkasan per guide. Persen disimpan sebagai pecahan berformat % (berlaku juga untuk ekspor Penilaian).
-- **Sumber angka**: rute baru `GET visits/report?jenis=minggu&tanggal=…` atau `jenis=bulan&bulan=YYYY-MM` (izin sama dengan Dashboard/Laporan). Satu bacaan `visitDayRows` untuk 12 minggu/bulan terakhir memuat periode, pembanding, dan tren, jadi rumus dan aturan potongan per bulan sama persis dengan Dashboard, juga setelah rincian dilipat ke rekap harian dan untuk riwayat NilaiGuide hasil migrasi awal. Tanpa migrasi basis data dan tanpa perubahan `guide-form`.
-- **Urutan rilis bebas**: ruang kerja baru dengan `portal-api` lama tetap menampilkan laporan dari `visits/overview` (tanpa pembanding dan grafik, dengan keterangan); ruang kerja lama dengan `portal-api` baru tidak berubah.
+- **Pembanding sampai jam yang sama.** Selama periode masih berjalan, hari terakhir pembanding dipotong pada jam sekarang. Contoh: Kamis pukul 10.16 dibandingkan dengan Senin–Kamis pukul 10.16 minggu lalu, bukan Kamis lalu sehari penuh. Potongan memakai jam penilaian dari rincian (±6 minggu terakhir). Bila hari itu sudah diringkas (rekap harian tanpa jam), dihitung sehari penuh.
+- **Kartu angka**: pengantaran (laporan harian: per pos), guide dinilai, nilai rata-rata, % ID terpasang, % seragam lengkap, Etika rata-rata, ditambah layak reward pada laporan bulanan. Ukuran mutu yang naik berwarna hijau dan yang turun merah; jumlah tanpa warna. Panah dan teks tetap ada, jadi artinya tidak bergantung pada warna.
+- **Grafik tren** (`public/visit-trend.js`, SVG tanpa pustaka, sesuai CSP portal): tiga panel bersumbu waktu sama — nilai rata-rata, ketaatan (% ID terpasang dan % seragam lengkap), dan pengantaran.
+  - Arahkan kursor, ketuk, atau fokus lalu pakai ← → Home End untuk membaca semua angka di satu titik. Di HP angka titik tampil tetap di bawah grafik.
+  - Sisa periode yang belum berjalan tetap di sumbu dan diarsir. Titik periode, hari, atau jam yang masih berjalan digambar berongga.
+  - **Lihat angka dalam tabel** memuat angka yang sama.
+  - Warna marun–emas lulus validator palet buta warna (protan/deutan) pada tema terang dan gelap.
+  - Per jam dihitung dari jam penilaian di rincian, jadi hanya ada untuk ±6 minggu terakhir. Hari yang sudah diringkas hanya menampilkan 30 hari.
+- **Di bawah grafik**: per pos, per regu, per petugas penilai (laporan harian), ringkasan per guide (status reward hanya bulanan), dan kartu Migrasi awal NilaiGuide. Laporan harian punya tombol **Rincian penilaian** yang membuka halaman Penilaian untuk tanggal itu.
+- **Ekspor Excel**:
+  - Harian: Ringkasan (hari itu, pembanding, selisih), Per jam, Tren 30 hari, Per pos, Per regu, Per petugas, Ringkasan per guide, dan Penilaian (rincian tiap penilaian hari itu, bila masih ada dan pengguna boleh melihat Penilaian).
+  - Mingguan/bulanan: Ringkasan, Per hari, Per minggu (bulanan), Tren 12 minggu/12 bulan, Per pos, Per regu, Ringkasan per guide.
+  - Persen disimpan sebagai pecahan berformat %, juga untuk ekspor Penilaian.
+- **Sumber angka**: rute baru `GET visits/report?jenis=hari&tanggal=…`, `jenis=minggu&tanggal=…`, atau `jenis=bulan&bulan=YYYY-MM` (izin sama dengan Dashboard/Laporan).
+  - Satu bacaan `visitDayRows` untuk 30 hari/12 minggu/12 bulan terakhir memuat periode, pembanding, dan tren. Karena itu rumus dan aturan potongan per bulan sama persis dengan Dashboard, juga setelah rincian dilipat ke rekap harian dan untuk riwayat NilaiGuide hasil migrasi awal.
+  - Per jam dan potongan jam pembanding membaca rincian `visit_evaluations`.
+  - Tanpa migrasi basis data dan tanpa perubahan `guide-form`.
+- **Urutan rilis bebas**: ruang kerja baru dengan `portal-api` lama tetap menampilkan laporan dari `visits/overview` (tanpa pembanding dan grafik, dengan keterangan). Ruang kerja lama dengan `portal-api` baru tidak berubah.
 
 ## Isi modul
 
@@ -155,7 +167,13 @@ Yang layak dicoba:
 5. Data Guide → Impor berkas (.xlsx dari Google Sheets atau .csv) → pratinjau → Terapkan.
 6. Tautan Pos → **Periksa koneksi** (empat langkah hijau) dan **Sinkronkan sekarang**. Ganti tautan Pos 1: HP dengan tautan lama menunggu tautan baru; antreannya tidak hilang.
 7. Dashboard, Penilaian, Laporan: ekspor Excel.
-   - Laporan & Ekspor (paling mudah dengan `--reset --contoh`: penilaian fiktif 5 minggu terakhir dan rekap harian sejak Januari): **Mingguan** dan **Bulanan**, tombol ‹ ›, pembanding ▲/▼ di kartu angka, grafik tren (arahkan kursor, ketuk, atau Tab lalu panah ← →), pilihan Per hari / Per minggu / 12 minggu atau 12 bulan, **Lihat angka dalam tabel**, tema gelap, dan tampilan HP (lebar ±390 px). Ekspor Excel mingguan dan bulanan lalu buka sheet-sheetnya.
+   - Laporan & Ekspor (paling mudah dengan `--reset --contoh`: penilaian fiktif 5 minggu terakhir dan rekap harian sejak Januari):
+     - **Harian**, **Mingguan**, dan **Bulanan**, dengan tombol ‹ ›;
+     - pembanding ▲/▼ di kartu angka (periode berjalan: sampai jam yang sama);
+     - grafik tren (arahkan kursor, ketuk, atau Tab lalu panah ← →) dengan pilihan Per jam / 30 hari, Per hari / Per minggu, dan 12 minggu atau 12 bulan;
+     - **Lihat angka dalam tabel**, **Rincian penilaian** (harian), tema gelap, dan tampilan HP (lebar ±390 px).
+
+     Ekspor Excel ketiganya lalu buka sheet-sheetnya.
 8. Laporan & Ekspor → **Mulai migrasi awal** → pilih unduhan .xlsx spreadsheet NilaiGuide (atau salinannya) → pratinjau per bulan → Terapkan. Pilih bulan Maret, dll. di Laporan: angka NilaiGuide ikut terhitung. **Batalkan migrasi** mengembalikan angka seperti semula. Data pratinjau tetap di `data/` dan tidak dikirim ke mana pun.
 9. Masuk sebagai `pimpinan.preview` (tanpa Tautan Pos, ubah guide, atau sinkronkan) dan `sdm.preview` (tanpa ruang kerja Kunjungan).
 10. Penilaian "100 − potongan + Etika": di HP pilih nama petugas, isi ID-Card, Seragam, Etika (tombol − / +, bawaan 0), dan laporan pelanggaran berat/apresiasi (catatan wajib). Lihat nilai di Penilaian (mis. tanpa ID + kurang lengkap + Etika −2 = 68; tanpa temuan + Etika +3 = 103), lalu putuskan laporannya di **Verifikasi** dan lihat status reward di Laporan & Ekspor. Di **Aturan Nilai**, rencanakan potongan bulan depan, tambah petugas atau jenis pelanggaran berat/apresiasi; HP mendapatkannya setelah Pengaturan → Tes Koneksi.
@@ -244,20 +262,27 @@ Rollback:
 - Pages → deployment sebelumnya (HP kembali ke PWA 2.2.2 saat dibuka online). **Sebelumnya pastikan antrean HP kosong** (Beranda: Tertunda 0): PWA 2.2.2 mengirim penilaian Etika yang masih tertahan tanpa Etika-nya (tercatat Etika 0).
 - Migrasi dibiarkan; batas −10..+10 menerima semua data lama.
 
-### Rilis laporan mingguan/bulanan + grafik tren (branch `claude/kunjungan-laporan-mingguan-bulanan`)
+### Rilis laporan harian/mingguan/bulanan + grafik tren (branch `claude/kunjungan-laporan-mingguan-bulanan`)
 
-Dibangun di atas master `8515560` (PR #39). **Tanpa migrasi basis data dan tanpa `guide-form` baru**; hanya lingkup `__visits` di `portal-api` dan ruang kerja (Pages). Urutan bebas (lihat di atas), tetapi `portal-api` lebih dulu supaya grafik langsung tampil saat Pages tayang:
+Dibangun di atas master `fa080f8` (PR #40, sesudah rilis Etika PR #39). **Tanpa migrasi basis data dan tanpa `guide-form` baru**; hanya lingkup `__visits` di `portal-api` dan ruang kerja (Pages). Urutan bebas (lihat di atas), tetapi `portal-api` lebih dulu supaya grafik langsung tampil saat Pages tayang:
 
 1. Pastikan rilis Etika (PR #39) sudah lengkap: migrasi, `guide-form` `5dab0844…`, dan `portal-api`.
 2. Edge Function `portal-api`: unduh versi aktif, simpan salinannya sebagai titik kembali, hitung SHA-256-nya.
-   - Bila sama dengan `0a074d2340f3ae393c81d4b8e0aba090bebed5514802cb9defc1d9ea7782f323` (paket PR #39), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `d722208758929561c24cc706481d9a94baa6224439f6686b23c0261d9ef9a1d3`).
+   - Bila sama dengan `0a074d2340f3ae393c81d4b8e0aba090bebed5514802cb9defc1d9ea7782f323` (paket PR #39), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `7868d6c3d60c73d30728d1ee6761f788361a643b0fe8093e35053f64bebdda20`).
    - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya (hanya lingkup `__visits` yang diganti).
-3. Merge ke `master`: Pages menayangkan Laporan & Ekspor yang baru.
-4. Periksa: buka Laporan & Ekspor → Mingguan dan Bulanan. Kartu angka menampilkan "vs …" dan grafik tren tampil. Bila muncul "Grafik tren dan pembanding belum tersedia", `portal-api` baru belum aktif.
+3. Merge ke `master`: Pages menayangkan Laporan & Ekspor yang baru (bundel `portal-49043f0d4982.js` + `portal-b47dab8bb9fa.css`).
+4. Periksa: buka Laporan & Ekspor → Harian, Mingguan, dan Bulanan. Kartu angka menampilkan "vs …" dan grafik tren tampil; Harian menampilkan grafik per jam. Bila muncul "Grafik tren dan pembanding belum tersedia", `portal-api` baru belum aktif.
 
 Rollback: `portal-api` → salinan langkah 2 (ruang kerja baru otomatis kembali ke laporan tanpa grafik), Pages → deployment sebelumnya. Tidak ada data atau tabel yang berubah.
 
-Validasi (19 November, Node 24.22.3): 392/392 tes aplikasi (termasuk `tests/visit-report.test.mjs`: batas minggu/bulan, pembanding, setiap ember tren sama dengan rekap rentangnya, sama persis sebelum/sesudah pelipatan, izin), 20/20 pemeriksaan PostgreSQL (termasuk rute laporan lewat paket `portal-api` dan laporan yang sama sebelum/sesudah retensi), 33/33 alur formulir/ruang kerja (termasuk Laporan mingguan/bulanan, grafik dengan papan ketik, ekspor Excel, dan `portal-api` lama), 5/5 kelanjutan migrasi, 5/5 PWA. Paket `portal-api` dapat dibangun ulang dengan hash yang sama; `guide-form` tidak berubah.
+Validasi (19 November, Node 24.22.3):
+
+- 398/398 tes aplikasi. Termasuk `tests/visit-report.test.mjs`: batas hari/minggu/bulan, pembanding sampai jam yang sama, per jam WITA, setiap ember tren sama dengan rekap rentangnya, sama persis sebelum/sesudah pelipatan, dan izin.
+- 20/20 pemeriksaan PostgreSQL. Termasuk rute laporan harian/mingguan/bulanan lewat paket `portal-api` dan laporan yang sama sebelum/sesudah retensi.
+- 33/33 alur formulir/ruang kerja. Termasuk Laporan harian/mingguan/bulanan, grafik dengan papan ketik, ekspor Excel, Rincian penilaian, dan `portal-api` lama.
+- 5/5 kelanjutan migrasi dan 5/5 PWA.
+
+Paket `portal-api` dapat dibangun ulang dengan hash yang sama; `guide-form` tidak berubah.
 
 ## Keputusan yang dipakai
 
@@ -304,7 +329,7 @@ Validasi rilis Etika (18 November): 385/385 tes aplikasi (termasuk `tests/visit-
 
 ## Tindak lanjut
 
-- Laporan mingguan dan bulanan dengan pembanding, grafik tren, dan ekspor Excel: branch `claude/kunjungan-laporan-mingguan-bulanan` (lihat Rilis). Berikutnya: Dashboard (rentang preset, pembanding, tren, cakupan guide yang belum dinilai) dan tampilan cetak A4 dengan kop serta tanda tangan jabatan. Format NILAI REWARD rekap regu menunggu revisi pemilik.
+- Laporan harian, mingguan, dan bulanan dengan pembanding, grafik tren, dan ekspor Excel: branch `claude/kunjungan-laporan-mingguan-bulanan` (lihat Rilis). Berikutnya: Dashboard (rentang preset, pembanding, tren, cakupan guide yang belum dinilai) dan tampilan cetak A4 dengan kop serta tanda tangan jabatan. Format NILAI REWARD rekap regu menunggu revisi pemilik.
 - Menunggu pemilik: daftar resmi atribut seragam (untuk petunjuk "Kurang lengkap"), daftar resmi jenis pelanggaran berat/apresiasi (daftar awal masih contoh), jawaban apakah Pos 3 memeriksa ID-Card dengan cara yang sama, dan konfirmasi rincian Etika (lihat Keputusan). Setelah pilot, periksa Etika rata-rata per petugas di Dashboard: rata-rata yang jauh dari 0 berarti patokan petugas itu perlu disamakan lagi.
 - Penyalinan terjadwal (pg_cron + pg_net) bila kiriman pos jarang; sekarang penyalinan dipicu kiriman dan tombol portal.
 - Layar Pengaturan modul untuk batas frekuensi dan nama pos.

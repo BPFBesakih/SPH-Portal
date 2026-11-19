@@ -936,10 +936,10 @@ function ranked(list, key, ascending, count, tieKey = null) {
   });
 }
 const historyActive = async db => Boolean(await one(db, "SELECT id FROM visit_history_import WHERE status='aktif'"));
-export async function visitDayRows(db, from, to) {
-  const rows = [], ruleOf = await scoreRuleFinder(db);
+export async function visitDayRows(db, from, to, until = null) {
+  const rows = [], ruleOf = await scoreRuleFinder(db), time = until ? ' AND evaluated_at<=?' : '';
   for (const r of await all(db, `SELECT guide_id,pos,wita_date AS day,count(*) AS antar,sum(uniform) AS uniform,sum(CASE WHEN uniform>=1 THEN 1 ELSE 0 END) AS uniform_patuh,sum(id_card) AS id_card,sum(review) AS review,sum(etika) AS etika,${visitFindingSums}
-  FROM visit_evaluations WHERE status='aktif' AND wita_date>=? AND wita_date<=? GROUP BY guide_id,pos,wita_date`, from, to)) rows.push(r);
+  FROM visit_evaluations WHERE status='aktif' AND wita_date>=? AND wita_date<=?${time} GROUP BY guide_id,pos,wita_date`, from, to, ...until ? [until] : [])) rows.push(r);
   const sumber = await historyActive(db) ? "sumber IN('portal','nilaiguide')" : "sumber='portal'";
   for (const r of await all(db, `SELECT guide_id,pos,day,antar,uniform,uniform_patuh,id_card,review,etika,n_id,n_kurang,n_tidak,n_teguran FROM visit_daily_totals WHERE ${sumber} AND day>=? AND day<=?`, from, to)) rows.push(r);
   const out = [];
@@ -1171,6 +1171,7 @@ export const weekStart = day => shiftDate(day, -((new Date(day + 'T00:00:00Z').g
 const addMonths = (month, n) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1 + n, 1)).toISOString().slice(0, 7);
 const dayCount = (from, to) => Math.round((Date.parse(to) - Date.parse(from)) / 86400000);
 export const reportRules = Object.freeze({
+  trenHari: 30,
   trenMinggu: 12,
   trenBulan: 12
 });
@@ -1217,10 +1218,51 @@ export function visitTrend(rows, from, to, unit) {
     ...sumFigures(b.rows)
   }));
 }
-export async function visitReport(db, jenis, anchor) {
-  const now = today(), weekly = jenis === 'minggu';
+const summarizedDay = async (db, day) => Boolean(await one(db, `SELECT 1 AS ada FROM visit_daily_totals WHERE ${await historyActive(db) ? "sumber IN('portal','nilaiguide')" : "sumber='portal'"} AND day=? LIMIT 1`, day));
+async function visitHourly(db, day) {
+  if (await summarizedDay(db, day)) return null;
+  const ruleOf = await scoreRuleFinder(db), rule = ruleOf(day.slice(0, 7)), hours = Array.from({
+    length: 24
+  }, () => ({
+    s: emptyStat(),
+    guides: new Set()
+  }));
+  for (const r of await all(db, "SELECT guide_id,evaluated_at,uniform,id_card,review,etika,versi,seragam,teguran_n FROM visit_evaluations WHERE status='aktif' AND wita_date=?", day)) {
+    const f = rowFindings(r), n = {
+      antar: 1,
+      uniform: Number(r.uniform),
+      idCard: Number(r.id_card),
+      review: Number(r.review),
+      etika: Number(r.etika),
+      uniformPatuh: Number(r.uniform) >= 1 ? 1 : 0,
+      nId: f.nId,
+      nKurang: f.nKurang,
+      nTidak: f.nTidak,
+      nTeguran: f.nTeguran,
+      potongan: 0
+    };
+    n.potongan = potonganOf(rule, n);
+    const hour = hours[new Date(Date.parse(r.evaluated_at) + witaOffset).getUTCHours()];
+    addStat(hour.s, n);
+    hour.guides.add(r.guide_id);
+  }
+  return hours.map((h, jam) => ({
+    jam,
+    mulai: day,
+    sampai: day,
+    ...visitFigures(h.s),
+    guideDinilai: h.guides.size,
+    hariDinilai: h.s.antar ? 1 : 0
+  }));
+}
+export async function visitReport(db, jenis, anchor, nowMs = Date.now()) {
+  const now = witaDate(nowMs);
   let from, to, prevFrom, prevEnd, trendFrom;
-  if (weekly) {
+  if (jenis === 'hari') {
+    from = to = anchor;
+    prevFrom = prevEnd = shiftDate(anchor, -1);
+    trendFrom = shiftDate(anchor, 1 - reportRules.trenHari);
+  } else if (jenis === 'minggu') {
     from = weekStart(anchor);
     to = shiftDate(from, 6);
     prevFrom = shiftDate(from, -7);
@@ -1235,30 +1277,38 @@ export async function visitReport(db, jenis, anchor) {
     trendFrom = `${addMonths(anchor, 1 - reportRules.trenBulan)}-01`;
   }
   assert(from <= now, 'Periode ini belum dimulai.', 422);
-  const sampai = to < now ? to : now, prevTo = [shiftDate(prevFrom, dayCount(from, sampai)), prevEnd].sort()[0];
+  const sampai = to < now ? to : now, berjalan = sampai === now, prevTo = [shiftDate(prevFrom, dayCount(from, sampai)), prevEnd].sort()[0];
   const rows = await visitDayRows(db, trendFrom, sampai), within = (a, b) => rows.filter(r => r.day >= a && r.day <= b), period = within(from, sampai);
+  let previous = within(prevFrom, prevTo), sampaiJam = null;
+  if (berjalan && !await summarizedDay(db, prevTo)) {
+    const sinceMidnight = nowMs - Date.parse(`${now}T00:00:00+08:00`), until = new Date(Date.parse(`${prevTo}T00:00:00+08:00`) + sinceMidnight).toISOString();
+    previous = [...within(prevFrom, shiftDate(prevTo, -1)), ...await visitDayRows(db, prevTo, prevTo, until)];
+    sampaiJam = new Date(nowMs + witaOffset).toISOString().slice(11, 16);
+  }
   return {
-    ...await overviewOf(db, from, sampai, period, !weekly),
+    ...await overviewOf(db, from, sampai, period, jenis === 'bulan'),
     laporan: {
       jenis,
       from,
       to,
       sampai,
-      berjalan: sampai < to,
+      berjalan,
       sebelumnya: {
         from: prevFrom,
         to: prevTo,
-        utuh: prevTo === prevEnd
+        utuh: prevTo === prevEnd && !sampaiJam,
+        sampaiJam
       },
       tren: {
-        unit: weekly ? 'minggu' : 'bulan',
+        unit: jenis,
         from: trendFrom,
         to: sampai
       }
     },
-    sebelumnya: sumFigures(within(prevFrom, prevTo)),
+    sebelumnya: sumFigures(previous),
+    perJam: jenis === 'hari' ? await visitHourly(db, from) : null,
     perHari: visitTrend(period, from, sampai, 'hari'),
-    perMinggu: weekly ? null : visitTrend(period, from, sampai, 'minggu'),
-    tren: visitTrend(rows, trendFrom, sampai, weekly ? 'minggu' : 'bulan')
+    perMinggu: jenis === 'bulan' ? visitTrend(period, from, sampai, 'minggu') : null,
+    tren: visitTrend(rows, trendFrom, sampai, jenis)
   };
 }

@@ -155,7 +155,7 @@ try{
     const status=await route(leader,'visits/sheet');assert.equal(status.pending,0);assert.equal(status.can_sync,false);
     await assert.rejects(route(manager,'visits/sheet/sync','POST'),e=>e instanceof api.AppError&&e.status===404,'penyalinan tidak pernah lewat transaksi permintaan');
   });
-  await check('weekly and monthly reports through the patched gateway: figures equal the overview of the same range, trend buckets, errors and permissions',async()=>{
+  await check('daily, weekly and monthly reports through the patched gateway: figures equal the overview of the same range, hourly and trend buckets, errors and permissions',async()=>{
     const today=witaDate(Date.now()),weekFrom=shiftDate(today,-((new Date(today+'T00:00:00Z').getUTCDay()+6)%7));
     const week=await route(leader,'visits/report','GET',{},`jenis=minggu&tanggal=${today}`);
     assert.deepEqual([week.laporan.from,week.laporan.to,week.laporan.sampai,week.laporan.sebelumnya.from],[weekFrom,shiftDate(weekFrom,6),today,shiftDate(weekFrom,-7)]);
@@ -167,6 +167,12 @@ try{
     const month=await route(manager,'visits/report','GET',{},`jenis=bulan&bulan=${today.slice(0,7)}`);
     assert.deepEqual([month.laporan.from,month.aturan.satu_bulan,month.tren.length],[`${today.slice(0,7)}-01`,true,12]);
     assert.equal(month.perMinggu.reduce((n,b)=>n+b.pengantaran,0),month.ringkasan.pengantaran);
+    // Harian: per jam WITA dari rincian PostgreSQL, tren 30 hari, pembanding kemarin sampai jam yang sama.
+    const day=await route(leader,'visits/report','GET',{},`jenis=hari&tanggal=${today}`),dayOverview=await route(leader,'visits/overview','GET',{},`from=${today}&to=${today}`);
+    assert.deepEqual([day.laporan.from,day.laporan.to,day.laporan.berjalan,day.tren.length,day.perJam.length,day.ringkasan.pengantaran],[today,today,true,30,24,dayOverview.ringkasan.pengantaran]);
+    assert.equal(day.perJam.reduce((n,h)=>n+h.pengantaran,0),day.ringkasan.pengantaran);assert.match(day.laporan.sebelumnya.sampaiJam,/^\d\d:\d\d$/);
+    const hours=await all(db,"SELECT evaluated_at FROM visit_evaluations WHERE status='aktif' AND wita_date=?",today);
+    for(const h of day.perJam)assert.equal(h.pengantaran,hours.filter(x=>(Number(x.evaluated_at.slice(11,13))+8)%24===h.jam).length,`jam ${h.jam}`);
     await assert.rejects(route(leader,'visits/report','GET',{},'jenis=tahun'),e=>e instanceof api.AppError&&e.status===422);
     await assert.rejects(route(leader,'visits/report','GET',{},`jenis=minggu&tanggal=${shiftDate(weekFrom,7)}`),e=>e instanceof api.AppError&&e.status===422);
     await assert.rejects(route(itAdmin,'visits/report','GET',{},'jenis=minggu'),e=>e instanceof api.AppError&&e.status===403);

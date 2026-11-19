@@ -7,7 +7,8 @@ import {esc,formatDate} from './ui.js';
 // grafik (visits.js) memuat angka yang sama untuk dibaca tanpa grafik.
 //
 // slots: [{mulai,sampai,mendatang?,berjalan?,pengantaran,guideDinilai,nilai,persenId,persenSeragam,etikaRata}]
-// unit : 'hari' | 'minggu' | 'bulan' (label sumbu dan judul tooltip)
+//        (per jam: jam = 0–23, mulai = sampai = tanggal itu)
+// unit : 'jam' | 'hari' | 'minggu' | 'bulan' (label sumbu dan judul tooltip)
 
 const num=(v,d=1)=>Number(v).toLocaleString('id-ID',{maximumFractionDigits:d});
 const pctText=v=>v==null?'—':`${num(v*100)}%`;
@@ -23,12 +24,15 @@ export function rangeLabel(from,to){
  return `${formatDate(from)} – ${formatDate(to)}`;
 }
 const monthTitle=day=>formatDate(day,{month:'long',year:'numeric'});
+const hh=s=>String(s.jam).padStart(2,'0');
 function slotTitle(s,unit){
+ if(unit==='jam')return `${formatDate(s.mulai,{weekday:'long',day:'numeric',month:'long',year:'numeric'})}, pukul ${hh(s)}.00–${hh(s)}.59`;
  if(unit==='hari')return formatDate(s.mulai,{weekday:'long',day:'numeric',month:'long',year:'numeric'});
  if(unit==='bulan')return monthTitle(s.mulai);
  return `Minggu ${rangeLabel(s.mulai,s.sampai)}`;
 }
 function axisLabel(s,unit,i,dense){
+ if(unit==='jam')return `${hh(s)}.00`;
  if(unit==='hari')return dense?formatDate(s.mulai,{day:'numeric',month:'short'}):`${weekday(s.mulai)} ${dayNumber(s.mulai)}`;
  if(unit==='bulan')return i===0||s.mulai.slice(5,7)==='01'?formatDate(s.mulai,{month:'short',year:'numeric'}):formatDate(s.mulai,{month:'short'});
  return formatDate(s.mulai,{day:'numeric',month:'short'});
@@ -111,7 +115,7 @@ function svgMarkup(g,slots,unit,narrow){
   if(!clash)for(const e of ends)if(e)parts.push(`<text class="viz-end" x="${f1(e.x+8)}" y="${f1(e.y+4)}">${esc(e.text)}</text>`);
  }
  // Sumbu waktu di bawah panel terakhir: label dijarangkan supaya tidak bertumpuk.
- const bottom=layout.at(-1).bottom,dense=unit==='hari'&&n>8,room=unit==='hari'&&!dense?44:58,step=Math.max(1,Math.ceil(n/Math.max(1,Math.floor(g.plotW/room))));
+ const bottom=layout.at(-1).bottom,dense=unit==='hari'&&n>8,room=unit==='jam'?40:unit==='hari'&&!dense?44:58,step=Math.max(1,Math.ceil(n/Math.max(1,Math.floor(g.plotW/room))));
  slots.forEach((s,i)=>{if(i%step)return;parts.push(`<text class="viz-tick" x="${f1(x(i))}" y="${bottom+18}" text-anchor="middle">${esc(axisLabel(s,unit,i,dense))}</text>`);});
  // Lapisan sorot: garis bantu, titik aktif, dan sasaran sentuh selebar slot.
  parts.push(`<g class="viz-hover" hidden><line class="viz-cross" y1="${layout[0].top}" y2="${bottom}"/></g>`);
@@ -126,7 +130,7 @@ function tipMarkup(s,unit){
   ['s2',pctText(s.persenSeragam),'Seragam lengkap'],
   ['',etikaText(s.etikaRata),'Etika rata-rata'],
   ['s3',s.mendatang?'—':num(s.pengantaran||0,0),s.mendatang?'Pengantaran':`Pengantaran · ${num(s.guideDinilai||0,0)} guide`]];
- const note=s.mendatang?'Belum berjalan':s.berjalan?`Masih berjalan, sampai ${formatDate(s.sampai,{day:'numeric',month:'short'})}`:!s.pengantaran?'Tidak ada penilaian':'';
+ const note=s.mendatang?'Belum berjalan':s.berjalan?(unit==='jam'?'Masih berjalan':`Masih berjalan, sampai ${formatDate(s.sampai,{day:'numeric',month:'short'})}`):!s.pengantaran?'Tidak ada penilaian':'';
  return `<strong>${esc(slotTitle(s,unit))}</strong>${note?`<span class="muted">${esc(note)}</span>`:''}<dl>${rows.map(([cls,value,label])=>`<dt>${esc(value)}</dt><dd>${cls?`<span class="key ${cls}"></span>`:''}${esc(label)}</dd>`).join('')}</dl>`;
 }
 
@@ -135,7 +139,7 @@ function summary(slots,unit){
  const filled=slots.filter(s=>!s.mendatang&&s.pengantaran);
  if(!filled.length)return 'Grafik tren: belum ada penilaian pada rentang ini.';
  const first=filled[0],last=filled.at(-1);
- return `Grafik tren ${slots.length} ${unit==='hari'?'hari':unit==='minggu'?'minggu':'bulan'}, ${filled.length} berisi penilaian. Nilai rata-rata ${num(first.nilai)} (${slotTitle(first,unit)}) sampai ${num(last.nilai)} (${slotTitle(last,unit)}). Angka lengkap ada di tabel di bawah grafik. Gunakan panah kiri dan kanan untuk membaca tiap titik.`;
+ return `Grafik tren ${slots.length} ${unit}, ${filled.length} berisi penilaian. Nilai rata-rata ${num(first.nilai)} (${slotTitle(first,unit)}) sampai ${num(last.nilai)} (${slotTitle(last,unit)}). Angka lengkap ada di tabel di bawah grafik. Gunakan panah kiri dan kanan untuk membaca tiap titik.`;
 }
 
 let observer=null;
