@@ -16,7 +16,12 @@ const integer=(value,name,min=0)=>{
 };
 const add=(a,b)=>{const n=a+b;if(!Number.isSafeInteger(n))throw new Error('Nilai laporan melebihi batas angka aman.');return n;};
 const zero=()=>({qty:0,revenue:0,cost:0});
-const paymentZero=()=>({cash:0,noncash:0,other:0});
+// Bagian III metode pembayaran: QRIS tetap di baris NON TUNAI, sedangkan TRANSFER dan
+// CARD masing-masing punya baris sendiri (keputusan pemilik 20 November 2026).
+// LAINNYA hanya ditampilkan bila dipakai pada periode laporan.
+export const PAYMENT_ROWS=[['cash','TUNAI'],['qris','NON TUNAI (QRIS)'],['transfer','TRANSFER'],['card','CARD'],['other','LAINNYA']];
+const PAYMENT_GROUPS={TUNAI:'cash',QRIS:'qris',TRANSFER:'transfer',CARD:'card',KARTU:'card',LAINNYA:'other'};
+const paymentZero=()=>Object.fromEntries(PAYMENT_ROWS.map(([key])=>[key,0]));
 const accumulate=(a,b)=>{for(const k of ['qty','revenue','cost'])a[k]=add(a[k],b[k]);};
 
 export function merchandiseSalesData({from,to,stock=[],sales=[],canCost=false,today,summary}={}){
@@ -56,7 +61,7 @@ export function merchandiseSalesData({from,to,stock=[],sales=[],canCost=false,to
     if(integer(sale.total,'Total transaksi')!==amounts.revenue)throw new Error('Total dan rincian transaksi berbeda: '+id);
     if(canCost&&sale.cost_total!==undefined&&integer(sale.cost_total,'Total modal')!==amounts.cost)throw new Error('Total modal transaksi berbeda: '+id);
     const method=String(sale.payment_method||'').toUpperCase();
-    const group=method==='TUNAI'?'cash':['QRIS','TRANSFER','CARD','KARTU'].includes(method)?'noncash':method==='LAINNYA'?'other':null;
+    const group=PAYMENT_GROUPS[method]||null;
     if(!group)throw new Error('Metode pembayaran belum dikenali: '+method);
     day.payments[group]=add(day.payments[group],amounts.revenue);accumulate(day.totals,amounts);
   }
@@ -79,8 +84,11 @@ const formulaCell=(ref,f,v,s)=>'<c r="'+ref+'" s="'+s+'"><f>'+xml(f)+'</f><v>'+v
 const crossSum=(dates,col,row)=>'SUM('+dates.map(d=>"'"+Number(d.slice(8))+"'!"+col+row).join(',')+')';
 
 function salesSheet(data,name,kind,day,artwork){
-  const count=Math.max(70,data.products.length),offset=count-70,other=data.hasOther?1:0;
-  const totalRow=94+offset,paymentStart=98+offset,endRow=100+offset+other;
+  // Template resmi: dua baris pembayaran (98–99) lalu JUMLAH (100). Setiap baris
+  // pembayaran tambahan menggeser JUMLAH, blok tanda tangan, dan gambar di bawahnya.
+  const methods=PAYMENT_ROWS.filter(([key])=>key!=='other'||data.hasOther);
+  const count=Math.max(70,data.products.length),offset=count-70,extra=methods.length-2;
+  const totalRow=94+offset,paymentStart=98+offset,endRow=100+offset+extra;
   const rows=new Map(),values=new Map(),prototypes=new Map(template.rows.map(r=>[Number(r.attrs.r),r]));
   const set=(col,row,value,formula=null,style=null)=>values.set(col+row,{value,formula,style});
   const total=kind==='final'?data.totals:day?.totals||zero(),payments=kind==='final'?data.payments:day?.payments||paymentZero();
@@ -89,8 +97,8 @@ function salesSheet(data,name,kind,day,artwork){
   const title=kind==='master'?'MASTER LAPORAN PENJUALAN':kind==='final'?'LAPORAN PENJUALAN '+Number(data.from.slice(8))+' - '+label(data.to):'TANGGAL '+label(day.date);
   for(let r=1;r<=23;r++)rows.set(r,prototypes.get(r)||{attrs:{r},cells:[]});
   for(let i=0;i<count;i++)rows.set(24+i,prototypes.get(24+Math.min(i,69)));
-  for(let r=94;r<=100;r++)rows.set(r+offset+(r===100?other:0),prototypes.get(r));
-  if(other)rows.set(100+offset,prototypes.get(99));
+  for(let r=94;r<=100;r++)rows.set(r+offset+(r===100?extra:0),prototypes.get(r));
+  for(let i=0;i<extra;i++)rows.set(100+offset+i,prototypes.get(99));
   const labels={A14:title,A15:'I. REKAPITULASI PENJUALAN DAN LABA',A16:'URAIAN',D16:'NOMINAL (Rp.)',A17:'PENDAPATAN',A18:'MODAL',A19:'LABA',A21:'II. PENJUALAN',A22:'NO',B22:'JENIS BARANG',C22:'PENJUALAN',G22:'RATA-RATA/\nHARI',C23:'JUMLAH (PCS)',D23:'NOMINAL (Rp.)',E23:'MODAL (Rp.)',F23:'LABA (Rp.)'};
   for(const [ref,value] of Object.entries(labels))set(ref.match(/[A-Z]+/)[0],Number(ref.match(/\d+/)[0]),value);
   for(const [r,col,val] of [[17,'D',total.revenue],[18,'E',total.cost],[19,'F',total.revenue-total.cost]])
@@ -108,7 +116,6 @@ function salesSheet(data,name,kind,day,artwork){
   for(const [col,value] of [['C',total.qty],['D',total.revenue],...(data.canCost?[['E',total.cost],['F',total.revenue-total.cost]]:[])])set(col,totalRow,value,'SUM('+col+'24:'+col+(totalRow-1)+')');
   set('A',96+offset,'III. METODE PEMBAYARAN');
   set('A',97+offset,'NO');set('B',97+offset,'JENIS PEMBAYARAN');set('C',97+offset,'NOMINAL (Rp.)');
-  const methods=[['cash','TUNAI'],['noncash','NON TUNAI (QRIS / TRANSFER / CARD)'],...(other?[['other','LAINNYA']]:[])];
   for(let i=0;i<methods.length;i++){
     const [key,label]=methods[i],r=paymentStart+i;set('A',r,i+1);set('B',r,label);set('C',r,payments[key],kind==='final'?crossSum(data.dates,'C',r):null);
   }
@@ -124,26 +131,26 @@ function salesSheet(data,name,kind,day,artwork){
       const ref=col+r,original=proto.cells.find(c=>c.col===col),v=values.get(ref);
       let style=v?.style??original?.style??'0';
       if(col==='B'&&p)style='34';
-      if(col==='B'&&r===paymentStart+1)style='34';
       if(!v){cells.push('<c r="'+ref+'" s="'+style+'"/>');continue;}
       cells.push(v.formula?formulaCell(ref,v.formula,v.value,style):typeof v.value==='number'?numberCell(ref,v.value,style):textCell(ref,v.value,style));
     }
     body.push('<row'+attrs(a)+'>'+cells.join('')+'</row>');
   }
-  const shiftRow=r=>r>=100?r+offset+other:r>=94?r+offset:r;
+  const shiftRow=r=>r>=100?r+offset+extra:r>=94?r+offset:r;
   const shiftRef=ref=>ref.replace(/(\d+)/g,x=>String(shiftRow(Number(x))));
   const merges=template.merges.map(shiftRef);
-  if(other)merges.push('C'+(100+offset)+':G'+(100+offset));
+  for(let i=0;i<extra;i++)merges.push('C'+(100+offset+i)+':G'+(100+offset+i));
   const sheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="'+NS+'" xmlns:r="'+REL+'">'+
-    '<dimension ref="A1:G'+(113+offset+other)+'"/><sheetViews><sheetView showGridLines="0" workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="14.4"/><cols>'+template.columns.map(c=>'<col'+attrs(c)+'/>').join('')+'</cols><sheetData>'+body.join('')+'</sheetData><mergeCells count="'+merges.length+'">'+merges.map(ref=>'<mergeCell ref="'+ref+'"/>').join('')+'</mergeCells><pageMargins'+attrs(template.margins)+'/><pageSetup'+attrs(template.pageSetup)+'/><drawing r:id="rId1"/></worksheet>';
+    '<dimension ref="A1:G'+(113+offset+extra)+'"/><sheetViews><sheetView showGridLines="0" workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="14.4"/><cols>'+template.columns.map(c=>'<col'+attrs(c)+'/>').join('')+'</cols><sheetData>'+body.join('')+'</sheetData><mergeCells count="'+merges.length+'">'+merges.map(ref=>'<mergeCell ref="'+ref+'"/>').join('')+'</mergeCells><pageMargins'+attrs(template.margins)+'/><pageSetup'+attrs(template.pageSetup)+'/><drawing r:id="rId1"/></worksheet>';
   const date=label(kind==='daily'?day.date:data.to).toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase());
   // Baris drawing dihitung dari 0. Kop, tanda tangan, dan gambar lain digeser
   // persis seperti sel di bawahnya: setelah JUMLAH barang (baris 94) ikut
-  // tambahan barang, setelah JUMLAH pembayaran (baris 100) ikut baris LAINNYA.
+  // tambahan barang, setelah JUMLAH pembayaran (baris 100) ikut baris pembayaran
+  // tambahan (TRANSFER, CARD, dan LAINNYA bila dipakai).
   // Blok tanda tangan di file acuan dimulai tepat di bawah tabel pembayaran,
   // jadi ambang tetap (baris 103) membuat blok kanan menimpa tabel.
   const drawing=artwork.drawing.replace('{{REPORT_DATE}}',xml(date)).replace(/<xdr:row>(\d+)<\/xdr:row>/g,(match,n)=>'<xdr:row>'+(shiftRow(Number(n)+1)-1)+'</xdr:row>');
-  return {name,xml:sheet,drawing,last:113+offset+other};
+  return {name,xml:sheet,drawing,last:113+offset+extra};
 }
 
 // Same small ZIP/store approach as the portal's existing XLSX exporters.

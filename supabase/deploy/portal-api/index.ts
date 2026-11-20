@@ -5567,27 +5567,48 @@ async function briefingRoutes({ db, user, p, method, body: b = {}, url }) {
 var merchandiseRoutes = /* @__PURE__ */ (() => {
   const price = (value) => integer(value, "Harga (rupiah)", 0, 1e9);
   const qty = (value) => integer(value, "Jumlah barang", 0, 1e6);
-  const productFields = "id,sku,name,buy_price,sell_price,stock_qty,is_active,row_version";
+  const productFields = "id,sku,name,buy_price,sell_price,stock_qty,warehouse_qty,is_active,row_version";
+  const LOCATIONS = ["DISPLAY", "GUDANG"];
+  const stockColumn = (location) => location === "GUDANG" ? "warehouse_qty" : "stock_qty";
+  const PAYMENT_METHODS = ["TUNAI", "QRIS", "TRANSFER", "CARD", "LAINNYA"];
+  const LOW_STOCK = 5, STOCK_EXPORT_LIMIT = 1e4;
+  const isActive = (row) => row.is_active === 1 || row.is_active === true;
   const visibleProduct = (row, costs) => costs ? row : (({ buy_price, ...rest }) => rest)(row);
   const saleItems = async (db, id) => await all(db, "SELECT * FROM merchandise_sale_items WHERE sale_id=? ORDER BY created_at,id", id);
   const canCosts = async (db, user) => await has(db, user, "merchandise.catalog.costs");
-  async function stockMove(db, user, product, kind, delta, reason, saleId = null, target = null) {
-    const before = product.stock_qty;
-    const after = kind === "INITIAL" ? target : before + delta;
-    assert(Number.isSafeInteger(after) && after >= 0 && after <= 1e6, "Stok tidak cukup atau jumlah melebihi batas.", 409);
-    await update(db, "merchandise_products", product.id, product.row_version, {
-      stock_qty: after
-    });
-    return await insert(db, "merchandise_stock_movements", {
+  async function applyStock(db, user, product, kind, changes, reason, saleId = null) {
+    const balance = {
+      DISPLAY: product.stock_qty,
+      GUDANG: product.warehouse_qty
+    }, values = {}, rows = [];
+    for (const change of changes) {
+      const before = balance[change.location], setsBalance = change.target !== void 0;
+      assert(setsBalance || before !== null, "Stok belum dihitung.", 409);
+      const after = setsBalance ? change.target : before + change.delta;
+      assert(Number.isSafeInteger(after) && after >= 0 && after <= 1e6, "Stok tidak cukup atau jumlah melebihi batas.", 409);
+      balance[change.location] = after;
+      values[stockColumn(change.location)] = after;
+      rows.push({
+        location: change.location,
+        delta: setsBalance ? before === null ? after : after - before : change.delta,
+        before,
+        after
+      });
+    }
+    await update(db, "merchandise_products", product.id, product.row_version, values);
+    const saved = [];
+    for (const row of rows) saved.push(await insert(db, "merchandise_stock_movements", {
       product_id: product.id,
       sale_id: saleId,
       kind,
-      quantity_delta: kind === "INITIAL" ? after : delta,
-      balance_before: before,
-      balance_after: after,
+      location: row.location,
+      quantity_delta: row.delta,
+      balance_before: row.before,
+      balance_after: row.after,
       reason,
       created_by: user.id
-    });
+    }));
+    return saved;
   }
   async function productList(db, user) {
     const costs = await canCosts(db, user);
@@ -5634,7 +5655,9 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
       return {
         products_total: products.length,
         products_uninitialized: products.filter((r) => r.stock_qty === null).length,
-        products_low: products.filter((r) => r.stock_qty !== null && r.stock_qty <= 5).length,
+        products_low: products.filter((r) => r.stock_qty !== null && r.stock_qty + (r.warehouse_qty ?? 0) <= LOW_STOCK).length,
+        products_display_low: products.filter((r) => isActive(r) && r.stock_qty !== null && r.stock_qty <= LOW_STOCK && r.warehouse_qty > 0).length,
+        products_warehouse_uncounted: products.filter((r) => isActive(r) && r.warehouse_qty === null).length,
         ...summary,
         ...!await canCosts(db, user) ? {
           cost: void 0
@@ -5669,6 +5692,7 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
           buy_price: price(b.buy_price),
           sell_price: price(b.sell_price),
           stock_qty: null,
+          warehouse_qty: null,
           is_active: 1,
           created_by: user.id
         });
@@ -5700,32 +5724,83 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
     }
     if (part === "products" && id && action === "stock" && method === "POST") {
       await requireAccess(db, user, "merchandise.stock.record");
-      const kind = enumValue(b.kind, ["INITIAL", "IN", "ADJUST"], "Jenis mutasi stok");
+      const kind = enumValue(b.kind, ["INITIAL", "IN", "ADJUST", "TRANSFER"], "Jenis mutasi stok");
+      const location = b.location === void 0 || b.location === null ? "DISPLAY" : enumValue(b.location, LOCATIONS, "Lokasi stok");
       if (kind === "ADJUST") await requireAccess(db, user, "merchandise.stock.adjust");
       const amount = qty(b.quantity), reason = text(b.reason, "Alasan perubahan stok", 300);
+      const warehouseStart = kind === "INITIAL" && location === "DISPLAY" && b.warehouse_quantity !== void 0 && b.warehouse_quantity !== null && b.warehouse_quantity !== "" ? qty(b.warehouse_quantity) : null;
       return await tx(db, async () => {
         const product = await get(db, "merchandise_products", id);
         assert(product.row_version === b.row_version, "Stok berubah. Muat ulang daftar barang.", 409);
-        if (kind === "INITIAL") assert(product.stock_qty === null, "Stok awal sudah dicatat. Gunakan barang masuk atau penyesuaian.", 409);
-        else assert(product.stock_qty !== null, "Masukkan stok awal terlebih dahulu.", 409);
-        assert(kind !== "IN" || amount > 0, "Jumlah barang masuk harus lebih dari nol.");
-        const movement = await stockMove(db, user, product, kind, kind === "IN" ? amount : kind === "ADJUST" ? amount - product.stock_qty : amount, reason, null, amount);
+        const current = product[stockColumn(location)], source = location === "GUDANG" ? "DISPLAY" : "GUDANG";
+        let changes;
+        if (kind === "INITIAL") {
+          assert(current === null, location === "GUDANG" ? "Stok awal gudang sudah dicatat. Gunakan barang masuk, pindah stok, atau koreksi." : "Stok awal sudah dicatat. Gunakan barang masuk atau penyesuaian.", 409);
+          changes = [{
+            location,
+            target: amount
+          }];
+          if (warehouseStart !== null) {
+            assert(product.warehouse_qty === null, "Stok awal gudang sudah dicatat.", 409);
+            changes.push({
+              location: "GUDANG",
+              target: warehouseStart
+            });
+          }
+        } else if (kind === "TRANSFER") {
+          assert(product.stock_qty !== null, "Masukkan stok awal terlebih dahulu.", 409);
+          assert(product.warehouse_qty !== null, "Hitung stok awal gudang terlebih dahulu.", 409);
+          assert(amount > 0, "Jumlah barang yang dipindah harus lebih dari nol.");
+          const available = product[stockColumn(source)];
+          assert(available >= amount, `Stok ${source === "GUDANG" ? "gudang" : "display"} ${product.name} hanya ${available}.`, 409);
+          changes = [{
+            location: source,
+            delta: -amount
+          }, {
+            location,
+            delta: amount
+          }];
+        } else {
+          assert(current !== null, location === "GUDANG" ? "Hitung stok awal gudang terlebih dahulu." : "Masukkan stok awal terlebih dahulu.", 409);
+          assert(kind !== "IN" || amount > 0, "Jumlah barang masuk harus lebih dari nol.");
+          changes = [kind === "IN" ? {
+            location,
+            delta: amount
+          } : {
+            location,
+            target: amount
+          }];
+        }
+        const moved = await applyStock(db, user, product, kind, changes, reason);
         await audit(db, user, "STOCK_" + kind, "merchandise_products", id, {
-          before: movement.balance_before,
-          after: movement.balance_after,
+          changes: moved.map((m) => ({
+            location: m.location,
+            before: m.balance_before,
+            after: m.balance_after
+          })),
           reason
         });
+        const after = Object.fromEntries(moved.map((m) => [stockColumn(m.location), m.balance_after]));
         return {
           ok: true,
-          stock_qty: movement.balance_after,
+          stock_qty: after.stock_qty ?? product.stock_qty,
+          warehouse_qty: after.warehouse_qty ?? product.warehouse_qty,
           row_version: product.row_version + 1
         };
       });
     }
     if (part === "stock" && method === "GET") {
       await requireAccess(db, user, "merchandise.stock.read");
+      const since = url.searchParams.get("from");
+      const movements = "SELECT m.*,p.sku,p.name product_name,u.username actor_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id JOIN users u ON u.id=m.created_by";
+      if (!since) return {
+        items: await all(db, `${movements} ORDER BY m.created_at DESC,m.id DESC LIMIT 2000`)
+      };
+      const from = date(since);
       return {
-        items: await all(db, "SELECT m.*,p.sku,p.name product_name,u.username actor_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id JOIN users u ON u.id=m.created_by ORDER BY m.created_at DESC,m.id DESC LIMIT 2000")
+        from,
+        limit: STOCK_EXPORT_LIMIT,
+        items: await all(db, `${movements} WHERE m.created_at>=? ORDER BY m.created_at DESC,m.id DESC LIMIT ${STOCK_EXPORT_LIMIT}`, (/* @__PURE__ */ new Date(`${from}T00:00:00+08:00`)).toISOString())
       };
     }
     if (part === "sales" && method === "GET" && !id) {
@@ -5745,14 +5820,14 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
         quantity: integer(i.quantity, "Jumlah beli", 1, 1e4)
       }));
       assert(new Set(items.map((i) => i.product_id)).size === items.length, "Barang yang sama tidak boleh dimasukkan dua kali.");
-      const payment = enumValue(b.payment_method, ["TUNAI", "QRIS", "TRANSFER", "LAINNYA"], "Metode pembayaran");
+      const payment = enumValue(b.payment_method, PAYMENT_METHODS, "Metode pembayaran");
       const note = b.note ? text(b.note, "Catatan", 300) : null;
       return await tx(db, async () => {
         const snapshot = await asyncMap(items, async (item) => {
           const product = await get(db, "merchandise_products", item.product_id);
           assert(product.is_active === 1, "Barang tidak aktif.", 409);
           assert(product.stock_qty !== null, "Stok awal barang belum diisi.", 409);
-          assert(product.stock_qty >= item.quantity, `Stok ${product.name} tidak mencukupi.`, 409);
+          assert(product.stock_qty >= item.quantity, product.warehouse_qty > 0 ? `Stok display ${product.name} tidak mencukupi (tersisa ${product.stock_qty}). Gudang masih ${product.warehouse_qty}: catat "Pindah ke display" dulu.` : `Stok ${product.name} tidak mencukupi.`, 409);
           return {
             ...item,
             product,
@@ -5785,7 +5860,10 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
             unit_cost: item.product.buy_price,
             subtotal: item.subtotal
           });
-          await stockMove(db, user, item.product, "SALE", -item.quantity, `Penjualan ${saleNo}`, sale.id);
+          await applyStock(db, user, item.product, "SALE", [{
+            location: "DISPLAY",
+            delta: -item.quantity
+          }], `Penjualan ${saleNo}`, sale.id);
         }
         await audit(db, user, "SALE", "merchandise_sales", sale.id, {
           sale_no: saleNo,
@@ -5809,7 +5887,10 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
         assert(sale.row_version === b.row_version, "Transaksi berubah. Muat ulang.", 409);
         for (const item of await saleItems(db, id)) {
           const product = await get(db, "merchandise_products", item.product_id);
-          await stockMove(db, user, product, "VOID", item.quantity, `Pembatalan ${sale.sale_no}: ${reason}`, sale.id);
+          await applyStock(db, user, product, "VOID", [{
+            location: "DISPLAY",
+            delta: item.quantity
+          }], `Pembatalan ${sale.sale_no}: ${reason}`, sale.id);
         }
         const updated = await update(db, "merchandise_sales", id, b.row_version, {
           status: "VOID",

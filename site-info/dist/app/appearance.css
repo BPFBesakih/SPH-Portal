@@ -230,6 +230,24 @@ button.mm-stat-link:focus-visible { outline: 3px solid var(--md-sys-color-primar
 .mm-restock-sold { color: var(--md-sys-color-on-surface-variant); font-size: var(--md-sys-typescale-body-small-size); white-space: nowrap; }
 .mm-restock-sold strong { color: var(--md-sys-color-on-surface); font-variant-numeric: tabular-nums; }
 .mm-restock-action .button { white-space: nowrap; }
+/* Beranda Bisnis dengan lima kartu: penjualan di baris atas, dua kartu stok di bawah. */
+@media (min-width: 1021px) {
+  .mm-stats-split { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .mm-stats-split > * { grid-column: span 2; }
+  .mm-stats-split > .mm-stat-link { grid-column: span 3; }
+}
+/* Daftar barang: angka stok display, gudang, dan total memakai lebar digit yang sama. */
+.mm-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mm-payments td:last-child, .mm-payments th:last-child, .mm-payments td:nth-child(2), .mm-payments th:nth-child(2) { text-align: right; font-variant-numeric: tabular-nums; }
+.mm-payments tr.mm-total td { font-weight: 600; background: var(--md-sys-color-surface-container-low); }
+.mm-section { margin-bottom: 24px; }
+.mm-section .card-header { padding-bottom: 14px; }
+.mm-stock-now { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+/* Catat Penjualan: pilihan barang (dengan stok display · gudang) lebih lebar dari jumlah. */
+@media (min-width: 600px) {
+  .mm-sale-line { grid-template-columns: minmax(0, 3fr) minmax(96px, 1fr); }
+  .mm-refill-item { grid-template-columns: minmax(0, 1fr) 128px 96px auto; }
+}
 @media (max-width: 599px) {
   .mm-restock-item { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 12px; }
   .mm-restock-qty { justify-self: end; }
