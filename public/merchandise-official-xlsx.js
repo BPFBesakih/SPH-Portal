@@ -1,4 +1,5 @@
 // Laporan stok resmi (kolom A-I) yang mengikuti format BPFKSPA Besakih.
+// Tabel II berisi stok display; tabel III (bila ada) berisi stok gudang.
 // Berjalan lokal di browser: tanpa layanan konversi, data tidak diunggah.
 const enc=new TextEncoder();
 const escapeXml=v=>String(v??'').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g,'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
@@ -32,6 +33,8 @@ const cText=(ref,text,style=0)=>text===null||text===undefined||text===''?'':'<c 
 const cNum=(ref,value,style=4)=>value===null||value===undefined||value===''?'':'<c r="'+ref+'" s="'+style+'"><v>'+asNumber(value)+'</v></c>';
 const cFormula=(ref,expression,cached,style=4)=>'<c r="'+ref+'" s="'+style+'"><f>'+escapeXml(expression)+'</f><v>'+asNumber(cached)+'</v></c>';
 const colXml=widths=>widths.map((w,i)=>'<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+w+'" customWidth="1"/>').join('');
+// Kolom KET sempit (lebar 17): beri tinggi baris untuk keterangan yang terlipat.
+const noteHeight=note=>{const length=String(note||'').length;return length<=16?20:length<=34?30:length<=52?42:54;};
 const rowXml=(r,content,height)=>'<row r="'+r+'"'+(height?' ht="'+height+'" customHeight="1"':'')+'>'+content+'</row>';
 const sheetRoot=body=>'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'+body+'</worksheet>';
 const dateSerial=value=>{
@@ -66,15 +69,16 @@ function officialXml(sheet,logo){
   for(let i=0;i<9;i++){const l=letter(i);merged(l+'22',l+'23');head+=cText(l+'22',heads[i],3);}
   line(22,head,25);line(23,'',12);
   for(let i=0;i<records.length;i++){
-    const r=i+24,p=records[i],delta=asNumber(p.received)+asNumber(p.returned)+asNumber(p.adjustment);
-    const note=[p.note,p.received?'BARANG MASUK +'+p.received:'',p.returned?'RETUR +'+p.returned:'',p.adjustment?'KOREKSI '+(p.adjustment>0?'+':'')+p.adjustment:''].filter(Boolean).join(' | ');
+    const r=i+24,p=records[i],delta=asNumber(p.received)+asNumber(p.returned)+asNumber(p.adjustment)+asNumber(p.moved);
+    const moved=asNumber(p.moved);
+    const note=[p.note,p.received?'BARANG MASUK +'+p.received:'',moved>0?'DARI GUDANG +'+moved:moved<0?'KE GUDANG '+moved:'',p.returned?'RETUR +'+p.returned:'',p.adjustment?'KOREKSI '+(p.adjustment>0?'+':'')+p.adjustment:''].filter(Boolean).join(' | ');
     let cells=cNum('A'+r,p.no,4)+cText('B'+r,p.name,5)+cNum('C'+r,p.opening,4);
     if(p.unitCost!==null&&p.unitCost!==undefined)cells+=cFormula('D'+r,'C'+r+'*'+asNumber(p.unitCost),p.openingValue,6);
     cells+=cNum('E'+r,p.sold,4)+cNum('F'+r,p.revenue,6);
     cells+=cFormula('G'+r,'C'+r+'-E'+r+(delta<0?'':'+')+delta,p.closing,4);
     if(p.unitCost!==null&&p.unitCost!==undefined)cells+=cFormula('H'+r,'G'+r+'*'+asNumber(p.unitCost),p.closingValue,6);
     cells+=cText('I'+r,note,9);
-    line(r,cells,20);
+    line(r,cells,noteHeight(note));
   }
   const last=records.length+23,total=last+1;
   merged('A'+total,'B'+total);
@@ -87,6 +91,39 @@ function officialXml(sheet,logo){
   }
   line(total,totalCell,23);
   let cursor=total+2;
+  // III. Stok gudang: kolom A–I yang sama dengan tabel display di atasnya.
+  const warehouse=sheet.warehouse;
+  if(warehouse){
+    paragraph(cursor++,warehouse.title);
+    const heads=['NO','JENIS BARANG','STOK AWAL (Pcs)','BARANG MASUK (Pcs)','PINDAH KE DISPLAY (Pcs)','KOREKSI (+/-)','STOK AKHIR (Pcs)','NILAI STOK AKHIR (Rp)','KET'];
+    line(cursor,heads.map((h,i)=>cText(letter(i)+cursor,h,3)).join(''),30);cursor++;
+    const first=cursor;
+    // Sel kosong tetap bergaris supaya baris "belum dihitung" terbaca sebagai tabel.
+    const blank=(ref,style)=>'<c r="'+ref+'" s="'+style+'"/>';
+    const qty=(ref,value)=>value===null||value===undefined?blank(ref,4):cNum(ref,value,4);
+    for(const p of warehouse.rows||[]){
+      const r=cursor;
+      let cells=cNum('A'+r,p.no,4)+cText('B'+r,p.name,5)+qty('C'+r,p.opening)+qty('D'+r,p.received)+qty('E'+r,p.moved)+qty('F'+r,p.adjustment);
+      if(p.closing!==null&&p.closing!==undefined){
+        // Hitungan pertama gudang di periode ini menjadi dasar saat stok awal masih kosong.
+        const base=p.opening!==null&&p.opening!==undefined?'C'+r:String(asNumber(p.counted));
+        cells+=cFormula('G'+r,base+'+D'+r+'-E'+r+'+F'+r,p.closing,4);
+        cells+=warehouse.canCost&&p.unitCost!==null&&p.unitCost!==undefined?cFormula('H'+r,'G'+r+'*'+asNumber(p.unitCost),p.closingValue,6):blank('H'+r,6);
+      }else cells+=blank('G'+r,4)+blank('H'+r,6);
+      cells+=p.note?cText('I'+r,p.note,9):blank('I'+r,9);
+      line(r,cells,noteHeight(p.note));cursor++;
+    }
+    const last=cursor-1,sumRow=cursor;
+    merged('A'+sumRow,'B'+sumRow);
+    let sums=cText('A'+sumRow,'JUMLAH',8);
+    for(const [col,key,style] of [['C','opening',4],['D','received',4],['E','moved',4],['F','adjustment',4],['G','closing',4],['H','closingValue',6]]){
+      if(key==='closingValue'&&!warehouse.canCost)continue;
+      const val=warehouse.total?.[key]??0;
+      sums+=last>=first?cFormula(col+sumRow,'SUM('+col+first+':'+col+last+')',val,style):cNum(col+sumRow,val,style);
+    }
+    line(sumRow,sums,23);
+    cursor=sumRow+2;
+  }
   for(const section of sheet.sections||[]){
     paragraph(cursor++,section.title);
     merged('B'+cursor,'C'+cursor);merged('E'+cursor,'I'+cursor);

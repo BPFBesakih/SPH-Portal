@@ -35,11 +35,11 @@ export const ROUTE_HELP={
   'purchasing-reports':'<strong>Laporan</strong> — rekap PR dalam cakupan akses Anda beserta ekspornya.',
   'purchasing-settings':'<strong>Pengaturan</strong> — batas nilai, pejabat, penomoran, kop dokumen, dan Plh. Setiap perubahan tercatat.',
   // Bisnis
-  merchandise:'<strong>Beranda</strong> — penjualan hari ini dan barang yang stoknya 5 atau kurang.',
-  'merchandise-products':'<strong>Daftar Barang</strong> — katalog dan harga merchandise.',
-  'merchandise-sales':'<strong>Penjualan</strong> — catat setiap transaksi. Stok berkurang otomatis dan harga saat penjualan ikut tersimpan.',
-  'merchandise-stock':'<strong>Stok Barang</strong> — catat stok awal dan penerimaan barang. Semua perubahan stok tercatat; koreksi saldo hanya oleh yang berwenang.',
-  'merchandise-reports':'<strong>Laporan</strong> — rekap stok harian dan penjualan per periode, termasuk ekspor Excel bulanan.',
+  merchandise:'<strong>Beranda</strong> — penjualan hari ini, barang yang total stoknya (display + gudang) 5 atau kurang, dan barang yang display-nya perlu diisi dari gudang.',
+  'merchandise-products':'<strong>Daftar Barang</strong> — katalog, harga, serta stok <strong>display</strong> dan <strong>gudang</strong>. Tombol <strong>Stok</strong> untuk stok awal, barang masuk (ke gudang atau display), pindah gudang ↔ display, dan koreksi saldo.',
+  'merchandise-sales':'<strong>Penjualan</strong> — catat setiap transaksi dan pilih pembayaran: Tunai, QRIS, Transfer, Card, atau Lainnya. Stok display berkurang otomatis; bila display kurang, catat dulu <strong>Pindah ke display</strong> dari gudang.',
+  'merchandise-stock':'<strong>Stok Barang</strong> — riwayat semua perubahan stok per lokasi (display/gudang): stok awal, barang masuk, pindah stok, penjualan, dan koreksi. Koreksi saldo hanya oleh yang berwenang.',
+  'merchandise-reports':'<strong>Laporan</strong> — rekap penjualan dan metode pembayaran per periode, serta ekspor Excel bulanan (stok display dan gudang dipisah).',
   // Kunjungan
   visits:'<strong>Dashboard</strong> — ringkasan penilaian guide bulan berjalan.',
   'visits-guides':'<strong>Data Guide</strong> — daftar guide beserta kategori dan regunya.',

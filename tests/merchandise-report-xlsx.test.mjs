@@ -75,3 +75,66 @@ test('invalid date, negative reconstructed opening, and future report are reject
   assert.throws(()=>merchandiseMonthlyWorkbook({...options,to:'2026-11-06'}),/hari ini/);
   assert.throws(()=>merchandiseMonthlyWorkbook({...options,stock:[{...product,stock_qty:0}]}),/Saldo historis negatif/);
 });
+
+// Stok Display & Gudang (20 November 2026): tabel utama tetap stok display, stok gudang di
+// tabel III. Hitungan pertama gudang menjadi stok awal gudang, bukan barang masuk.
+const split={
+  ...options,stock:[{...product,stock_qty:8,warehouse_qty:37}],
+  movements:[
+    ...options.movements,
+    {sku,product_name:'FLASHDISK',kind:'INITIAL',location:'GUDANG',quantity_delta:40,balance_before:null,balance_after:40,created_at:'2026-11-02T07:00:00Z',reason:'Hitung gudang'},
+    {sku,product_name:'FLASHDISK',kind:'TRANSFER',location:'GUDANG',quantity_delta:-5,balance_before:40,balance_after:35,created_at:'2026-11-02T08:00:00Z',reason:'Isi display'},
+    {sku,product_name:'FLASHDISK',kind:'TRANSFER',location:'DISPLAY',quantity_delta:5,balance_before:3,balance_after:8,created_at:'2026-11-02T08:00:00Z',reason:'Isi display'},
+    {sku,product_name:'FLASHDISK',kind:'IN',location:'GUDANG',quantity_delta:2,balance_before:35,balance_after:37,created_at:'2026-11-03T02:00:00Z',reason:'Kiriman pemasok'}
+  ]
+};
+const cellAt=(xml,ref)=>xml.match(new RegExp(`<c r="${ref}"[^>]*?(?:/>|>(.*?)</c>)`))?.[1]??null;
+const text=(xml,ref)=>cellAt(xml,ref)?.match(/<t xml:space="preserve">([^<]*)<\/t>/)?.[1]??null;
+test('stok gudang: tabel III, hitungan pertama sebagai stok awal gudang, pindah stok ke display',async()=>{
+  const r=merchandiseMonthlyWorkbook(split);
+  assert.equal(r.totalOpening,2);assert.equal(r.totalClosing,8);assert.equal(r.warehouseClosing,37);
+  const f=await unpack(r.blob),master=f.get('xl/worksheets/sheet1.xml'),day1=f.get('xl/worksheets/sheet2.xml'),day2=f.get('xl/worksheets/sheet3.xml'),day3=f.get('xl/worksheets/sheet4.xml'),final=f.get('xl/worksheets/sheet5.xml');
+  // Tabel display: pindahan dari gudang ikut menambah stok akhir display.
+  assert.match(final,/<f>C24-E24\+8<\/f><v>8<\/v>/);
+  assert.match(text(final,'I24'),/BARANG MASUK \+3 \| DARI GUDANG \+5/);
+  // Tabel III mulai dua baris setelah JUMLAH (baris 25).
+  assert.equal(text(final,'A27'),'III. STOK GUDANG');
+  assert.deepEqual(['C','D','E','F','G'].map(c=>text(final,c+'28')),['STOK AWAL (Pcs)','BARANG MASUK (Pcs)','PINDAH KE DISPLAY (Pcs)','KOREKSI (+/-)','STOK AKHIR (Pcs)']);
+  assert.equal(cellAt(final,'C29'),null,'stok awal gudang kosong: belum dihitung pada 1 November');
+  assert.equal(cellAt(final,'D29'),'<v>2</v>');assert.equal(cellAt(final,'E29'),'<v>5</v>');
+  assert.equal(cellAt(final,'G29'),'<f>40+D29-E29+F29</f><v>37</v>');
+  assert.equal(cellAt(final,'H29'),'<f>G29*60000</f><v>2220000</v>');
+  assert.equal(text(final,'I29'),'Hitung awal 2 Nov: 40');
+  assert.match(final,/<c r="G30" s="4"><f>SUM\(G29:G29\)<\/f><v>37<\/v><\/c>/);
+  // Sebelum dihitung: kosong dan berketerangan; sesudahnya saldo berjalan biasa.
+  for(const sheet of [master,day1]){assert.equal(cellAt(sheet,'G29'),null);assert.equal(text(sheet,'I29'),'Belum dihitung');}
+  assert.equal(cellAt(day2,'G29'),'<f>40+D29-E29+F29</f><v>35</v>');
+  assert.equal(cellAt(day3,'C29'),'<v>35</v>');assert.equal(cellAt(day3,'G29'),'<f>C29+D29-E29+F29</f><v>37</v>');assert.equal(text(day3,'I29'),null);
+  // Daftar mutasi: hitungan gudang bukan barang masuk; pindah stok satu baris.
+  const listed=title=>{const at=final.indexOf(title);return at<0?null:final.slice(at,final.indexOf('</row>',final.indexOf('KETERANGAN',at)+200));};
+  assert.match(final,/IV\. BARANG MASUK/);assert.match(final,/V\. PINDAH STOK/);assert.match(final,/VI\. BARANG KELUAR/);assert.match(final,/VII\. PEMBATALAN \/ KOREKSI POSITIF/);
+  assert(final.includes('2026-11-01 — Display: Penerimaan'));assert(final.includes('2026-11-03 — Gudang: Kiriman pemasok'));
+  assert(!final.includes('Gudang: Hitung gudang'),'hitungan pertama gudang tidak dicatat sebagai barang masuk');
+  assert(final.includes('2026-11-02 — Gudang → Display: Isi display'));
+  assert.equal((final.match(/Gudang → Display/g)||[]).length,1);
+  assert(listed('V. PINDAH STOK'));
+  const ledger=f.get('xl/worksheets/sheet7.xml');
+  assert.match(ledger,/LOKASI/);assert.match(ledger,/>Gudang</);assert.match(ledger,/>Display</);
+});
+test('stok gudang di luar periode hitungan: kosong sebelum dihitung, saldo awal sesudahnya',async()=>{
+  const before=merchandiseMonthlyWorkbook({...split,to:'2026-11-01'});
+  assert.equal(before.warehouseClosing,0);
+  const f=await unpack(before.blob);
+  assert.equal(text(f.get('xl/worksheets/sheet3.xml'),'I29'),'Belum dihitung');
+  const after=merchandiseMonthlyWorkbook({...split,from:'2026-11-03',to:'2026-11-03'});
+  const g=await unpack(after.blob),final=g.get('xl/worksheets/sheet3.xml');
+  assert.equal(cellAt(final,'C29'),'<v>35</v>');assert.equal(cellAt(final,'G29'),'<f>C29+D29-E29+F29</f><v>37</v>');
+  assert.equal(text(final,'I29'),null,'dihitung sebelum periode: tanpa keterangan hitung awal');
+});
+test('data gudang yang tidak konsisten ditolak, bukan ditebak',()=>{
+  assert.throws(()=>merchandiseMonthlyWorkbook({...split,stock:[{...product,stock_qty:8,warehouse_qty:null}]}),/belum dihitung/);
+  assert.throws(()=>merchandiseMonthlyWorkbook({...split,stock:[{...product,stock_qty:8,warehouse_qty:30}]}),/tidak sesuai/);
+  const twice=[...split.movements,{...split.movements[2],created_at:'2026-11-03T05:00:00Z'}];
+  assert.throws(()=>merchandiseMonthlyWorkbook({...split,movements:twice}),/lebih dari sekali/);
+  assert.throws(()=>merchandiseMonthlyWorkbook({...split,movements:Array.from({length:10000},()=>split.movements[0])}),/batas API/);
+});
