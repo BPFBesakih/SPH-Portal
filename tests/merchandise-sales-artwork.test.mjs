@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {deflateRawSync} from 'node:zlib';
 import {loadMerchandiseSalesArtwork,readMerchandiseTemplateZip} from '../public/merchandise-sales-artwork.js';
+import {merchandiseSalesWorkbook} from '../public/merchandise-sales-xlsx.js';
 const PNG=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZWQAAAAASUVORK5CYII=','base64');
 const crc=bytes=>{let c=0xffffffff;for(const b of bytes){c^=b;for(let j=0;j<8;j++)c=c&1?0xedb88320^(c>>>1):c>>>1;}return (c^0xffffffff)>>>0;};
 function fixture({external=false,date=true,method=8,duplicate=false}={}){
@@ -34,6 +35,23 @@ test('compressed local XLSX supplies only embedded artwork and a dynamic signatu
 test('stored ZIP entries also work without decompression',async()=>{
   const zip=await readMerchandiseTemplateZip(fixture({method:0}));
   assert.match(new TextDecoder().decode(await zip.read('xl/workbook.xml')),/sheet name="1"/);
+});
+
+test('ekspor lama dapat menjadi acuan lagi meski jumlah barang dan metode berubah',async()=>{
+  const base=await loadMerchandiseSalesArtwork(fixture());
+  base.drawing=base.drawing.replace('<a:p>','<xdr:row>2</xdr:row><xdr:row>102</xdr:row><a:p>');
+  const day='2026-11-07',options={from:day,to:day,today:day};
+  const stock=Array.from({length:74},(_,i)=>({sku:'SKU'+i,name:'Barang '+i}));
+  const sale={id:'1',sold_on:day,status:'COMPLETED',payment_method:'LAINNYA',total:1,items:[{sku:'SKU0',quantity:1,subtotal:1}]};
+  let artwork=base;
+  for(const [products,sales,anchor] of [[stock,[sale],109],[[],[],104],[[],[],104]]){
+    const {blob}=merchandiseSalesWorkbook({...options,stock:products,sales,artwork});
+    const zip=await readMerchandiseTemplateZip(blob);
+    const drawing=new TextDecoder().decode(await zip.read('xl/drawings/drawing2.xml'));
+    assert.deepEqual([...drawing.matchAll(/<xdr:row>(\d+)/g)].map(m=>Number(m[1])),[2,anchor]);
+    artwork=await loadMerchandiseSalesArtwork(blob);
+    assert.equal(artwork.drawing,base.drawing);
+  }
 });
 test('external artwork links and a missing signature date fail without any network operation',async()=>{
   await assert.rejects(()=>loadMerchandiseSalesArtwork(fixture({external:true})),/eksternal/);

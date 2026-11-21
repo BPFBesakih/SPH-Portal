@@ -55,6 +55,23 @@ export async function readMerchandiseTemplateZip(file){
   return {read};
 }
 
+// Kembalikan jangkar gambar ke koordinat template dasar, termasuk saat file
+// acuan sudah diekspor dengan tambahan produk atau baris metode pembayaran.
+function originalDrawingRows(drawing,sheet){
+  const merges=new Set(tags(sheet,'mergeCell').map(cell=>cell.ref));
+  const totals=[...merges].map(ref=>/^A(\d+):B\1$/.exec(ref)).filter(Boolean).map(match=>Number(match[1]));
+  const productsEnd=totals.find(row=>row>=94&&merges.has(`A${row+2}:G${row+2}`));
+  if(productsEnd===undefined)return drawing;
+  const paymentsEnd=totals.find(row=>row>=productsEnd+6&&merges.has(`C${row}:G${row}`));
+  if(paymentsEnd===undefined)return drawing;
+  const extraProducts=productsEnd-94,extraPayments=paymentsEnd-productsEnd-6;
+  return drawing.replace(/<xdr:row>(\d+)<\/xdr:row>/g,(tag,value)=>{
+    const row=Number(value)+1;
+    const shift=row>=paymentsEnd?extraProducts+extraPayments:row>=productsEnd?extraProducts:0;
+    return `<xdr:row>${row-shift-1}</xdr:row>`;
+  });
+}
+
 export async function loadMerchandiseSalesArtwork(file){
   const zip=await readMerchandiseTemplateZip(file);
   const readXml=async part=>{
@@ -83,6 +100,7 @@ export async function loadMerchandiseSalesArtwork(file){
     const name='sales-template-'+(i+1)+'.png';images['xl/media/'+name]=data;
     rels.push('<Relationship Id="'+xml(r.Id)+'" Type="'+xml(r.Type)+'" Target="../media/'+name+'"/>');
   }
+  drawingXml=originalDrawingRows(drawingXml,sheetXml);
   let dateFound=false;
   drawingXml=drawingXml.replace(/<(?:[\w]+:)?p\b[^>]*>[\s\S]*?<\/(?:[\w]+:)?p>/g,paragraph=>{
     const plain=[...paragraph.matchAll(/<(?:[\w]+:)?t\b[^>]*>([\s\S]*?)<\/(?:[\w]+:)?t>/g)].map(m=>unxml(m[1])).join('');

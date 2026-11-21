@@ -25,7 +25,7 @@ const unpack=async blob=>{
 test('snapshot prices, period boundaries, zero-sale products and cancelled sales reconcile',()=>{
   const d=merchandiseSalesData(sample);
   assert.deepEqual(d.totals,{qty:3,revenue:280000,cost:185000});
-  assert.deepEqual(d.payments,{cash:180000,noncash:100000,other:0});
+  assert.deepEqual(d.payments,{cash:180000,qris:100000,transfer:0,card:0,other:0});
   assert.equal(d.products.length,2);assert.equal(d.daily.get('2026-11-02').totals.revenue,0);
 });
 test('workbook retains original artwork, styles, daily sheets and official report blocks',async()=>{
@@ -52,13 +52,30 @@ test('unauthorized exports contain no cost, margin, cost formulas or hidden sour
   assert(!sheet.includes('D24-E24'));assert(sheet.includes('Tidak ditampilkan'));
   assert.match(sheet,/<c r="E24" s="\d+"\/>/);
 });
-test('all payment categories reconcile, including a separate LAINNYA line',async()=>{
-  const sales=[...sample.sales,{...sample.sales[1],id:'transfer',sale_no:'M-5',payment_method:'TRANSFER'}, {...sample.sales[1],id:'other',sale_no:'M-6',payment_method:'LAINNYA'}];
+const paymentRows=sheet=>[...sheet.matchAll(/<row r="(\d+)"[^>]*><c r="A\d+" s="\d+"><v>(\d)<\/v><\/c><c r="B\d+" s="\d+" t="inlineStr"><is><t xml:space="preserve">([^<]+)<\/t>/g)]
+  .filter(m=>Number(m[1])>=98).map(m=>[Number(m[1]),Number(m[2]),m[3]]);
+test('metode pembayaran: QRIS di NON TUNAI, TRANSFER dan CARD baris sendiri, LAINNYA bila dipakai',async()=>{
+  const sales=[...sample.sales,{...sample.sales[1],id:'transfer',sale_no:'M-5',payment_method:'TRANSFER'},{...sample.sales[1],id:'card',sale_no:'M-7',total:50000,payment_method:'CARD',items:[{...sample.sales[1].items[0],subtotal:50000}]},{...sample.sales[1],id:'other',sale_no:'M-6',payment_method:'LAINNYA'}];
   const options={...sample,sales,summary:undefined};
-  const d=merchandiseSalesData(options);assert.deepEqual(d.payments,{cash:180000,noncash:200000,other:100000});
+  const d=merchandiseSalesData(options);assert.deepEqual(d.payments,{cash:180000,qris:100000,transfer:100000,card:50000,other:100000});
   const f=await unpack(merchandiseSalesWorkbook(options).blob),s=f.get('xl/worksheets/sheet5.xml');
-  assert(s.includes('LAINNYA'));assert.match(s,/<f>SUM\(C98:C100\)<\/f><v>480000<\/v>/);
-  assert.match(s,/<mergeCell ref="C100:G100"/);
+  assert.deepEqual(paymentRows(s),[[98,1,'TUNAI'],[99,2,'NON TUNAI (QRIS)'],[100,3,'TRANSFER'],[101,4,'CARD'],[102,5,'LAINNYA']]);
+  assert.match(s,/<f>SUM\(C98:C102\)<\/f><v>530000<\/v>/);
+  for(const r of [98,99,100,101,102,103])assert.match(s,new RegExp(`<mergeCell ref="C${r}:G${r}"`));
+  assert.match(s,/<mergeCell ref="A103:B103"/);
+  // MASTER AKHIR menjumlahkan baris yang sama dari setiap lembar harian.
+  assert.match(s,/<c r="C101" s="\d+"><f>SUM\(&apos;1&apos;!C101,&apos;2&apos;!C101,&apos;3&apos;!C101\)<\/f><v>50000<\/v>/);
+  assert(!s.includes('QRIS / TRANSFER / CARD'));
+});
+test('tanpa LAINNYA: empat baris pembayaran tetap tampil walau nol, lalu JUMLAH',async()=>{
+  const f=await unpack(merchandiseSalesWorkbook(sample).blob);
+  for(let i=1;i<=5;i++){
+    const s=f.get('xl/worksheets/sheet'+i+'.xml');
+    assert.deepEqual(paymentRows(s),[[98,1,'TUNAI'],[99,2,'NON TUNAI (QRIS)'],[100,3,'TRANSFER'],[101,4,'CARD']]);
+    assert(!s.includes('LAINNYA'));
+    assert.match(s,/<row r="102"[^>]*><c r="A102" s="\d+" t="inlineStr"><is><t xml:space="preserve">JUMLAH</);
+  }
+  assert.match(f.get('xl/worksheets/sheet5.xml'),/<f>SUM\(C98:C101\)<\/f><v>280000<\/v>/);
 });
 test('incomplete summaries, duplicate transactions, bad dates and missing snapshots fail visibly',()=>{
   assert.throws(()=>merchandiseSalesData({...sample,summary:{...sample.summary,revenue:999}}),/belum lengkap/);
@@ -76,7 +93,8 @@ test('historic products missing from catalogue stay in the report and >70 produc
   const f=await unpack(merchandiseSalesWorkbook({...sample,stock}).blob),s=f.get('xl/worksheets/sheet5.xml');
   assert.match(s,/<mergeCell ref="A97:B97"/);
   assert.match(s,/<f>SUM\(C24:C96\)<\/f><v>3<\/v>/);
-  assert.match(f.get('xl/drawings/drawing5.xml'),/<xdr:row>105<\/xdr:row>/);
+  // Baris 103 acuan (0-based 102) turun 3 (barang) + 2 (TRANSFER, CARD).
+  assert.match(f.get('xl/drawings/drawing5.xml'),/<xdr:row>107<\/xdr:row>/);
 });
 test('empty periods remain valid zero-valued reports',async()=>{
   const out=merchandiseSalesWorkbook({...sample,sales:[],summary:{revenue:0,cost:0,units_sold:0,transaction_count:0}});
@@ -94,13 +112,14 @@ test('blok tanda tangan ikut turun bersama tabel pembayaran dan tetap sejajar',a
   const f=await unpack(merchandiseSalesWorkbook({...sample,stock,sales,summary,artwork:layoutArtwork}).blob);
   for(let i=1;i<=5;i++){
     const sheet=f.get('xl/worksheets/sheet'+i+'.xml'),a=anchors(f.get('xl/drawings/drawing'+i+'.xml'));
-    // 71 barang dan baris LAINNYA: JUMLAH pembayaran pindah dari baris 100 ke 102.
-    assert.match(sheet,/<row r="102"[^>]*><c r="A102" s="\d+" t="inlineStr"><is><t xml:space="preserve">JUMLAH</);
+    // 71 barang, TRANSFER, CARD, dan LAINNYA: JUMLAH pembayaran pindah dari baris 100 ke 104.
+    assert.match(sheet,/<row r="104"[^>]*><c r="A104" s="\d+" t="inlineStr"><is><t xml:space="preserve">JUMLAH</);
     assert.deepEqual(a['Kop'],[0,5]);
-    assert.deepEqual(a['Yang Menyerahkan'],[103,110]);
-    assert.deepEqual(a['Penerima'],[105,112]);
-    assert(a['Yang Menyerahkan'][0]+1>102,'blok tanda tangan tidak boleh menimpa JUMLAH pembayaran');
+    assert.deepEqual(a['Yang Menyerahkan'],[105,112]);
+    assert.deepEqual(a['Penerima'],[107,114]);
+    assert(a['Yang Menyerahkan'][0]+1>104,'blok tanda tangan tidak boleh menimpa JUMLAH pembayaran');
   }
   const plain=await unpack(merchandiseSalesWorkbook({...sample,artwork:layoutArtwork}).blob);
-  assert.deepEqual(anchors(plain.get('xl/drawings/drawing5.xml')),{'Kop':[0,5],'Yang Menyerahkan':[101,108],'Penerima':[103,110]});
+  // Tanpa barang tambahan dan tanpa LAINNYA: tetap turun 2 baris (TRANSFER, CARD).
+  assert.deepEqual(anchors(plain.get('xl/drawings/drawing5.xml')),{'Kop':[0,5],'Yang Menyerahkan':[103,110],'Penerima':[105,112]});
 });

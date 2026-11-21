@@ -25,8 +25,16 @@ yang tersimpan, termasuk bila harga barang berubah dalam periode yang sama.
 Barang yang tidak terjual tetap tercantum. Produk historis yang sudah tidak
 ada dalam katalog tetap disertakan berdasarkan SKU transaksi.
 
-QRIS, TRANSFER dan CARD/KARTU dikelompokkan sebagai NON TUNAI. LAINNYA muncul
-pada baris tersendiri jika digunakan. Total pembayaran sama dengan pendapatan.
+Bagian III METODE PEMBAYARAN (sejak 20 November 2026): 1 TUNAI, 2 NON TUNAI
+(QRIS), 3 TRANSFER, 4 CARD, lalu 5 LAINNYA hanya bila digunakan pada periode itu.
+TRANSFER dan CARD tetap tampil walau nol. Total pembayaran sama dengan pendapatan.
+Template resmi hanya memiliki dua baris pembayaran; setiap baris tambahan
+menggeser JUMLAH pembayaran, blok tanda tangan, dan gambar di bawahnya ke bawah.
+File resmi asli dan hasil ekspor portal dapat digunakan sebagai acuan. Posisi
+gambar dari hasil ekspor dikembalikan ke tata letak dasar sebelum menyesuaikan
+jumlah barang dan metode pembayaran pada laporan baru.
+Rekap mengenali penanda “pembayaran CARD (kategori lainnya)” pada transaksi
+impor 1–7 November 2026. Metode asli tetap tersimpan dalam riwayat database.
 Rata-rata per hari membagi jumlah barang dengan seluruh hari kalender dalam
 periode terpilih, termasuk hari tanpa penjualan.
 
