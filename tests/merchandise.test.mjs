@@ -7,6 +7,9 @@ import {resolve} from 'node:path';
 import {openDb,insert,one,all,now} from '../lib/db.mjs';
 import {seedPermissions,merchandiseRoleCodes} from '../lib/auth.mjs';
 import {merchandiseRoutes} from '../lib/merchandise.mjs';
+import {paymentSummary} from '../public/merchandise.js';
+import {merchandiseSalesData} from '../public/merchandise-sales-xlsx.js';
+import {merchandiseMonthlyWorkbook} from '../public/merchandise-report-xlsx.js';
 
 function fixture(t){
   const db=openDb(':memory:');t.after(()=>db.close());seedPermissions(db);
@@ -30,6 +33,38 @@ test('empat role Merchandise memiliki izin minimal sesuai tugas',t=>{
   assert(perm('BISNIS_MANAGER').includes('merchandise.catalog.manage'));
   assert(!perm('EMPLOYEE').some(p=>p.startsWith('merchandise.')));
   assert(!perm('SUPER_ADMIN').some(p=>p.startsWith('merchandise.')));
+});
+
+test('rekap portal dan Excel mengenali penanda CARD pada impor lama',t=>{
+  const f=fixture(t),note='Impor baris 7; pembayaran CARD (kategori lainnya).';
+  f.call('manager',`products/${f.product.id}/stock`,'POST',{kind:'INITIAL',quantity:6,reason:'Opname',row_version:1});
+  for(const [day,method,memo] of [
+    ['2026-11-01','LAINNYA',note],['2026-11-07','LAINNYA','Pembayaran CARD (kategori lainnya)'],
+    ['2026-11-07','LAINNYA','Bukan pembayaran CARD (kategori lainnya)'],['2026-11-08','LAINNYA',note],
+    ['2026-11-07','TUNAI',note],['2026-11-07','CARD','']
+  ]){
+    const sale=f.call('manager','sales','POST',{payment_method:method,note:memo,items:[{product_id:f.product.id,quantity:1}]});
+    f.db.prepare('UPDATE merchandise_sales SET sold_on=? WHERE id=?').run(day,sale.id);
+  }
+  const report=f.call('manager','reports','GET',{},'from=2026-11-01&to=2026-11-08');
+  const card=paymentSummary(report.sales).find(row=>row.method==='CARD');
+  assert.deepEqual([card.count,card.total],[3,60000]);
+  assert.deepEqual(merchandiseSalesData({...report,today:'2026-11-08'}).payments,{cash:20000,qris:0,transfer:0,card:60000,other:40000});
+  assert.equal(one(f.db,"SELECT count(*) n FROM merchandise_sales WHERE payment_method='LAINNYA'").n,4);
+});
+
+test('ekspor membaca saldo, penjualan, dan mutasi sesudah pindah stok',t=>{
+  const f=fixture(t),day='2026-11-21',query=`from=${day}&to=${day}`;
+  const path=`products/${f.product.id}/stock`;
+  f.call('manager',path,'POST',{kind:'INITIAL',quantity:4,warehouse_quantity:10,reason:'Opname',row_version:1});
+  const cached=f.call('manager','reports','GET',{},query);
+  f.call('manager',path,'POST',{kind:'TRANSFER',location:'DISPLAY',quantity:2,reason:'Isi display',row_version:2});
+  f.db.exec("UPDATE merchandise_stock_movements SET created_at='2026-11-21T01:00:00Z'");
+  const snapshot=f.call('manager','stock-export','GET',{},query);
+  assert.deepEqual([cached.stock[0].stock_qty,cached.stock[0].warehouse_qty],[4,10]);
+  const workbook=merchandiseMonthlyWorkbook({...snapshot,today:day});
+  assert.deepEqual([workbook.totalClosing,workbook.warehouseClosing],[6,8]);
+  assert.throws(()=>f.call('cashier','stock-export','GET',{},query),/akses/);
 });
 test('stok belum dihitung tidak sama dengan nol dan tidak boleh dijual',t=>{
   const f=fixture(t);

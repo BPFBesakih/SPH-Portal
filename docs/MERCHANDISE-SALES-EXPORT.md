@@ -30,8 +30,11 @@ Bagian III METODE PEMBAYARAN (sejak 20 November 2026): 1 TUNAI, 2 NON TUNAI
 TRANSFER dan CARD tetap tampil walau nol. Total pembayaran sama dengan pendapatan.
 Template resmi hanya memiliki dua baris pembayaran; setiap baris tambahan
 menggeser JUMLAH pembayaran, blok tanda tangan, dan gambar di bawahnya ke bawah.
-Pakai file acuan dengan tata letak resmi asli (misalnya file Oktober), bukan file
-hasil ekspor portal yang tanda tangannya sudah digeser.
+File resmi asli dan hasil ekspor portal dapat digunakan sebagai acuan. Posisi
+gambar dari hasil ekspor dikembalikan ke tata letak dasar sebelum menyesuaikan
+jumlah barang dan metode pembayaran pada laporan baru.
+Rekap mengenali penanda “pembayaran CARD (kategori lainnya)” pada transaksi
+impor 1–7 November 2026. Metode asli tetap tersimpan dalam riwayat database.
 Rata-rata per hari membagi jumlah barang dengan seluruh hari kalender dalam
 periode terpilih, termasuk hari tanpa penjualan.
 

@@ -163,5 +163,16 @@ try{
     const since=await portal(cashier,'merchandise/stock','GET',{},'from=2026-11-01');
     assert.equal(since.items.length,all2.length-1);assert(!since.items.some(m=>m.id===target.id));assert.equal(since.limit,10000);
   });
+  await check('stock export returns one fresh report after a transfer, with export permissions',async()=>{
+    const query='from=2000-01-01&to=2099-12-31';
+    const [display,warehouse]=await stockOf(flashdisk);
+    await portal(manager,`merchandise/products/${flashdisk}/stock`,'POST',{kind:'TRANSFER',location:'GUDANG',quantity:1,row_version:await version(flashdisk),reason:'Kembali ke gudang'});
+    const snapshot=await portal(manager,'merchandise/stock-export','GET',{},query);
+    const product=snapshot.stock.find(p=>p.id===flashdisk);
+    assert.deepEqual([product.stock_qty,product.warehouse_qty],[display-1,warehouse+1]);
+    assert.equal(snapshot.movements.filter(m=>m.reason==='Kembali ke gudang'&&m.product_id===flashdisk&&m.kind==='TRANSFER'&&m.balance_after===(m.location==='DISPLAY'?display-1:warehouse+1)).length,2);
+    assert(Array.isArray(snapshot.sales));
+    await denied(api,portal(cashier,'merchandise/stock-export','GET',{},query),403);
+  });
   console.log(`OK ${checks} pemeriksaan merchandise PostgreSQL${oldSnapshot?' (termasuk gateway lama)':''}.`);
 }finally{await pg.close();}

@@ -5576,6 +5576,15 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
   const visibleProduct = (row, costs) => costs ? row : (({ buy_price, ...rest }) => rest)(row);
   const saleItems = async (db, id) => await all(db, "SELECT * FROM merchandise_sale_items WHERE sale_id=? ORDER BY created_at,id", id);
   const canCosts = async (db, user) => await has(db, user, "merchandise.catalog.costs");
+  const stockHistory = "SELECT m.*,p.sku,p.name product_name,u.username actor_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id JOIN users u ON u.id=m.created_by";
+  async function movementsSince(db, from) {
+    const midnight = (/* @__PURE__ */ new Date(`${from}T00:00:00+08:00`)).toISOString();
+    return await all(db, `${stockHistory} WHERE m.created_at>=? ORDER BY m.created_at DESC,m.id DESC LIMIT ${STOCK_EXPORT_LIMIT}`, midnight);
+  }
+  function reportedPayment(sale) {
+    const legacy = sale.sold_on >= "2026-11-01" && sale.sold_on <= "2026-11-07" && sale.payment_method === "LAINNYA";
+    return legacy && /(?:^|;)\s*pembayaran CARD \(kategori lainnya\)(?=\s*(?:[.;]|$))/i.test(sale.note || "") ? "CARD" : sale.payment_method;
+  }
   async function applyStock(db, user, product, kind, changes, reason, saleId = null) {
     const balance = {
       DISPLAY: product.stock_qty,
@@ -5619,6 +5628,7 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
     const rows = await all(db, "SELECT * FROM merchandise_sales WHERE sold_on>=? AND sold_on<=? ORDER BY created_at DESC,id DESC", from, to);
     return await asyncMap(rows, async (r) => ({
       ...r,
+      payment_method: reportedPayment(r),
       ...!costs ? {
         cost_total: void 0
       } : {},
@@ -5792,16 +5802,28 @@ var merchandiseRoutes = /* @__PURE__ */ (() => {
     if (part === "stock" && method === "GET") {
       await requireAccess(db, user, "merchandise.stock.read");
       const since = url.searchParams.get("from");
-      const movements = "SELECT m.*,p.sku,p.name product_name,u.username actor_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id JOIN users u ON u.id=m.created_by";
       if (!since) return {
-        items: await all(db, `${movements} ORDER BY m.created_at DESC,m.id DESC LIMIT 2000`)
+        items: await all(db, `${stockHistory} ORDER BY m.created_at DESC,m.id DESC LIMIT 2000`)
       };
       const from = date(since);
       return {
         from,
         limit: STOCK_EXPORT_LIMIT,
-        items: await all(db, `${movements} WHERE m.created_at>=? ORDER BY m.created_at DESC,m.id DESC LIMIT ${STOCK_EXPORT_LIMIT}`, (/* @__PURE__ */ new Date(`${from}T00:00:00+08:00`)).toISOString())
+        items: await movementsSince(db, from)
       };
+    }
+    if (part === "stock-export" && !id && method === "GET") {
+      await requireAccess(db, user, "merchandise.reports.read");
+      await requireAccess(db, user, "merchandise.reports.export");
+      await requireAccess(db, user, "merchandise.stock.read");
+      const { from, to } = dateRange(url);
+      return await tx(db, async () => ({
+        from,
+        to,
+        stock: await productList(db, user),
+        sales: await saleList(db, user, from, to),
+        movements: await movementsSince(db, from)
+      }));
     }
     if (part === "sales" && method === "GET" && !id) {
       await requireAccess(db, user, "merchandise.sales.read");
@@ -12412,6 +12434,7 @@ var index_default = {
         return Response.json({ ok: true, result }, { headers: { "Cache-Control": "no-store", "X-SPH-Modules-Revision": "20261016.1" } });
       }
       const result = await transaction(client, identity, storage, async (db) => {
+        if (b.method === "GET" && b.path === "merchandise/stock-export") await db.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
         const user = await one(db, "SELECT * FROM users WHERE id=? AND status='ACTIVE'", verified.id);
         assert(user, "Akun tidak aktif.", 401);
         user.request_id = requestId;

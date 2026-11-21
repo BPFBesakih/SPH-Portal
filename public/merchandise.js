@@ -292,18 +292,17 @@ async function exportSalesMonthlyReport(){
 
 async function exportMonthlyReport(){
   if(!allowed('merchandise.reports.export'))return;
+  const from=M.from,to=M.to;
   const {merchandiseMonthlyWorkbook}=await import('./merchandise-report-xlsx.js');
-  // Semua mutasi sejak awal periode (bukan hanya 2.000 terbaru) untuk menyusun saldo harian.
-  const ledger=(await api(`merchandise/stock?from=${M.from}`)).items;
+  const snapshot=await api(`merchandise/stock-export?from=${from}&to=${to}`);
   const logoUrl=exportModuleURL('assets/bp-besakih.png');
   const logoResponse=await fetch(logoUrl);
   if(!logoResponse.ok)throw new Error('Logo resmi BPFKSPA gagal dimuat. Silakan coba kembali.');
   const logoBytes=new Uint8Array(await logoResponse.arrayBuffer());
   const result=merchandiseMonthlyWorkbook({
-    from:M.from,to:M.to,stock:M.report.stock,sales:M.report.sales,
-    movements:ledger,canCost:allowed('merchandise.catalog.costs'),today:localToday(),logoBytes
+    ...snapshot,canCost:allowed('merchandise.catalog.costs'),today:localToday(),logoBytes
   });
-  await post('merchandise/reports/export',{period:M.from+'/'+M.to,format:'DAILY_STOCK'});
+  await post('merchandise/reports/export',{period:from+'/'+to,format:'DAILY_STOCK'});
   saveBlob(result.blob,result.filename);
   toast('Laporan stok lengkap '+result.days+' hari / '+result.products+' barang siap diunduh.');
 }

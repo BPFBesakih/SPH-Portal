@@ -123,9 +123,11 @@ test('stok gudang: tabel III, hitungan pertama sebagai stok awal gudang, pindah 
 });
 test('stok gudang di luar periode hitungan: kosong sebelum dihitung, saldo awal sesudahnya',async()=>{
   const before=merchandiseMonthlyWorkbook({...split,to:'2026-11-01'});
-  assert.equal(before.warehouseClosing,0);
+  assert.equal(before.warehouseClosing,null);
   const f=await unpack(before.blob);
   assert.equal(text(f.get('xl/worksheets/sheet3.xml'),'I29'),'Belum dihitung');
+  assert.equal(text(f.get('xl/worksheets/sheet3.xml'),'A30'),'Belum dihitung');
+  assert.equal(cellAt(f.get('xl/worksheets/sheet3.xml'),'G30'),null);
   const after=merchandiseMonthlyWorkbook({...split,from:'2026-11-03',to:'2026-11-03'});
   const g=await unpack(after.blob),final=g.get('xl/worksheets/sheet3.xml');
   assert.equal(cellAt(final,'C29'),'<v>35</v>');assert.equal(cellAt(final,'G29'),'<f>C29+D29-E29+F29</f><v>37</v>');
@@ -137,4 +139,16 @@ test('data gudang yang tidak konsisten ditolak, bukan ditebak',()=>{
   const twice=[...split.movements,{...split.movements[2],created_at:'2026-11-03T05:00:00Z'}];
   assert.throws(()=>merchandiseMonthlyWorkbook({...split,movements:twice}),/lebih dari sekali/);
   assert.throws(()=>merchandiseMonthlyWorkbook({...split,movements:Array.from({length:10000},()=>split.movements[0])}),/batas API/);
+});
+
+test('subtotal gudang menyebut cakupan opname dan mempertahankan nol yang sudah dihitung',async()=>{
+  for(const [qty,expected] of [[null,'SUBTOTAL'],[0,'JUMLAH']]){
+    const stock=[{...product,warehouse_qty:0},{...product,sku:'MER-002',warehouse_qty:qty}];
+    const result=merchandiseMonthlyWorkbook({...options,stock});
+    const sheet=(await unpack(result.blob)).get('xl/worksheets/sheet5.xml');
+    assert.equal(result.warehouseClosing,0);
+    assert.equal(text(sheet,'A32'),expected);
+    assert.match(cellAt(sheet,'G32'),/<v>0<\/v>/);
+    assert.match(text(sheet,'I32'),qty===null?/1\/2 barang/:/2\/2 barang/);
+  }
 });

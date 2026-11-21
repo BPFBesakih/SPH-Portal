@@ -89,6 +89,7 @@ export default {
    const verified=await identity.verify(b.access_token);assert(uuid.test(verified?.id),'Sesi berakhir. Silakan masuk kembali.',401);
    const claims=JSON.parse(atob(b.access_token.split('.')[1].replaceAll('-','+').replaceAll('_','/')));assert(claims.sub===verified.id&&uuid.test(claims.session_id),'Sesi berakhir. Silakan masuk kembali.',401);
    const result=await transaction(client,identity,storage,async db=>{
+    if(b.method==='GET'&&b.path==='merchandise/stock-export')await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     const user=await one(db,"SELECT * FROM users WHERE id=? AND status='ACTIVE'",verified.id);assert(user,'Akun tidak aktif.',401);user.request_id=requestId;
     const session=await one(db,'SELECT id FROM portal_auth_private.web_sessions WHERE token_hash=? AND user_id=? AND auth_session_id=? AND revoked_at IS NULL AND expires_at>clock_timestamp() AND lease_hash=? AND lease_until>clock_timestamp() AND version=?',b.session_hash,user.id,claims.session_id,b.lease_hash,b.session_version);
     assert(session,'Sesi berakhir. Silakan masuk kembali.',401);

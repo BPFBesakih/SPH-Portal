@@ -106,6 +106,9 @@ Keputusan pemilik 20 November 2026. Cabang `claude/bisnis-stok-gudang-card`.
   mutasi terbaru untuk halaman Riwayat Stok.
 - `GET merchandise/overview` menambah `products_display_low` dan
   `products_warehouse_uncounted`; `products_low` kini memakai total display + gudang.
+- `GET merchandise/stock-export?from=YYYY-MM-DD&to=YYYY-MM-DD` membaca saldo,
+  transaksi periode, dan mutasi sejak awal periode dalam satu snapshot saat ekspor.
+  Akses memerlukan izin baca laporan, ekspor laporan, dan baca stok.
 
 ### Laporan
 
@@ -122,6 +125,8 @@ Keputusan pemilik 20 November 2026. Cabang `claude/bisnis-stok-gudang-card`.
 - **Ekspor Detail Transaksi**: lembar Stok memuat stok display, gudang, dan total;
   lembar Mutasi Stok memuat lokasi.
 - Halaman **Laporan** menampilkan rekap metode pembayaran dengan urutan yang sama.
+- Baris jumlah gudang menampilkan **Belum dihitung**, **SUBTOTAL**, atau **JUMLAH**
+  sesuai cakupan opname. Kolom keterangan merinci jumlah barang yang sudah dihitung.
 
 ### Urutan rilis
 
@@ -132,17 +137,16 @@ Keputusan pemilik 20 November 2026. Cabang `claude/bisnis-stok-gudang-card`.
 2. **portal-api**: pastikan snapshot aktif sama dengan `master` sebelum cabang ini
    (SHA-256 `b0e773a6c73cbe3b5b4edfbf56afe1673d567213be368b2f36752bfe03b05bf7`),
    lalu deploy `supabase/deploy/portal-api/index.ts`. Bila snapshot aktif berbeda,
-   bangun ulang hanya blok merchandise di atas snapshot aktif:
+   bangun ulang pembaruan merchandise di atas snapshot aktif:
    `node scripts/build-merchandise-update.mjs <snapshot-aktif.ts> <sha256>`.
-   Skrip hanya mengganti lingkup `var merchandiseRoutes = (() => { … })();`
-   (tanpa perubahan modul, keluarannya identik byte demi byte).
+   Skrip memperbarui modul merchandise dan mengaktifkan transaksi PostgreSQL
+   `REPEATABLE READ` khusus untuk ekspor stok sebelum pembacaan data pertama.
 3. **Frontend**: merge ke `master` (Cloudflare Pages memakai `site-info/dist`).
 4. Setelah rilis: petugas menghitung isi gudang dan mencatat **Stok awal gudang**
    per barang; Beranda menampilkan jumlah barang yang belum dihitung.
 
-Frontend baru tanpa backend baru: pilihan CARD/gudang ditolak server (422) dan
-ekspor stok bulanan tetap berjalan seperti sebelumnya. Jalankan langkah 1–3
-berurutan dalam satu sesi rilis.
+Endpoint ekspor stok dan pilihan CARD/gudang tersedia setelah rilis backend.
+Jalankan langkah 1–3 berurutan dalam satu sesi rilis.
 
 ### Rollback
 

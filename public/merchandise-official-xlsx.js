@@ -115,13 +115,20 @@ function officialXml(sheet,logo){
     }
     const last=cursor-1,sumRow=cursor;
     merged('A'+sumRow,'B'+sumRow);
-    let sums=cText('A'+sumRow,'JUMLAH',8);
+    const countedRows=warehouse.rows.filter(p=>p.closing!=null).length;
+    const totalRows=warehouse.rows.length;
+    const label=countedRows===0?'Belum dihitung':countedRows<totalRows?'SUBTOTAL':'JUMLAH';
+    let sums=cText('A'+sumRow,label,8);
     for(const [col,key,style] of [['C','opening',4],['D','received',4],['E','moved',4],['F','adjustment',4],['G','closing',4],['H','closingValue',6]]){
       if(key==='closingValue'&&!warehouse.canCost)continue;
+      if(!warehouse.rows.some(p=>p[key]!=null)){sums+=blank(col+sumRow,style);continue;}
       const val=warehouse.total?.[key]??0;
       sums+=last>=first?cFormula(col+sumRow,'SUM('+col+first+':'+col+last+')',val,style):cNum(col+sumRow,val,style);
     }
-    line(sumRow,sums,23);
+    const openingCount=warehouse.rows.filter(p=>p.opening!=null).length;
+    const coverage=`Saldo awal: ${openingCount}/${totalRows}. Saldo akhir: ${countedRows}/${totalRows} barang dihitung.`;
+    sums+=cText('I'+sumRow,coverage,9);
+    line(sumRow,sums,noteHeight(coverage));
     cursor=sumRow+2;
   }
   for(const section of sheet.sections||[]){

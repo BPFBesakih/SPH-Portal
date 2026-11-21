@@ -1,14 +1,13 @@
-// Perbarui HANYA modul Bisnis (merchandise) di snapshot portal-api yang aktif.
+// Perbarui modul Bisnis dan isolasi transaksi khusus ekspor stok di snapshot aktif.
 //
 //   node scripts/build-merchandise-update.mjs <snapshot-aktif.ts> <sha256-snapshot>
 //
 // Di snapshot, modul merchandise berupa satu lingkup
 //   var merchandiseRoutes = /* @__PURE__ */ (() => { … return merchandiseRoutes2; })();
 // hasil supabase/functions/_shared/portal/merchandise.mjs yang memakai pembantu tingkat
-// atas snapshot (all, insert, update, has, requireAccess, …). Skrip ini hanya mengganti
-// isi lingkup itu dengan modul terbaru. Rute lain, gerbang, dan tambalan modul lain
-// (Cuti, Kunjungan, Absensi, E-Arsip, …) tidak disentuh. Dengan modul yang belum
-// berubah, keluarannya identik byte demi byte dengan snapshot masukan.
+// atas snapshot (all, insert, update, has, requireAccess, …). Selain modul ini,
+// skrip menyisipkan pemilihan isolasi untuk GET merchandise/stock-export pada
+// awal transaksi operasi. Menjalankan ulang pada hasil yang sama bersifat idempoten.
 // Hasil ditulis ke supabase/deploy/portal-api/index.ts.
 import {readFileSync,writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -53,9 +52,17 @@ const missing=used.filter(name=>!topLevel.has(name));
 if(missing.length)throw new Error(`Snapshot lacks top-level helpers used by merchandise: ${missing.join(', ')}`);
 
 const block=startMarker+code.trimEnd().split('\n').map(line=>line?'  '+line:line).join('\n')+'\n'+endMarker;
-const patched=source.slice(0,start)+block+source.slice(end);
+let patched=source.slice(0,start)+block+source.slice(end);
+// Atur isolasi sebelum SELECT pertama (termasuk autentikasi) pada transaksi ekspor.
+const requestStart='      const result = await transaction(client, identity, storage, async (db) => {\n';
+const userRead='        const user = await one(db, "SELECT * FROM users WHERE id=? AND status=\'ACTIVE\'"';
+const isolation='        if (b.method === "GET" && b.path === "merchandise/stock-export") await db.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");\n';
+if(!patched.includes(requestStart+isolation+userRead)){
+  const at=once(patched,requestStart+userRead,'authenticated operation transaction')+requestStart.length;
+  patched=patched.slice(0,at)+isolation+patched.slice(at);
+}
 parse(patched,{ecmaVersion:'latest',sourceType:'module'});
 const out=resolve('supabase/deploy/portal-api/index.ts');
 writeFileSync(out,patched);
 console.log(JSON.stringify({source_sha256:sha,output:out,output_sha256:createHash('sha256').update(patched).digest('hex'),
-  replaced:{module_bytes:end-start,new_module_bytes:block.length},helpers:used,unchanged:block===source.slice(start,end)}));
+  replaced:{module_bytes:end-start,new_module_bytes:block.length},helpers:used,unchanged:patched===source}));

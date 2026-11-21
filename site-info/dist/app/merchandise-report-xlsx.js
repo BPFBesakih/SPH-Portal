@@ -272,6 +272,6 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
   const blob=createOfficialMerchandiseXlsx(sheets,{logoBytes});
   return {blob,filename:'laporan-stok-merchandise-'+from+'-sd-'+to+'.xlsx',count:salesRows.length,
     days:dates.length,products:products.length,totalOpening:sum(summaryRows,'opening'),
-    totalClosing:sum(summaryRows,'closing'),warehouseClosing:sum(warehouseSummary,'closing'),
+    totalClosing:sum(summaryRows,'closing'),warehouseClosing:warehouseSummary.some(p=>counted(p.closing))?sum(warehouseSummary,'closing'):null,
     salesRevenue:sum(summaryRows,'revenue'),sheetCount:sheets.length};
 }
