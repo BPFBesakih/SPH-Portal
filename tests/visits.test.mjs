@@ -163,7 +163,8 @@ test('overview: penilaian cara lama dipetakan ke 100 − potongan + Etika; dafta
   const potongan=(1+2)*20+(1+2)*20,etika=3-2-3+5;
   // teguran: cacah lama (Etika minus dengan seragam sesuai) tetap dilaporkan untuk ruang kerja versi sebelumnya.
   assert.deepEqual(o.ringkasan,{pengantaran:14,nilai:100-(potongan-etika)/14,persenId:1-3/14,persenSeragam:1-3/14,tanpaId:3,kurangLengkap:0,tidakBerseragam:3,etika,etikaRata:etika/14,teguran:1,potongan,
-    guideDinilai:4,hariDinilai:1,guideAktif:4,berat:{disetujui:0,menunggu:0},apresiasi:{disetujui:0,menunggu:0},layak:null});
+    guideDinilai:4,hariDinilai:1,guideAktif:4,berat:{disetujui:0,menunggu:0},apresiasi:{disetujui:0,menunggu:0},
+    laporan:{review:{disetujui:0,menunggu:0,potongan:0},komplain:{disetujui:0,menunggu:0}},layak:null});
   assert.deepEqual(o.perPos.map(p=>[p.pos,p.pengantaran,p.nilai,p.etika,p.guideDinilai]),[[1,8,100-120/8,0,2],[3,6,100+3/6,3,2]],'Etika plus boleh membawa nilai di atas 100');
   assert.deepEqual(o.perRegu.map(r=>[r.regu,r.pengantaran]),[['A1',6],['A2',1],['D1',7],['D2',2]]);
   // Minimal pengantaran mengikuti aturan bulan (bawaan 10): semua masih "belum cukup".
@@ -219,8 +220,10 @@ test('nilai 100 − potongan: contoh usulan 97,5, layak reward, pelanggaran bera
   assert.deepEqual(flags.items.map(x=>[x.jenis,x.guideId,x.kode,x.petugas]).sort(),[['apresiasi','G-005','dipuji',''],['berat','G-004','pungutan','Petugas Pos Satu']]);
   for(const item of flags.items)f.route(f.users.manager,'flags/decide','POST',{id:item.id,row_version:item.row_version,action:'setujui'});
   o=overview();
-  assert.deepEqual([g('G-004').status,g('G-004').alasan],['gugur','Pelanggaran berat terverifikasi']);assert.equal(o.ringkasan.layak,4);
-  assert.deepEqual(o.peringkat.nilaiTertinggi.map(x=>[x.guideId,x.peringkat]),[['G-005',1],['G-004',2],['G-006',2],['G-001',4],['G-003',5]],'nilai sama: apresiasi penentu, lalu setara');
+  // Sejak 23 November 2026 pelanggaran berat yang disetujui menghapus nilai bulan itu (sama dengan
+  // komplain): nilai akhir 0, gugur reward, dan tidak diperingkat.
+  assert.deepEqual([g('G-004').status,g('G-004').alasan,g('G-004').nilaiAkhir,g('G-004').peringkat],['gugur','Pelanggaran berat terverifikasi — nilai bulan ini dihapus',0,null]);assert.equal(o.ringkasan.layak,4);
+  assert.deepEqual(o.peringkat.nilaiTertinggi.map(x=>[x.guideId,x.peringkat]),[['G-005',1],['G-006',2],['G-001',3],['G-003',4]],'nilai sama: apresiasi penentu, lalu setara');
   assert.deepEqual(o.peringkat.beratTerverifikasi.map(x=>x.guideId),['G-004']);
   assert.deepEqual(o.peringkat.tanpaIdTerbanyak.map(x=>x.guideId),['G-001']);assert.deepEqual(o.peringkat.etikaTerendah.map(x=>[x.guideId,x.etikaRata]),[['G-003',-5]]);
   assert.deepEqual(o.peringkat.teguranTerbanyak.map(x=>x.guideId),['G-003'],'cacah teguran formulir 2.2 tetap dilaporkan');
@@ -595,7 +598,8 @@ test('generated cloud modules await every permission check (a pending promise ne
   await assert.rejects(cloud.authorizeVisitSheetAction({db,user},deny),e=>e.status===403);
   for(const [path,method,body] of [['links','GET'],['links','POST',{action:'create',pos:1}],['activity','GET'],['exports','POST',{kind:'records',from:'2026-11-01',to:'2026-11-02',rows:1}],
     ['overview','GET'],['records','GET'],['guides','GET'],['guides','POST',{guideName:'X',kategori:'Asing',regu:'A1',aktif:true}],['guides/import','POST',{rows:[{}]}],['sheet','GET'],
-    ['scoring','GET'],['scoring/rule','POST',{berlaku_mulai:'2099-01'}],['scoring/types','POST',{}],['scoring/assessors','POST',{}],['scoring/form','POST',{}],['flags','GET'],['flags/decide','POST',{}]])
+    ['scoring','GET'],['scoring/rule','POST',{berlaku_mulai:'2099-01'}],['scoring/types','POST',{}],['scoring/assessors','POST',{}],['scoring/form','POST',{}],['scoring/reports','POST',{}],
+    ['flags','GET'],['flags/decide','POST',{}],['guest-reports','GET'],['guest-reports/decide','POST',{}]])
     await assert.rejects(cloud.visitRoutes({db,user,p:['visits',...path.split('/')],method,body:body||{},url:new URL('https://portal.test/?')},deny),e=>e.status===403,`${method} visits/${path}`);
 });
 

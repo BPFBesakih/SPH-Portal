@@ -6081,7 +6081,22 @@ var scoringRules = Object.freeze({
   catatanMin: 3,
   flagLimit: 500
 });
-var findingKinds = Object.freeze(["teguran", "berat", "apresiasi"]);
+var findingKinds = Object.freeze(["teguran", "berat", "apresiasi", "review", "komplain"]);
+var guestReportRules = Object.freeze({
+  keteranganMin: 3,
+  keteranganMaks: 500,
+  kronologiMin: 3,
+  kronologiMaks: 1e3,
+  wisatawanMaks: 120,
+  mundurHari: 7,
+  potonganBawaan: 5,
+  potonganMaks: 100,
+  klarifikasiMin: 3,
+  klarifikasiMaks: 1e3,
+  listLimit: 500
+});
+var guestReportKinds = Object.freeze(["review", "komplain"]);
+var guestReportStatuses = Object.freeze(["menunggu", "disetujui", "ditolak"]);
 var seragamValues = Object.freeze(["lengkap", "kurang", "tidak"]);
 var seragamLabels = Object.freeze({
   lengkap: "Lengkap",
@@ -6233,7 +6248,7 @@ async function saveFindingType(db, user, b, audit2) {
     });
     return typeView(saved2);
   }
-  assert(findingKinds.includes(b.jenis), "Jenis harus teguran, berat, atau apresiasi.");
+  assert(findingKinds.includes(b.jenis), "Jenis harus teguran, berat, apresiasi, review, atau komplain.");
   assert(!(await all(db, "SELECT label FROM visit_finding_types WHERE jenis=?", b.jenis)).some((t) => t.label.toLocaleLowerCase("id") === label.toLocaleLowerCase("id")), "Nama jenis ini sudah ada.", 409);
   let base = slugOf(label);
   if (base.length < 2) base = `${b.jenis}-jenis`;
@@ -6305,6 +6320,7 @@ async function formSettings(db) {
   return {
     petunjuk_id: s?.petunjuk_id || "",
     petunjuk_seragam: s?.petunjuk_seragam || "",
+    pot_review: Number(s?.pot_review || guestReportRules.potonganBawaan),
     row_version: Number(s?.row_version || 1),
     updated_at: s?.updated_at || null
   };
@@ -6446,6 +6462,173 @@ async function flagCounts(db, from, to, until = null) {
     g[r.jenis][r.status] = Number(r.n);
   }
   return out;
+}
+var guestReportSelect = `SELECT r.*,t.label,g.regu,(SELECT username FROM users WHERE id=r.decided_by) AS decided_by_name FROM visit_guest_reports r
+ LEFT JOIN visit_finding_types t ON t.id=r.kode LEFT JOIN visit_guides g ON g.id=r.guide_id`;
+var guestReportView = (r, pribadi) => ({
+  id: r.id,
+  jenis: r.jenis,
+  jenisAwal: r.jenis_awal,
+  kode: r.kode,
+  label: r.label || r.kode,
+  guideId: r.guide_id,
+  guideName: r.guide_name,
+  regu: r.regu || "",
+  pos: Number(r.pos),
+  tanggal: r.wita_date,
+  waktu: r.recorded_at,
+  keterangan: r.keterangan,
+  kronologi: r.kronologi || "",
+  wisatawan: pribadi ? {
+    nama: r.wisatawan_nama || "",
+    asal: r.wisatawan_asal || "",
+    kontak: r.wisatawan_kontak || ""
+  } : null,
+  petugas: r.petugas_nama,
+  status: r.status,
+  potongan: r.potongan == null ? null : Number(r.potongan),
+  klarifikasi: r.klarifikasi || "",
+  keputusanCatatan: r.keputusan_catatan || "",
+  diputuskanOleh: r.decided_by_name || "",
+  diputuskanPada: r.decided_at || null,
+  row_version: Number(r.row_version)
+});
+async function guestReportList(db, q, { pribadi = false } = {}) {
+  const where = ["r.wita_date>=?", "r.wita_date<=?"], args = [q.from, q.to];
+  if (q.status) {
+    assert(guestReportStatuses.includes(q.status), "Status catatan tidak valid.");
+    where.push("r.status=?");
+    args.push(q.status);
+  }
+  if (q.jenis) {
+    assert(guestReportKinds.includes(q.jenis), "Jenis catatan tidak valid.");
+    where.push("r.jenis=?");
+    args.push(q.jenis);
+  }
+  const items = (await all(db, `${guestReportSelect} WHERE ${where.join(" AND ")} ORDER BY CASE WHEN r.status='menunggu' THEN 0 ELSE 1 END,r.wita_date DESC,r.recorded_at DESC LIMIT ?`, ...args, guestReportRules.listLimit)).map((r) => guestReportView(r, pribadi));
+  const counts = Object.fromEntries(guestReportStatuses.map((s) => [s, 0]));
+  for (const r of await all(db, "SELECT status,count(*) AS n FROM visit_guest_reports WHERE wita_date>=? AND wita_date<=? GROUP BY status", q.from, q.to)) counts[r.status] = Number(r.n);
+  const waiting = {
+    review: 0,
+    komplain: 0
+  };
+  for (const r of await all(db, "SELECT jenis,count(*) AS n FROM visit_guest_reports WHERE status='menunggu' GROUP BY jenis")) waiting[r.jenis] = Number(r.n);
+  const types = await all(db, "SELECT id,jenis,label FROM visit_finding_types WHERE jenis IN('review','komplain') AND is_active=1 ORDER BY jenis,urut,label");
+  const jenis = Object.fromEntries(guestReportKinds.map((k) => [k, types.filter((t) => t.jenis === k).map((t) => ({
+    kode: t.id,
+    label: t.label
+  }))]));
+  return {
+    items,
+    counts,
+    menunggu_semua: waiting.review + waiting.komplain,
+    menunggu_jenis: waiting,
+    batas: guestReportRules.listLimit,
+    pot_review: (await formSettings(db)).pot_review,
+    jenis
+  };
+}
+var guestDecisionSnapshot = (r) => ({
+  status: r.status,
+  jenis: r.jenis,
+  kode: r.kode,
+  potongan: r.potongan == null ? null : Number(r.potongan),
+  klarifikasi: r.klarifikasi || "",
+  catatan: r.keputusan_catatan || "",
+  diputuskan_oleh: r.decided_by || null,
+  diputuskan_pada: r.decided_at || null,
+  diperbarui_pada: r.updated_at,
+  row_version: Number(r.row_version)
+});
+async function decideGuestReport(db, user, b, audit2) {
+  assert(["setujui", "tolak", "buka", "pindah"].includes(b?.action), "Tindakan tidak valid.");
+  const r = await one(db, "SELECT * FROM visit_guest_reports WHERE id=?", String(b.id || ""));
+  assert(r, "Catatan tidak ditemukan.", 404);
+  assert(Number(b.row_version) === Number(r.row_version), "Catatan sudah berubah. Muat ulang halaman.", 409);
+  const trimText = (value, max, label) => {
+    const v = typeof value === "string" ? value.trim() : "";
+    assert(v.length <= max, `${label} maksimal ${max} huruf.`);
+    return v;
+  };
+  const note = trimText(b.catatan, 500, "Catatan keputusan"), stamp = now(), R = guestReportRules;
+  if (b.action === "buka") {
+    assert(["disetujui", "ditolak"].includes(r.status), "Catatan ini belum diputuskan.", 409);
+    await run(db, "UPDATE visit_guest_reports SET status='menunggu',potongan=NULL,decided_by=NULL,decided_at=NULL,keputusan_catatan=?,updated_at=?,row_version=row_version+1 WHERE id=? AND row_version=?", note, stamp, r.id, r.row_version);
+  } else {
+    assert(r.status === "menunggu", "Catatan ini sudah diputuskan. Buka kembali dulu bila perlu diubah.", 409);
+    if (b.action === "pindah") {
+      const target = r.jenis === "review" ? "komplain" : "review";
+      assert(b.jenis === void 0 || b.jenis === target, `Catatan ini hanya bisa dipindah ke ${target === "review" ? "review negatif" : "komplain"}.`);
+      const type = await one(db, "SELECT id,jenis FROM visit_finding_types WHERE id=? AND is_active=1", String(b.kode || ""));
+      assert(type && type.jenis === target, `Pilih jenis ${target === "review" ? "review negatif" : "komplain"} yang aktif.`);
+      await run(db, "UPDATE visit_guest_reports SET jenis=?,kode=?,keputusan_catatan=?,updated_at=?,row_version=row_version+1 WHERE id=? AND row_version=?", target, type.id, note, stamp, r.id, r.row_version);
+    } else if (b.action === "tolak") {
+      assert(note.length >= R.klarifikasiMin, "Tulis alasan penolakan.");
+      const klarifikasi = trimText(b.klarifikasi ?? r.klarifikasi, R.klarifikasiMaks, "Klarifikasi guide");
+      await run(db, "UPDATE visit_guest_reports SET status='ditolak',potongan=NULL,klarifikasi=?,decided_by=?,decided_at=?,keputusan_catatan=?,updated_at=?,row_version=row_version+1 WHERE id=? AND row_version=?", klarifikasi, user.id, stamp, note, stamp, r.id, r.row_version);
+    } else if (r.jenis === "review") {
+      const raw = b.potongan, potongan = Number(raw);
+      assert(raw !== "" && raw != null && Number.isInteger(potongan) && potongan >= 1 && potongan <= R.potonganMaks, `Potongan review negatif harus bilangan bulat 1\u2013${R.potonganMaks}.`);
+      const klarifikasi = trimText(b.klarifikasi ?? r.klarifikasi, R.klarifikasiMaks, "Klarifikasi guide");
+      await run(db, "UPDATE visit_guest_reports SET status='disetujui',potongan=?,klarifikasi=?,decided_by=?,decided_at=?,keputusan_catatan=?,updated_at=?,row_version=row_version+1 WHERE id=? AND row_version=?", potongan, klarifikasi, user.id, stamp, note, stamp, r.id, r.row_version);
+    } else {
+      const klarifikasi = trimText(b.klarifikasi ?? r.klarifikasi, R.klarifikasiMaks, "Klarifikasi guide");
+      assert(klarifikasi.length >= R.klarifikasiMin, "Catat klarifikasi guide dulu (atau tulis bahwa guide tidak menanggapi), lalu setujui komplain.");
+      await run(db, "UPDATE visit_guest_reports SET status='disetujui',potongan=NULL,klarifikasi=?,decided_by=?,decided_at=?,keputusan_catatan=?,updated_at=?,row_version=row_version+1 WHERE id=? AND row_version=?", klarifikasi, user.id, stamp, note, stamp, r.id, r.row_version);
+    }
+  }
+  const saved = await one(db, `${guestReportSelect} WHERE r.id=?`, r.id);
+  await audit2(db, user, "DECIDE", "visit_guest_reports", r.id, {
+    tindakan: b.action,
+    jenis: saved.jenis,
+    guide: r.guide_id,
+    tanggal: r.wita_date,
+    sebelum: guestDecisionSnapshot(r),
+    sesudah: guestDecisionSnapshot(saved)
+  }, note);
+  return guestReportView(saved, true);
+}
+async function guestReportEffects(db, from, to, until = null) {
+  const out = /* @__PURE__ */ new Map();
+  const time = until ? " AND recorded_at<=?" : "";
+  for (const r of await all(db, `SELECT guide_id,jenis,status,count(*) AS n,coalesce(sum(potongan),0) AS potongan FROM visit_guest_reports
+  WHERE wita_date>=? AND wita_date<=? AND status IN('menunggu','disetujui')${time} GROUP BY guide_id,jenis,status`, from, to, ...until ? [until] : [])) {
+    let g = out.get(r.guide_id);
+    if (!g) {
+      g = {
+        review: {
+          disetujui: 0,
+          menunggu: 0,
+          potongan: 0
+        },
+        komplain: {
+          disetujui: 0,
+          menunggu: 0
+        }
+      };
+      out.set(r.guide_id, g);
+    }
+    g[r.jenis][r.status] = Number(r.n);
+    if (r.jenis === "review" && r.status === "disetujui") g.review.potongan = Number(r.potongan);
+  }
+  return out;
+}
+async function guestReportsByAssessor(db, from, to) {
+  return await all(db, `SELECT petugas_nama AS nama,pos,jenis,status,count(*) AS n FROM visit_guest_reports WHERE wita_date>=? AND wita_date<=? GROUP BY petugas_nama,pos,jenis,status`, from, to);
+}
+async function saveGuestReportSettings(db, user, b, audit2) {
+  const raw = b?.pot_review, n = Number(raw);
+  assert(raw !== "" && raw != null && Number.isInteger(n) && n >= 1 && n <= guestReportRules.potonganMaks, `Potongan bawaan review negatif harus bilangan bulat 1\u2013${guestReportRules.potonganMaks}.`);
+  const before = await formSettings(db);
+  await update(db, "visit_form_settings", 1, b.row_version, {
+    pot_review: n,
+    updated_by: user.id
+  });
+  await audit2(db, user, "UPDATE", "visit_form_settings", "1", {
+    pot_review: n,
+    sebelumnya: before.pot_review
+  });
+  return await formSettings(db);
 }
 
 // supabase/functions/_shared/portal/visit-data.mjs
@@ -7250,28 +7433,50 @@ async function visitDayRows(db, from, to, until = null) {
   }
   return out;
 }
+var nilaiAkhirOf = (g) => g.komplain > 0 || g.berat > 0 ? 0 : Math.max(0, g.nilai - (g.potonganReview || 0));
 function rewardStatus(g, rule) {
+  if (g.komplain > 0) return {
+    status: "gugur",
+    sebab: "komplain",
+    alasan: "Komplain disetujui \u2014 nilai bulan ini dihapus"
+  };
   if (g.berat > 0) return {
     status: "gugur",
-    alasan: "Pelanggaran berat terverifikasi"
+    sebab: "berat",
+    alasan: "Pelanggaran berat terverifikasi \u2014 nilai bulan ini dihapus"
   };
   if (g.antar < rule.minimal) return {
     status: "kurang",
     alasan: `Belum cukup data (< ${rule.minimal} pengantaran)`
   };
-  if (g.nilai < rule.ambang) return {
+  const nilai = g.nilaiAkhir ?? g.nilai;
+  if (nilai < rule.ambang) return {
     status: "bawah",
-    alasan: `Nilai di bawah ambang ${rule.ambang}`
+    alasan: g.potonganReview ? `Nilai akhir di bawah ambang ${rule.ambang} (sudah dipotong review negatif ${g.potonganReview})` : `Nilai di bawah ambang ${rule.ambang}`
   };
+  const menunggu = [g.beratMenunggu ? "pelanggaran berat" : null, g.komplainMenunggu ? "komplain" : null, g.reviewMenunggu ? "review negatif" : null].filter(Boolean);
   return {
     status: "layak",
-    alasan: g.beratMenunggu ? "Layak, tetapi ada laporan pelanggaran berat yang belum diputuskan" : "Layak"
+    alasan: menunggu.length ? `Layak, tetapi ada ${menunggu.join(", ")} yang belum diputuskan` : "Layak"
   };
 }
 async function visitAssessorStats(db, from, to, ruleOf) {
   const rows = await all(db, `SELECT coalesce(petugas_nama,'') AS nama,pos,substr(wita_date,1,7) AS bulan,count(*) AS antar,sum(etika) AS etika,${visitFindingSums} FROM visit_evaluations
   WHERE status='aktif' AND versi=2 AND wita_date>=? AND wita_date<=? GROUP BY coalesce(petugas_nama,''),pos,substr(wita_date,1,7)`, from, to);
-  const by = /* @__PURE__ */ new Map();
+  const by = /* @__PURE__ */ new Map(), statOf = (nama) => {
+    let s = by.get(nama);
+    if (!s) {
+      s = {
+        ...emptyStat(),
+        pos: /* @__PURE__ */ new Set(),
+        review: 0,
+        komplain: 0,
+        ditolak: 0
+      };
+      by.set(nama, s);
+    }
+    return s;
+  };
   for (const r of rows) {
     const n = {
       nId: Number(r.n_id),
@@ -7279,14 +7484,7 @@ async function visitAssessorStats(db, from, to, ruleOf) {
       nTidak: Number(r.n_tidak),
       nTeguran: Number(r.n_teguran)
     };
-    let s = by.get(r.nama);
-    if (!s) {
-      s = {
-        ...emptyStat(),
-        pos: /* @__PURE__ */ new Set()
-      };
-      by.set(r.nama, s);
-    }
+    const s = statOf(r.nama);
     s.antar += Number(r.antar);
     s.nId += n.nId;
     s.nKurang += n.nKurang;
@@ -7296,11 +7494,20 @@ async function visitAssessorStats(db, from, to, ruleOf) {
     s.potongan += potonganOf(ruleOf(r.bulan), n);
     s.pos.add(Number(r.pos));
   }
+  for (const r of await guestReportsByAssessor(db, from, to)) {
+    const s = statOf(r.nama), n = Number(r.n);
+    s.pos.add(Number(r.pos));
+    s[r.jenis] += n;
+    if (r.status === "ditolak") s.ditolak += n;
+  }
   return [...by.entries()].map(([nama, s]) => ({
     petugas: nama || null,
     pos: [...s.pos].sort(),
-    ...visitFigures(s)
-  })).sort((a, b) => b.pengantaran - a.pengantaran);
+    ...visitFigures(s),
+    review: s.review,
+    komplain: s.komplain,
+    laporanDitolak: s.ditolak
+  })).sort((a, b) => b.pengantaran - a.pengantaran || b.review + b.komplain - a.review - a.komplain);
 }
 async function visitOverview(db, from, to) {
   const singleMonth = monthsBetween(from.slice(0, 7), to.slice(0, 7)).length === 1 && from.endsWith("-01") && (to === monthLastDay(to.slice(0, 7)) || to === today());
@@ -7322,13 +7529,24 @@ async function overviewOf(db, from, to, dayRows, singleMonth) {
     set.add(r.day);
   }
   const ruleOf = await scoreRuleFinder(db), months = monthsBetween(from.slice(0, 7), to.slice(0, 7)), rule = ruleOf(to.slice(0, 7));
-  const flags = await flagCounts(db, from, to);
+  const flags = await flagCounts(db, from, to), laporan = await guestReportEffects(db, from, to);
   const noFlags = {
     berat: {
       disetujui: 0,
       menunggu: 0
     },
     apresiasi: {
+      disetujui: 0,
+      menunggu: 0
+    }
+  };
+  const noLaporan = {
+    review: {
+      disetujui: 0,
+      menunggu: 0,
+      potongan: 0
+    },
+    komplain: {
       disetujui: 0,
       menunggu: 0
     }
@@ -7350,6 +7568,21 @@ async function overviewOf(db, from, to, dayRows, singleMonth) {
     }
   };
   for (const f of flags.values()) for (const j of ["berat", "apresiasi"]) for (const st of ["disetujui", "menunggu"]) flagSum[j][st] += f[j][st];
+  const laporanSum = {
+    review: {
+      disetujui: 0,
+      menunggu: 0,
+      potongan: 0
+    },
+    komplain: {
+      disetujui: 0,
+      menunggu: 0
+    }
+  };
+  for (const l of laporan.values()) {
+    for (const j of ["review", "komplain"]) for (const st of ["disetujui", "menunggu"]) laporanSum[j][st] += l[j][st];
+    laporanSum.review.potongan += l.review.potongan;
+  }
   const perPos = [1, 3].map((pos) => {
     const s = emptyStat();
     let count = 0;
@@ -7383,7 +7616,7 @@ async function overviewOf(db, from, to, dayRows, singleMonth) {
   for (const g of guides) {
     const s = total.get(g.id);
     if (Number(g.is_active) !== 1 || !s || !s.antar) continue;
-    const f = flags.get(g.id) || noFlags;
+    const f = flags.get(g.id) || noFlags, l = laporan.get(g.id) || noLaporan;
     const row = {
       guideId: g.id,
       nama: g.name,
@@ -7396,14 +7629,26 @@ async function overviewOf(db, from, to, dayRows, singleMonth) {
       beratMenunggu: f.berat.menunggu,
       apresiasi: f.apresiasi.disetujui,
       apresiasiMenunggu: f.apresiasi.menunggu,
+      review: l.review.disetujui,
+      reviewMenunggu: l.review.menunggu,
+      potonganReview: l.review.potongan,
+      komplain: l.komplain.disetujui,
+      komplainMenunggu: l.komplain.menunggu,
       rataTeguran: s.nTeguran / s.antar,
       porsiTanpaId: s.nId / s.antar,
       porsiSeragam: (s.nKurang + s.nTidak) / s.antar
     };
+    row.gugur = row.komplain > 0 || row.berat > 0;
+    row.nilaiAkhir = singleMonth ? nilaiAkhirOf(row) : null;
     if (singleMonth) Object.assign(row, rewardStatus(row, rule));
     list.push(row);
   }
   const n = visitRules.jumlahPeringkat, enough = list.filter((x) => x.antar >= rule.minimal), short = list.filter((x) => x.antar < rule.minimal);
+  const rankKey = singleMonth ? "nilaiAkhir" : "nilai", ranking = enough.filter((x) => !x.gugur);
+  const byName = (a, b) => {
+    const x = a.nama.toLowerCase(), y = b.nama.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : 0;
+  };
   const ringkasan = {
     ...visitFigures(sum),
     guideDinilai: evaluated,
@@ -7411,6 +7656,7 @@ async function overviewOf(db, from, to, dayRows, singleMonth) {
     guideAktif: guides.filter((g) => Number(g.is_active) === 1).length,
     berat: flagSum.berat,
     apresiasi: flagSum.apresiasi,
+    laporan: laporanSum,
     layak: singleMonth ? list.filter((x) => x.status === "layak").length : null
   };
   return {
@@ -7430,19 +7676,24 @@ async function overviewOf(db, from, to, dayRows, singleMonth) {
       }))
     },
     minimalPengantaran: rule.minimal,
-    diperingkat: enough.length,
+    diperingkat: ranking.length,
     belumCukup: short.length,
     peringkat: {
-      nilaiTertinggi: ranked(enough, "nilai", false, n, "apresiasi"),
-      nilaiTerendah: ranked(enough, "nilai", true, n),
+      nilaiTertinggi: ranked(ranking, rankKey, false, n, "apresiasi"),
+      nilaiTerendah: ranked(ranking, rankKey, true, n),
       tanpaIdTerbanyak: ranked(enough.filter((x) => x.tanpaId > 0), "porsiTanpaId", false, n),
       seragamTerbanyak: ranked(enough.filter((x) => x.kurangLengkap + x.tidakBerseragam > 0), "porsiSeragam", false, n),
       etikaTerendah: ranked(enough.filter((x) => x.etikaRata < 0), "etikaRata", true, n),
       teguranTerbanyak: ranked(enough.filter((x) => x.teguran > 0), "rataTeguran", false, n),
       beratTerverifikasi: ranked(list.filter((x) => x.berat > 0), "berat", false, list.length),
+      komplainDisetujui: ranked(list.filter((x) => x.komplain > 0), "komplain", false, list.length),
+      reviewNegatif: ranked(list.filter((x) => x.review > 0), "potonganReview", false, list.length),
       belumCukup: ranked(short, "antar", false, n)
     },
-    perGuide: ranked(list, "nilai", false, list.length, "apresiasi"),
+    perGuide: [...ranked(list.filter((x) => !x.gugur), rankKey, false, list.length, "apresiasi"), ...list.filter((x) => x.gugur).sort(byName).map((x) => ({
+      ...x,
+      peringkat: null
+    }))],
     periode: {
       folded_through: (await one(db, "SELECT folded_through FROM visit_sheet_state WHERE id=1"))?.folded_through || null,
       bulan_ringkasan: []
@@ -7478,16 +7729,20 @@ async function previousRewardCount(db, rows, from, to, until) {
   for (const row of rows) addStat(statFor(totals, row.guide_id), row.n);
   if (!totals.size) return 0;
   const ruleOf = await scoreRuleFinder(db), rule = ruleOf(from.slice(0, 7));
-  const flags = await flagCounts(db, from, to, until);
+  const flags = await flagCounts(db, from, to, until), laporan = await guestReportEffects(db, from, to, until);
   let count = 0;
   for (const { id } of await all(db, "SELECT id FROM visit_guides WHERE is_active=1")) {
     const stat = totals.get(id);
     if (!stat?.antar) continue;
+    const l = laporan.get(id);
     const guide = {
       antar: stat.antar,
       nilai: visitFigures(stat).nilai,
-      berat: flags.get(id)?.berat.disetujui || 0
+      berat: flags.get(id)?.berat.disetujui || 0,
+      komplain: l?.komplain.disetujui || 0,
+      potonganReview: l?.review.potongan || 0
     };
+    guide.nilaiAkhir = nilaiAkhirOf(guide);
     if (rewardStatus(guide, rule).status === "layak") count++;
   }
   return count;
@@ -8870,12 +9125,13 @@ async function visitRoutes({ db, user, p, method, body: b = {}, url }, deps = lo
       can_manage: manage
     };
   }
-  if (p[1] === "scoring" && p.length === 3 && method === "POST" && ["rule", "rule-delete", "types", "assessors", "form"].includes(p[2])) {
+  if (p[1] === "scoring" && p.length === 3 && method === "POST" && ["rule", "rule-delete", "types", "assessors", "form", "reports"].includes(p[2])) {
     assert(await has2(db, user, "visits.settings.manage"), "Hanya pengelola kunjungan yang dapat mengubah aturan penilaian.", 403);
     if (p[2] === "rule") return await tx(db, async () => await saveScoreRule(db, user, b, audit2));
     if (p[2] === "rule-delete") return await tx(db, async () => await deleteScoreRule(db, user, b, audit2));
     if (p[2] === "types") return await tx(db, async () => await saveFindingType(db, user, b, audit2));
     if (p[2] === "assessors") return await tx(db, async () => await saveAssessor(db, user, b, audit2));
+    if (p[2] === "reports") return await tx(db, async () => await saveGuestReportSettings(db, user, b, audit2));
     return await tx(db, async () => await saveFormSettings(db, user, b, audit2));
   }
   if (p[1] === "flags" && p.length === 2 && method === "GET") {
@@ -8899,6 +9155,30 @@ async function visitRoutes({ db, user, p, method, body: b = {}, url }, deps = lo
   if (p[1] === "flags" && p.length === 3 && p[2] === "decide" && method === "POST") {
     assert(await has2(db, user, "visits.settings.manage"), "Hanya pengelola kunjungan yang dapat memverifikasi laporan.", 403);
     return await tx(db, async () => await decideFlag(db, user, b, audit2));
+  }
+  if (p[1] === "guest-reports" && p.length === 2 && method === "GET") {
+    await requireAny(db, user, ["visits.settings.manage", "visits.dashboard.read", "visits.reports.read"], has2);
+    const manage = await has2(db, user, "visits.settings.manage"), r = range(url), q = url.searchParams, filter = {
+      ...r
+    };
+    if (q.get("status")) {
+      filter.status = q.get("status");
+      assert(guestReportStatuses.includes(filter.status), "Status catatan tidak valid.");
+    }
+    if (q.get("jenis")) {
+      filter.jenis = q.get("jenis");
+      assert(guestReportKinds.includes(filter.jenis), "Jenis catatan tidak valid.");
+    }
+    return {
+      ...await guestReportList(db, filter, {
+        pribadi: manage
+      }),
+      can_decide: manage
+    };
+  }
+  if (p[1] === "guest-reports" && p.length === 3 && p[2] === "decide" && method === "POST") {
+    assert(await has2(db, user, "visits.settings.manage"), "Hanya pengelola kunjungan yang dapat memutuskan review negatif dan komplain.", 403);
+    return await tx(db, async () => await decideGuestReport(db, user, b, audit2));
   }
   if (p[1] === "sheet" && p.length === 2 && method === "GET") {
     await requireAny(db, user, ["visits.dashboard.read", "visits.forms.read", "visits.settings.manage"], has2);

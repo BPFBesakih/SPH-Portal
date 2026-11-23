@@ -81,11 +81,15 @@
     // Entri yang gagal dibuka dipisahkan: nilainya TIDAK diketahui, jadi
     // memasukkannya ke rekap sebagai 0 akan memalsukan angka.
     const rusak = all.filter(e => e.corrupt);
+    // Review negatif & komplain (2.4.0) bukan pengantaran: tidak ikut rekap penilaian dan
+    // dicantumkan di bagian sendiri, tanpa data wisatawan.
+    const laporan = all.filter(e => !e.corrupt && DB.bukanPenilaian(e));
+    const penilaian = all.filter(e => !DB.bukanPenilaian(e));
     // Entri yang sudah dibetulkan TIDAK ikut rekap — sama persis dengan baris
     // berstatus 'diganti' di spreadsheet. Kalau ikut, angkanya akan berbeda
     // dengan tab Rekap dan cross-check-nya jadi tidak ada gunanya.
-    const diganti = all.filter(e => !e.corrupt && e.diganti);
-    const baik = all.filter(e => !e.corrupt && !e.diganti);
+    const diganti = penilaian.filter(e => !e.corrupt && e.diganti);
+    const baik = penilaian.filter(e => !e.corrupt && !e.diganti);
     const { harian, perPos, perTgl } = App.rangkumPerangkat(baik);
 
     const out = [];
@@ -95,9 +99,13 @@
     out.push(barisCsv(['REKAP PENILAIAN GUIDE — DARI PERANGKAT INI']));
     out.push(barisCsv(['Diexport', `${new Date().toLocaleDateString('id-ID')} ${jamLokal(DB.sekarangISO())}`]));
     out.push(barisCsv(['Pos tersimpan', App.state.tautan.map(l => l.label).join(' + ') || '—']));
-    out.push(barisCsv(['Total penilaian', all.length]));
-    out.push(barisCsv(['Sudah terkirim', all.filter(e => e.synced).length]));
-    out.push(barisCsv(['Masih menunggu', all.filter(e => !e.synced).length]));
+    out.push(barisCsv(['Total penilaian', penilaian.length]));
+    out.push(barisCsv(['Sudah terkirim', penilaian.filter(e => e.synced).length]));
+    out.push(barisCsv(['Masih menunggu', penilaian.filter(e => !e.synced).length]));
+    if (laporan.length) {
+      out.push(barisCsv(['Review negatif tercatat', laporan.filter(e => e.laporan.jenis === 'review').length]));
+      out.push(barisCsv(['Komplain tercatat', laporan.filter(e => e.laporan.jenis === 'komplain').length]));
+    }
     if (rusak.length) out.push(barisCsv(['Tidak terbaca di perangkat', rusak.length]));
     if (diganti.length) out.push(barisCsv(['Dibetulkan lewat koreksi (tidak ikut rekap)', diganti.length]));
 
@@ -157,6 +165,23 @@
       ])));
     }
 
+    if (laporan.length) {
+      judul('REVIEW NEGATIF & KOMPLAIN — catatan petugas, berlaku setelah disetujui Pengelola Kunjungan');
+      out.push(barisCsv(['(Review negatif memotong nilai akhir guide bulan itu; komplain menghapus nilainya. Data wisatawan hanya ada di portal.)']));
+      out.push(barisCsv(['Tanggal kejadian', 'Dicatat', 'Jam', 'Pos', 'Jenis', 'guideId', 'Nama Guide', 'Jenis keluhan',
+                         'Apa kata wisatawan', 'Kronologi', 'Petugas', 'Status', 'Waktu (UTC, sama dgn portal)', 'evaluationId']));
+      laporan.slice().sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp))).forEach(e => {
+        const l = e.laporan;
+        out.push(barisCsv([
+          l.tanggal, DB.tanggalLokal(e.timestamp), jamLokal(e.timestamp), e.pos,
+          l.jenis === 'komplain' ? 'Komplain' : 'Review negatif', e.guideId, e.guideName,
+          App.labelLaporan ? App.labelLaporan(l.jenis, l.kode) : l.kode, l.keterangan || '',
+          l.jenis === 'komplain' ? l.kronologi || '' : '', e.petugasNama || '',
+          e.synced ? 'Terkirim' : e.buntu ? 'Ditahan' : 'Menunggu', e.timestamp, e.evaluationId,
+        ]));
+      });
+    }
+
     if (rusak.length) {
       judul('DATA TIDAK TERBACA DI PERANGKAT INI');
       out.push(barisCsv(['Nilainya tidak bisa dibuka di HP/tablet ini, tetapi baris dengan evaluationId berikut tetap ada di portal.']));
@@ -169,6 +194,6 @@
 
     const csv = '﻿' + out.join('\r\n');
     App.download(`rekap-penilaian-${DB.tanggalLokal()}.csv`, csv, 'text/csv;charset=utf-8');
-    App.toast(`Rekap ${baik.length} penilaian diunduh`, 'ok', '📄');
+    App.toast(`Rekap ${baik.length} penilaian${laporan.length ? ` dan ${laporan.length} catatan keluhan` : ''} diunduh`, 'ok', '📄');
   }
 })();

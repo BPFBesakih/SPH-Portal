@@ -3,8 +3,8 @@ import {asyncMap,asyncFilter,asyncSome,asyncEvery,asyncFind,asyncForEach,asyncRe
 import {createHmac} from 'node:crypto';
 import {one, run, insert, assert, now} from './db.mjs';
 import {digest} from './auth.mjs';
-import {formGuideList, ingestGuideEvaluations} from './visit-data.mjs';
-import {formScoringContext, scoringRules, seragamValues, findingCode} from './visit-scoring.mjs';
+import {formGuideList, ingestGuideEvaluations, ingestGuestReports} from './visit-data.mjs';
+import {formScoringContext, scoringRules, seragamValues, findingCode, guestReportRules, guestReportKinds} from './visit-scoring.mjs';
 export const guidePosts = {
   1: 'Pos 1 — Pintu Masuk',
   3: 'Pos 3 — Pelataran Utama'
@@ -28,8 +28,9 @@ async function takeSlot(db, key, amount, limit) {
   RETURNING hits`, digest(key), stamp, amount, cutoff, cutoff);
   return Number(row.hits) <= limit;
 }
+const submitCount = b => (Array.isArray(b?.evaluations) ? b.evaluations.length : 0) + (Array.isArray(b?.laporan) ? b.laporan.length : 0);
 function batchSize(action, b) {
-  return action === 'submit' && Array.isArray(b?.evaluations) ? Math.min(Math.max(b.evaluations.length, 1), guideFormLimits.batch) : 1;
+  return action === 'submit' ? Math.min(Math.max(submitCount(b), 1), guideFormLimits.batch) : 1;
 }
 export async function takeGuideFormIpSlot(db, action, clientIp, b) {
   assert(actions.includes(action), 'Alamat tidak ditemukan.', 404);
@@ -69,6 +70,52 @@ export function checkGuideItem(item, pos) {
   if (item.koreksiDari !== undefined && item.koreksiDari !== null && item.koreksiDari !== '' && (typeof item.koreksiDari !== 'string' || !uuid.test(item.koreksiDari) || item.koreksiDari === item.evaluationId)) errors.push('koreksiDari tidak valid');
   return errors;
 }
+const isoDay = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const trimmedLength = v => typeof v === 'string' ? v.trim().length : -1;
+export function checkGuestReportItem(item, pos) {
+  const errors = [], R = guestReportRules;
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return ['catatan tidak valid'];
+  if (typeof item.evaluationId !== 'string' || !uuid.test(item.evaluationId)) errors.push('evaluationId harus UUID');
+  if (!guestReportKinds.includes(item.jenis)) errors.push('jenis harus review atau komplain');
+  if (typeof item.guideId !== 'string' || !guideId.test(item.guideId.trim())) errors.push('guideId tidak valid');
+  if (typeof item.guideName !== 'string' || !item.guideName.trim() || item.guideName.length > 200) errors.push('guideName wajib');
+  if (Number(item.pos) !== pos) errors.push(`pos catatan harus sama dengan pos tautan (Pos ${pos})`);
+  if (typeof item.timestamp !== 'string' || !(/(Z|[+-]\d\d:\d\d)$/).test(item.timestamp) || isNaN(Date.parse(item.timestamp))) errors.push('timestamp harus ISO8601 dengan zona waktu');
+  if (typeof item.tanggal !== 'string' || !isoDay.test(item.tanggal) || new Date(item.tanggal + 'T00:00:00Z').toISOString().slice(0, 10) !== item.tanggal) errors.push('tanggal kejadian tidak valid');
+  if (typeof item.kode !== 'string' || !findingCode.test(item.kode)) errors.push('jenis keluhan tidak valid');
+  const keterangan = trimmedLength(item.keterangan);
+  if (keterangan < R.keteranganMin || item.keterangan.length > R.keteranganMaks) errors.push(`keterangan wajib ${R.keteranganMin}–${R.keteranganMaks} huruf`);
+  if (item.jenis === 'komplain') {
+    const k = trimmedLength(item.kronologi);
+    if (k < R.kronologiMin || item.kronologi.length > R.kronologiMaks) errors.push(`kronologi komplain wajib ${R.kronologiMin}–${R.kronologiMaks} huruf`);
+  } else if (item.kronologi !== undefined && item.kronologi !== null && item.kronologi !== '' && (typeof item.kronologi !== 'string' || item.kronologi.length > R.kronologiMaks)) errors.push('kronologi tidak valid');
+  const w = item.wisatawan;
+  if (w !== undefined && w !== null && (typeof w !== 'object' || Array.isArray(w) || !['nama', 'asal', 'kontak'].every(k => w[k] === undefined || w[k] === null || typeof w[k] === 'string' && w[k].length <= R.wisatawanMaks))) errors.push(`data wisatawan maksimal ${R.wisatawanMaks} huruf per isian`);
+  if (typeof item.petugasId !== 'string' || !uuid.test(item.petugasId)) errors.push('nama petugas wajib dipilih');
+  return errors;
+}
+const oneLine = v => typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : '';
+const cleanGuestReport = item => {
+  const w = item.wisatawan || ({});
+  return {
+    evaluationId: item.evaluationId,
+    jenis: item.jenis,
+    guideId: item.guideId.trim(),
+    guideName: item.guideName.trim(),
+    pos: Number(item.pos),
+    timestamp: item.timestamp,
+    tanggal: item.tanggal,
+    kode: item.kode,
+    keterangan: item.keterangan.trim(),
+    kronologi: item.jenis === 'komplain' ? item.kronologi.trim() : '',
+    wisatawan: {
+      nama: oneLine(w.nama),
+      asal: oneLine(w.asal),
+      kontak: oneLine(w.kontak)
+    },
+    petugasId: item.petugasId
+  };
+};
 const cleanItem = item => {
   const c = item.criteria;
   const criteria = c.seragam !== undefined ? {
@@ -101,24 +148,35 @@ export async function admitGuideForm(db, action, b) {
   assert(b && typeof b === 'object' && typeof b.token === 'string' && (/^[a-f0-9]{64}$/).test(b.token), invalidGuideLink, 404);
   const link = await one(db, 'SELECT id,pos,label FROM guide_form_links WHERE token_hash=? AND is_active=1 AND revoked_at IS NULL', digest(b.token));
   assert(link, invalidGuideLink, 404);
-  const pos = Number(link.pos), items = [], rejected = [];
+  const pos = Number(link.pos), items = [], laporan = [], rejected = [];
   if (action === 'submit') {
-    assert(Array.isArray(b.evaluations) && b.evaluations.length > 0, 'Kiriman tidak berisi penilaian.', 400);
-    assert(b.evaluations.length <= guideFormLimits.batch, `Maksimal ${guideFormLimits.batch} penilaian per kiriman.`, 413);
+    assert((b.evaluations === undefined || Array.isArray(b.evaluations)) && (b.laporan === undefined || Array.isArray(b.laporan)) && submitCount(b) > 0, 'Kiriman tidak berisi penilaian.', 400);
+    assert(submitCount(b) <= guideFormLimits.batch, `Maksimal ${guideFormLimits.batch} penilaian per kiriman.`, 413);
     const seen = new Set();
-    for (const item of b.evaluations) {
+    const local = (item, errors) => rejected.push({
+      evaluationId: typeof item?.evaluationId === 'string' && uuid.test(item.evaluationId) ? item.evaluationId : null,
+      errors,
+      local: true
+    });
+    for (const item of b.evaluations || []) {
       const errors = checkGuideItem(item, pos);
       if (!errors.length && seen.has(item.evaluationId)) errors.push('evaluationId ganda dalam satu kiriman');
       if (errors.length) {
-        rejected.push({
-          evaluationId: typeof item?.evaluationId === 'string' && uuid.test(item.evaluationId) ? item.evaluationId : null,
-          errors,
-          local: true
-        });
+        local(item, errors);
         continue;
       }
       seen.add(item.evaluationId);
       items.push(cleanItem(item));
+    }
+    for (const item of b.laporan || []) {
+      const errors = checkGuestReportItem(item, pos);
+      if (!errors.length && seen.has(item.evaluationId)) errors.push('evaluationId ganda dalam satu kiriman');
+      if (errors.length) {
+        local(item, errors);
+        continue;
+      }
+      seen.add(item.evaluationId);
+      laporan.push(cleanGuestReport(item));
     }
   }
   const allowed = await takeSlot(db, `guide-form\0${action}\0link\0${link.id}`, batchSize(action, b), guideFormLimits[action]);
@@ -132,6 +190,7 @@ export async function admitGuideForm(db, action, b) {
       label: link.label || guidePosts[pos] || `Pos ${pos}`
     },
     items,
+    laporan,
     rejected
   };
 }
@@ -143,14 +202,22 @@ export const guideFormContext = async (db, link) => ({
   penilaian: await formScoringContext(db)
 });
 export async function submitGuideForm(db, admitted, nowMs = Date.now()) {
-  return admitted.items.length ? await ingestGuideEvaluations(db, admitted.link, admitted.items, nowMs) : {
+  const nilai = admitted.items.length ? await ingestGuideEvaluations(db, admitted.link, admitted.items, nowMs) : {
     accepted: [],
     rejected: []
+  };
+  const catatan = admitted.laporan?.length ? await ingestGuestReports(db, admitted.link, admitted.laporan, nowMs) : {
+    accepted: [],
+    rejected: []
+  };
+  return {
+    accepted: [...nilai.accepted, ...catatan.accepted],
+    rejected: [...nilai.rejected, ...catatan.rejected]
   };
 }
 const localReason = errors => {
   const text = (errors || []).join(' ');
-  return (/^pos penilaian/).test(text) ? 'POS' : (/timestamp/).test(text) ? 'WAKTU' : 'VALIDASI';
+  return (/^pos (penilaian|catatan)/).test(text) ? 'POS' : (/timestamp/).test(text) ? 'WAKTU' : 'VALIDASI';
 };
 export function ipFingerprint(clientIp, key) {
   return typeof key === 'string' && key.length >= 32 ? createHmac('sha256', key).update(String(clientIp)).digest('hex') : null;

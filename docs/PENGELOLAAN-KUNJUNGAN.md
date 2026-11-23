@@ -81,6 +81,28 @@ Alasannya dari data lama (evaluasi 4 November): Pos 1 sebelum pukul 15.00 umumny
 - **PWA 2.3.0**: kartu Etika dengan tombol − / + (−10 … +10, bawaan 0) dan patokan di bawahnya; baris patokan yang sesuai angka sekarang disorot, dan pengingat muncul bila Etika minus diberikan pada pengantaran yang seragam atau ID-Card-nya sudah dipotong (hanya pengingat, tetap bisa disimpan). Riwayat dan CSV HP menampilkan Etika (CSV: kolom JUMLAH ETIKA dan rincian Etika per penilaian). Koreksi dan draf dari versi sebelumnya dibuka sebagai formulir Etika: formulir 2.2 membawa Etika −1 per teguran, cara lama membawa Etika apa adanya — tanpa pertanyaan tambahan. **Pengaman urutan rilis:** HP hanya mengirim penilaian Etika bila server `guide-form` menyatakan menyimpan Etika (tanda `penilaian.etika` pada konteks). Selama belum, penilaian itu menunggu di HP (tidak hilang dan tidak dihitung ditolak), Beranda menampilkan "N penilaian menunggu portal diperbarui", dan HP memeriksa ulang setiap 10 menit atau lewat Tes Koneksi. Penilaian 2.2/cara lama yang masih di antrean tetap terkirim.
 - PWA 2.2.2 (rilis sebelumnya) memakai daftar teguran; HP yang belum diperbarui tetap mengirim formulir 2.2 dan tetap diterima.
 
+## Review negatif dan komplain wisatawan
+
+Keputusan pemilik 23 November 2026: keluhan wisatawan tentang guide dicatat lewat **dua menu baru di HP pos** (**👎 Review Negatif** dan **📢 Komplain**), terpisah dari Penilaian Baru. Catatan baru berdampak setelah **diputuskan Pengelola Kunjungan** di Verifikasi (tanpa persetujuan Pimpinan) dan berlaku untuk kejadian **sejak rilis** (tidak surut).
+
+| | Review negatif | Komplain |
+| --- | --- | --- |
+| Untuk | Pelayanan kurang baik: kurang ramah, penjelasan kurang, terburu-buru, terlambat | Dugaan pelanggaran serius: meminta uang di luar tarif, memaksa belanja/donasi, kasar atau mengancam, menelantarkan tamu |
+| Isian HP | Nama petugas (wajib), guide (dipilih dari daftar), jenis keluhan, tanggal kejadian, apa kata wisatawan (wajib) | Sama, ditambah kronologi (wajib) dan data wisatawan (nama, asal, kontak — boleh kosong) |
+| Bila disetujui | **Nilai akhir** guide bulan kejadian dipotong sebesar yang ditetapkan Pengelola untuk review itu | **Nilai guide bulan kejadian dihapus** (nilai akhir 0): gugur reward dan tidak diperingkat |
+| Syarat menyetujui | Potongan bilangan bulat 1–100 (isian awal = potongan bawaan, 5) | Klarifikasi guide wajib dicatat (atau catatan bahwa guide tidak menanggapi) |
+
+- **Nilai akhir** (hanya laporan tepat satu bulan) = nilai bulanan − jumlah potongan review negatif yang disetujui, paling rendah 0; 0 bila ada komplain atau pelanggaran berat yang disetujui. **Tanpa batas potongan per bulan** (keputusan pemilik: "dipotong berapapun"). Status reward: gugur (komplain / pelanggaran berat) → belum cukup data → di bawah ambang (memakai nilai akhir) → layak; catatan yang masih menunggu hanya diberi keterangan. Peringkat bulanan memakai nilai akhir; guide yang gugur tercantum di bawah tanpa peringkat. Rentang selain satu bulan tetap memakai nilai pengantaran.
+- **Pelanggaran berat terverifikasi disamakan dengan komplain**: nilai bulan itu dihapus dan guide tidak diperingkat (sebelumnya hanya gugur reward). Ini usulan Claude yang ikut diterapkan dan **perlu dikonfirmasi pemilik**.
+- **Tanggal kejadian** menentukan bulan yang terdampak: bawaan hari ini, paling lama 7 hari ke belakang dari saat dicatat. Catatan yang tertahan di HP lebih dari 30 hari ditolak, seperti penilaian.
+- **Verifikasi** (Pengelola): daftar gabungan laporan pos dan catatan wisatawan. Tindakan: Setujui, Tolak (alasan wajib), **Pindah** review ↔ komplain selama masih menunggu (jenis keluhan dipilih ulang), Buka kembali. Semua keputusan diaudit (keadaan sebelum/sesudah). **Nama dan kontak wisatawan hanya terlihat oleh Pengelola**; Pimpinan melihat daftar tanpa data itu dan tidak bisa memutuskan.
+- **Aturan Nilai**: daftar jenis review negatif dan komplain (tambah, ubah nama, nonaktifkan — kode tidak dipakai ulang; daftar awal masih contoh) dan **potongan bawaan** review negatif (1–100, diaudit). Potongan bawaan hanya isian awal; keputusan yang sudah diambil tidak berubah.
+- **Dashboard dan Laporan**: kartu "Review negatif disetujui" (dengan jumlah potongan) dan "Komplain disetujui", peringkat komplain/review per guide, kolom Nilai pengantaran · Review negatif · Komplain · Nilai akhir · Status reward di laporan bulanan, catatan per petugas pos (dicatat/ditolak), dan lembar Excel **Review & komplain** (tanpa data wisatawan).
+- **Penyimpanan**: tabel `visit_guest_reports`, permanen (tidak ikut retensi 6 minggu karena menjadi dasar reward), tidak disalin ke spreadsheet, RLS tanpa grant. Jenis keluhan ada di `visit_finding_types` (jenis `review`/`komplain`), potongan bawaan di `visit_form_settings.pot_review`. Tanpa foto bukti (lampiran berkas di luar lingkup tambalan `__visits`).
+- **PWA 2.4.0**: dua tombol di Beranda dan dua menu di laci; kedua menu berbagi satu formulir (pindah menu mempertahankan guide dan ketikan). Nama petugas dipilih sekali per shift seperti penilaian, tetapi **wajib** — bila daftar petugas di portal masih kosong, HP memberi tahu dan catatan tidak bisa disimpan. Guide dipilih dari daftar saran (semua guide aktif, tanpa filter regu; tidak pernah ditebak dari ketikan). Draf ikut terenkripsi. Catatan masuk antrean offline yang sama dengan penilaian; Beranda menghitungnya terpisah dari "Penilaian Hari Ini", Riwayat punya penyaring **Review & komplain** (tanpa tombol Perbaiki; catatan keliru ditolak/dipindah Pengelola), CSV memuat bagian terpisah tanpa data wisatawan. Ikon ID-Card diganti 🆔 karena 🪪 tampil kotak kosong di HP Android lama.
+- **Pengaman urutan rilis**: HP hanya mengirim catatan bila server `guide-form` mengumumkan daftar `laporan` di konteks. Selama belum, catatan menunggu di HP (tidak hilang, tidak dihitung ditolak) dengan spanduk "N review negatif/komplain menunggu portal diperbarui"; penilaian tetap terkirim. Kiriman dibagi ≤ 20 entri dan ≤ 20 KB (batas gateway 24 KB) karena komplain bisa membawa ±2 KB teks.
+- **Pengaman rollback Pages**: catatan disimpan dengan seragam `laporan`. Bila Pages dikembalikan ke PWA 2.3 selagi catatan masih di antrean, versi lama mengirimnya sebagai penilaian formulir 2.2 yang pasti ditolak portal, lalu berhenti setelah 6 kali (Ditahan) — tidak pernah tercatat sebagai pengantaran bernilai. Datanya tetap di HP dan terkirim sebagai catatan setelah PWA 2.4 kembali (Riwayat → Coba lagi).
+
 ## Laporan harian, mingguan, dan bulanan, grafik tren
 
 Laporan & Ekspor punya tiga pilihan: **Harian**, **Mingguan**, dan **Bulanan**. Setiap pilihan punya tombol ‹ › untuk pindah periode, pemilih tanggal/bulan, dan tombol kembali ke hari/minggu/bulan ini. Pilihan terakhir diingat di peramban; tampilan pertama tetap Bulanan.
@@ -120,13 +142,13 @@ Laporan & Ekspor punya tiga pilihan: **Harian**, **Mingguan**, dan **Bulanan**. 
 | Gateway publik | `site-info/lib/guide-form.mjs`, `site-info/functions/api/guide-form/[[action]].js` | `POST /api/guide-form/{context,submit}`: origin, `CF-Connecting-IP`, badan ≤ 24 KB, lalu ke Edge `guide-form` dengan secret server. |
 | Edge publik | `supabase/functions/guide-form/index.ts` → `supabase/deploy/guide-form/index.ts` (`scripts/build-guide-form.mjs`) | Batas frekuensi, token → tautan aktif, aturan terima di bawah kunci khusus modul, salinan di latar belakang. Tanpa kunci global portal. |
 | Aturan & rekap | `lib/visit-data.mjs` | Aturan terima, Data Guide + impor, daftar penilaian, rekap "100 − potongan", peringkat dan status reward, rekap per hari untuk rentang bebas, laporan mingguan/bulanan dan tren (`visitReport`, `visitTrend`), migrasi awal NilaiGuide. |
-| Aturan nilai & verifikasi | `lib/visit-scoring.mjs` | Besar potongan per bulan (`visit_score_rules`), daftar teguran/pelanggaran berat/apresiasi (`visit_finding_types`), petugas penilai (`visit_assessors`), petunjuk formulir (`visit_form_settings`), laporan yang menunggu keputusan (`visit_flags`). |
+| Aturan nilai & verifikasi | `lib/visit-scoring.mjs` | Besar potongan per bulan (`visit_score_rules`), daftar teguran/pelanggaran berat/apresiasi/review negatif/komplain (`visit_finding_types`), petugas penilai (`visit_assessors`), petunjuk formulir dan potongan bawaan review (`visit_form_settings`), laporan yang menunggu keputusan (`visit_flags`), review negatif & komplain wisatawan (`visit_guest_reports`). |
 | Salinan & retensi | `lib/visit-sheets.mjs` | Google Sheets/Drive lewat OAuth yang sama dengan unggah berkas (`GOOGLE_DRIVE_*`), lease, tulis posisional, verifikasi, pelipatan bulanan, pemeriksaan koneksi. |
 | Rute pengelolaan | `lib/visits.mjs` → `_shared/portal/*.mjs`, disuntikkan ke snapshot `portal-api` oleh `scripts/build-visits-deploy.mjs` (snapshot sebelum Kunjungan) atau diperbarui oleh `scripts/build-visits-update.mjs` (snapshot yang sudah memuat Kunjungan, misalnya setelah Absensi) | Rute basis data di `routeOperation`; `visits/sheet/sync` dan `visits/sheet/check` dicegat sebelum transaksi permintaan. |
 | Formulir pos | `lib/guide-form.mjs` | Pemeriksaan bentuk, batas 60 `context` dan 300 penilaian per 10 menit per tautan dan per IP, catatan kiriman tanpa isi nilai (90 hari). |
 | Ruang kerja | `public/visits.js`, `public/visit-import.js`, `public/visit-trend.js` (grafik tren) (+ `app.js`, `pages.js`, `role-permissions.js`, `styles.css`) | Dashboard, Data Guide (impor .xlsx/.csv di peramban), Penilaian, Verifikasi, Tautan Pos + Salinan spreadsheet, Aturan Nilai, Laporan & Ekspor (+ kartu Migrasi awal NilaiGuide). |
-| Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `…/20261104120000_visit_daily_totals_history.sql`, `…/20261113100000_visit_objective_scoring.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_daily_totals`, `visit_history_import`, `visit_history_ids`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`, `visit_score_rules`, `visit_finding_types`, `visit_assessors`, `visit_flags`, `visit_form_settings`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
-| Uji | `tests/visits.test.mjs`, `tests/visit-report.test.mjs`, `tests/visit-history.test.mjs`, `tests/guide-form-transport.test.mjs`, `scripts/verify-visits-postgres.mjs`, `scripts/verify-guide-form-ui.mjs`, `scripts/fake-google-sheets.mjs` | Google tiruan yang ketat (batas grid, galat bergaya Google); tidak pernah menghubungi Google. |
+| Basis data | `supabase/migrations/20261103100000_visit_management.sql`, `…/20261104090000_visit_portal_storage.sql`, `…/20261104120000_visit_daily_totals_history.sql`, `…/20261113100000_visit_objective_scoring.sql`, `…/20261123100000_visit_guest_reports.sql`, `schema.sql` | Tautan pos, batas frekuensi, catatan kiriman; `visit_guides`, `visit_evaluations`, `visit_monthly_totals`, `visit_daily_totals`, `visit_history_import`, `visit_history_ids`, `visit_sheet_files`, `visit_sheet_tabs`, `visit_sheet_state`, `visit_score_rules`, `visit_finding_types`, `visit_assessors`, `visit_flags`, `visit_form_settings`, `visit_guest_reports`. Semua RLS, tanpa grant ke anon/authenticated/service_role. **IT_ADMIN tidak diberi izin visits.** |
+| Uji | `tests/visits.test.mjs`, `tests/visit-report.test.mjs`, `tests/visit-history.test.mjs`, `tests/visit-guest-reports.test.mjs`, `tests/guide-form-transport.test.mjs`, `scripts/verify-visits-postgres.mjs`, `scripts/verify-guide-form-ui.mjs`, `scripts/fake-google-sheets.mjs` | Google tiruan yang ketat (batas grid, galat bergaya Google); tidak pernah menghubungi Google. |
 
 ## Izin
 
@@ -135,7 +157,7 @@ Laporan & Ekspor punya tiga pilihan: **Harian**, **Mingguan**, dan **Bulanan**. 
 | `visits.dashboard.read`, `visits.guides.read`, `visits.records.read`, `visits.reports.read`, `visits.reports.export` | ya | ya |
 | `visits.guides.manage` (ubah & impor guide), `visits.forms.read`, `visits.forms.manage` (tautan pos), `visits.settings.manage` (sinkronkan, periksa koneksi, migrasi awal NilaiGuide, **Aturan Nilai**, **memutuskan Verifikasi**) | ya | — |
 
-Pimpinan dapat membuka Verifikasi dan Aturan Nilai untuk melihat saja (tanpa daftar petugas penilai). Penilaian "100 − potongan" tidak menambah izin baru.
+Pimpinan dapat membuka Verifikasi dan Aturan Nilai untuk melihat saja (tanpa daftar petugas penilai dan tanpa nama/kontak wisatawan). Penilaian "100 − potongan" serta review negatif & komplain tidak menambah izin baru: memutuskan catatan dan mengubah potongan bawaan memakai `visits.settings.manage`.
 
 Super Admin memegang semua izin `visits.*`. Alamat file spreadsheet hanya tampil bagi pemegang `visits.settings.manage` atau `visits.reports.export`; aksesnya sendiri tetap diatur berbagi Google Drive.
 
@@ -285,6 +307,27 @@ Validasi (19 November, Node 24.22.3):
 
 Paket `portal-api` dapat dibangun ulang dengan hash yang sama; `guide-form` tidak berubah.
 
+### Rilis review negatif & komplain (branch `claude/kunjungan-review-komplain`)
+
+Dibangun di atas master `2fcaa8c` (PR #43). Urutan penting: `guide-form` baru butuh tabel baru, dan PWA 2.4.0 baru mengirim catatan setelah `guide-form` baru aktif.
+
+1. SQL Editor: `20261123100000_visit_guest_reports.sql`. Aditif (tabel `visit_guest_reports`, 10 jenis keluhan contoh, kolom `pot_review` bawaan 5) dan aman dijalankan ulang; `guide-form` dan `portal-api` yang aktif tetap berjalan.
+2. Edge Function `guide-form`: simpan dulu versi aktif (`5dab0844…`) sebagai titik kembali, lalu deploy `supabase/deploy/guide-form/index.ts` (SHA-256 `a69677b73cfa1bd0bf510761043a3bee51e5a3a19ce971c0eb581a0fe49746c1`).
+3. Edge Function `portal-api`: unduh versi aktif, simpan salinannya, hitung SHA-256-nya.
+   - Bila sama dengan `650d36a28dccff137e2b2db17fca2cbe4ceea8a6df88b88df350794b507b1437` (paket master `2fcaa8c`, PR #43), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `d127d211cc53b0ce9441acc94f0f99d1a9a8881bbb1af30b79855e7894e1227f`).
+   - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya (hanya lingkup `__visits` yang diganti).
+4. Merge ke `master`: Pages menayangkan PWA 2.4.0 dan ruang kerja (bundel `portal-161a18eea267.js` + `portal-53ac5d8c142e.css`). HP pos memperbarui diri saat dibuka dalam keadaan online. Bila Pages sempat tayang sebelum langkah 2, catatan menunggu di HP dan terkirim sendiri setelahnya.
+5. Persiapan (Pengelola Kunjungan): pastikan **daftar petugas** di Aturan Nilai terisi (nama petugas wajib untuk catatan), periksa daftar jenis review negatif/komplain dan potongan bawaan. Di HP pos: Pengaturan → Tes Koneksi, catat satu review negatif uji, lalu tolak di Verifikasi.
+
+Rollback:
+
+- `portal-api` → salinan langkah 3. Ruang kerja baru otomatis tanpa daftar catatan (Verifikasi hanya laporan pos); nilai kembali tanpa potongan review/komplain, dan pelanggaran berat kembali hanya menggugurkan reward.
+- `guide-form` → salinan langkah 2. Versi lama tidak mengumumkan `laporan`, jadi PWA 2.4.0 menahan catatan di HP sampai `guide-form` baru dideploy lagi.
+- Pages → deployment sebelumnya (HP kembali ke PWA 2.3.0 saat dibuka online). Sebaiknya antrean HP kosong dulu (Beranda: Menunggu Sync 0). Catatan yang masih tertahan tidak pernah menjadi penilaian (lihat pengaman rollback di atas), tetapi baru terkirim setelah PWA 2.4 kembali.
+- Migrasi dan data catatan dibiarkan.
+
+Validasi (23 November, Node 24.22.3): 425/425 tes aplikasi (termasuk `tests/visit-guest-reports.test.mjs` dan upgrade SQLite lama), 21/21 pemeriksaan PostgreSQL (termasuk kiriman bercampur lewat paket `guide-form`, keputusan lewat paket `portal-api`, batasan basis data, migrasi yang dijalankan ulang), 37/37 alur formulir/ruang kerja (termasuk menu baru di HP, catatan yang ditahan saat server belum siap, dan Verifikasi), 5/5 kelanjutan migrasi, dan 5/5 PWA. Paket `guide-form` dan `portal-api` dapat dibangun ulang dengan hash yang sama.
+
 ## Keputusan yang dipakai
 
 - Penyimpanan: basis data portal + salinan spreadsheet baru (keputusan pemilik, 3 November). Retensi 42 hari, umur kiriman 30 hari, rekap harian untuk periode lama (4 November; sebelumnya ringkasan bulanan).
@@ -295,6 +338,7 @@ Paket `portal-api` dapat dibangun ulang dengan hash yang sama; `guide-form` tida
 - Penilaian "100 − potongan" (keputusan pemilik, 11 November): mulai segera setelah siap; bulan peralihan mencampur baris lama yang dipetakan; verifikasi oleh Pengelola Kunjungan dan diaudit; nama petugas dicatat (pilih sekali per shift di HP pos, tanpa login); besar potongan, ambang 95, dan minimal 10 bisa diubah Pengelola, berlaku bulan berikutnya, diaudit.
 - Etika −10…+10 menggantikan "Teguran perilaku" di formulir pos (permintaan pemilik, 17 November). Rincian penerapan yang dipilih saat implementasi dan **perlu dikonfirmasi pemilik**: Etika ditambahkan 1:1 ke nilai pengantaran (nilai 0–110), bawaan 0 dan tanpa catatan wajib, batas tanpa ID + tidak berseragam ≤ 90, penilaian formulir 2.2 dihitung Etika −1 per teguran, Etika cara lama dihitung apa adanya. Data tetap versi 2 sehingga rollback tidak memerlukan perubahan skema.
 - Patokan Etika untuk petugas (pemilik, 18 November): 0 = standar; minus hanya untuk perilaku yang perlu ditegur, bukan seragam atau ID-Card; plus hanya untuk yang benar-benar menonjol. Ditekankan di formulir HP (disorot, dengan pengingat hukuman ganda), di panduan HP, dan di Aturan Nilai; tanpa catatan wajib.
+- Review negatif & komplain wisatawan (keputusan pemilik, 23 November): menu baru di HP pos, terpisah dari Penilaian Baru; komplain yang disetujui menghapus nilai guide bulan kejadian; potongan review tanpa batas; cukup Pengelola Kunjungan yang memutuskan; berlaku sejak rilis. Rincian yang dipilih saat implementasi dan **perlu dikonfirmasi pemilik**: (a) potongan ditetapkan Pengelola per review saat menyetujui, isian awal 5, 1–100 per review, tanpa batas per bulan, nilai akhir paling rendah 0; (b) pelanggaran berat terverifikasi ikut menghapus nilai bulan itu, sama dengan komplain; (c) daftar jenis keluhan awal masih contoh; (d) tanggal kejadian paling lama 7 hari ke belakang.
 - Nama kembar di regu yang sama ditolak di form satuan; di impor hanya diperingatkan.
 - Batas frekuensi formulir: 60 `context` dan 300 penilaian per 10 menit, per tautan dan per IP. Alamat `/penilaian-guide/`, nama ruang kerja "Kunjungan".
 
@@ -331,6 +375,7 @@ Validasi rilis Etika (18 November): 385/385 tes aplikasi (termasuk `tests/visit-
 ## Tindak lanjut
 
 - Laporan harian, mingguan, dan bulanan dengan pembanding, grafik tren, dan ekspor Excel: branch `claude/kunjungan-laporan-mingguan-bulanan` (lihat Rilis). Berikutnya: Dashboard (rentang preset, pembanding, tren, cakupan guide yang belum dinilai) dan tampilan cetak A4 dengan kop serta tanda tangan jabatan. Format NILAI REWARD rekap regu menunggu revisi pemilik.
+- Menunggu pemilik (review negatif & komplain): konfirmasi rincian (a)–(d) di Keputusan, daftar resmi jenis review negatif/komplain, dan apakah perlu foto bukti (butuh perubahan di luar lingkup `__visits`).
 - Menunggu pemilik: daftar resmi atribut seragam (untuk petunjuk "Kurang lengkap"), daftar resmi jenis pelanggaran berat/apresiasi (daftar awal masih contoh), jawaban apakah Pos 3 memeriksa ID-Card dengan cara yang sama, dan konfirmasi rincian Etika (lihat Keputusan). Setelah pilot, periksa Etika rata-rata per petugas di Dashboard: rata-rata yang jauh dari 0 berarti patokan petugas itu perlu disamakan lagi.
 - Penyalinan terjadwal (pg_cron + pg_net) bila kiriman pos jarang; sekarang penyalinan dipicu kiriman dan tombol portal.
 - Layar Pengaturan modul untuk batas frekuensi dan nama pos.

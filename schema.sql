@@ -408,7 +408,7 @@ CREATE TABLE IF NOT EXISTS visit_score_rules (
  CHECK(pot_kurang<=pot_tidak), CHECK(pot_id+pot_tidak+2*pot_teguran<=100));
 INSERT OR IGNORE INTO visit_score_rules(berlaku_mulai,pot_id,pot_kurang,pot_tidak,pot_teguran,ambang,minimal,created_at) VALUES('2026-01',20,10,20,20,95,10,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 CREATE TABLE IF NOT EXISTS visit_finding_types (
- id TEXT PRIMARY KEY CHECK(length(id) BETWEEN 2 AND 40), jenis TEXT NOT NULL CHECK(jenis IN('teguran','berat','apresiasi')),
+ id TEXT PRIMARY KEY CHECK(length(id) BETWEEN 2 AND 40), jenis TEXT NOT NULL CHECK(jenis IN('teguran','berat','apresiasi','review','komplain')),
  label TEXT NOT NULL CHECK(length(label) BETWEEN 2 AND 80 AND label=trim(label)), urut INTEGER NOT NULL CHECK(urut BETWEEN 0 AND 999),
  perlu_catatan INTEGER NOT NULL DEFAULT 0 CHECK(perlu_catatan IN(0,1)), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT REFERENCES users(id), updated_by TEXT REFERENCES users(id));
@@ -426,6 +426,19 @@ INSERT OR IGNORE INTO visit_finding_types(id,jenis,label,urut,perlu_catatan,crea
  ('dipuji','apresiasi','Dipuji wisatawan di depan petugas',10,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
  ('menolong','apresiasi','Membantu wisatawan yang sakit atau tersesat',20,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
  ('apresiasi-lain','apresiasi','Apresiasi lain (tulis di catatan)',90,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1);
+-- Jenis keluhan wisatawan untuk menu Review Negatif dan Komplain di HP pos (sama dengan
+-- migrasi 20261123100000 di Supabase). Contoh sampai daftar resmi dikirim pemilik.
+INSERT OR IGNORE INTO visit_finding_types(id,jenis,label,urut,perlu_catatan,created_at,updated_at,row_version) VALUES
+ ('kurang-ramah','review','Kurang ramah atau tidak sopan',10,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('penjelasan-kurang','review','Penjelasan kurang atau tidak jelas',20,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('terburu-buru','review','Terburu-buru',30,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('terlambat','review','Terlambat atau membuat tamu menunggu',40,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('review-lain','review','Keluhan pelayanan lain (tulis di keterangan)',90,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('komplain-pungutan','komplain','Meminta uang di luar tarif resmi',10,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('komplain-memaksa','komplain','Memaksa belanja atau donasi',20,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('komplain-kasar','komplain','Berkata kasar atau mengancam',30,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('komplain-menelantarkan','komplain','Menelantarkan tamu',40,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1),
+ ('komplain-lain','komplain','Komplain lain (tulis di keterangan)',90,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),1);
 CREATE TABLE IF NOT EXISTS visit_assessors (
  id TEXT PRIMARY KEY CHECK(length(id)=36), nama TEXT NOT NULL CHECK(length(nama) BETWEEN 2 AND 120 AND nama=trim(nama)),
  keterangan TEXT NOT NULL DEFAULT '' CHECK(length(keterangan)<=80), is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN(0,1)),
@@ -444,11 +457,36 @@ CREATE INDEX IF NOT EXISTS visit_flags_status_day ON visit_flags(status,wita_dat
 CREATE INDEX IF NOT EXISTS visit_flags_guide_day ON visit_flags(guide_id,wita_date);
 CREATE TABLE IF NOT EXISTS visit_form_settings (
  id INTEGER PRIMARY KEY CHECK(id=1), petunjuk_id TEXT NOT NULL CHECK(length(petunjuk_id) BETWEEN 1 AND 300),
- petunjuk_seragam TEXT NOT NULL CHECK(length(petunjuk_seragam) BETWEEN 1 AND 500), updated_at TEXT NOT NULL, updated_by TEXT REFERENCES users(id), row_version INTEGER NOT NULL);
+ petunjuk_seragam TEXT NOT NULL CHECK(length(petunjuk_seragam) BETWEEN 1 AND 500), updated_at TEXT NOT NULL, updated_by TEXT REFERENCES users(id), row_version INTEGER NOT NULL,
+ -- Potongan bawaan saat Pengelola menyetujui review negatif; besarnya tetap boleh diubah per review.
+ pot_review INTEGER NOT NULL DEFAULT 5 CHECK(pot_review BETWEEN 1 AND 100));
 INSERT OR IGNORE INTO visit_form_settings(id,petunjuk_id,petunjuk_seragam,updated_at,row_version) VALUES(1,
  'Terpasang = kartu ID resmi dikalungkan dan terlihat. Dicek dengan cara yang sama di Pos 1 dan Pos 3.',
  'Lengkap = semua atribut seragam guide sesuai aturan. Kurang lengkap = berseragam tetapi ada atribut yang kurang. Tidak berseragam = tidak memakai seragam guide (mis. baju kaos).',
  strftime('%Y-%m-%dT%H:%M:%fZ','now'),1);
+-- Review negatif dan komplain wisatawan yang dicatat petugas pos lewat menu HP (keputusan
+-- pemilik 23 November 2026; sama dengan migrasi 20261123100000 di Supabase). id = ID antrean HP.
+-- Baru berdampak setelah disetujui Pengelola Kunjungan: review memotong nilai akhir bulan
+-- kejadian sebesar `potongan`, komplain menghapus nilai bulan itu. Tidak ikut retensi 6 minggu
+-- dan tidak disalin ke spreadsheet (data wisatawan hanya untuk Pengelola).
+CREATE TABLE IF NOT EXISTS visit_guest_reports (
+ id TEXT PRIMARY KEY CHECK(length(id)=36), link_id TEXT REFERENCES guide_form_links(id), pos INTEGER NOT NULL CHECK(pos IN(1,3)),
+ jenis TEXT NOT NULL CHECK(jenis IN('review','komplain')), jenis_awal TEXT NOT NULL CHECK(jenis_awal IN('review','komplain')),
+ kode TEXT NOT NULL REFERENCES visit_finding_types(id), guide_id TEXT NOT NULL REFERENCES visit_guides(id), guide_name TEXT NOT NULL CHECK(length(guide_name) BETWEEN 1 AND 120),
+ wita_date TEXT NOT NULL CHECK(length(wita_date)=10), recorded_at TEXT NOT NULL CHECK(length(recorded_at)=24), received_at TEXT NOT NULL,
+ keterangan TEXT NOT NULL CHECK(length(keterangan) BETWEEN 3 AND 500), kronologi TEXT NOT NULL DEFAULT '' CHECK(length(kronologi)<=1000),
+ wisatawan_nama TEXT NOT NULL DEFAULT '' CHECK(length(wisatawan_nama)<=120), wisatawan_asal TEXT NOT NULL DEFAULT '' CHECK(length(wisatawan_asal)<=120),
+ wisatawan_kontak TEXT NOT NULL DEFAULT '' CHECK(length(wisatawan_kontak)<=120),
+ petugas_id TEXT NOT NULL CHECK(length(petugas_id)=36), petugas_nama TEXT NOT NULL CHECK(length(petugas_nama) BETWEEN 1 AND 120),
+ status TEXT NOT NULL DEFAULT 'menunggu' CHECK(status IN('menunggu','disetujui','ditolak')),
+ potongan INTEGER CHECK(potongan IS NULL OR potongan BETWEEN 1 AND 100), klarifikasi TEXT NOT NULL DEFAULT '' CHECK(length(klarifikasi)<=1000),
+ keputusan_catatan TEXT NOT NULL DEFAULT '' CHECK(length(keputusan_catatan)<=500), decided_by TEXT REFERENCES users(id), decided_at TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL,
+ CHECK((status IN('disetujui','ditolak'))=(decided_at IS NOT NULL)),
+ CHECK((status='disetujui' AND jenis='review')=(potongan IS NOT NULL)),
+ CHECK(status<>'disetujui' OR jenis<>'komplain' OR length(klarifikasi)>=3));
+CREATE INDEX IF NOT EXISTS visit_guest_reports_status_day ON visit_guest_reports(status,wita_date);
+CREATE INDEX IF NOT EXISTS visit_guest_reports_guide_day ON visit_guest_reports(guide_id,wita_date);
 -- Absensi (tahap 1): HP terdaftar, absen GPS + selfie, koreksi sebagai baris baru.
 CREATE TABLE IF NOT EXISTS attendance_points (
  id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80),
