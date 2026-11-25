@@ -36,10 +36,11 @@ export const ROUTE_HELP={
   'purchasing-settings':'<strong>Pengaturan</strong> — batas nilai, pejabat, penomoran, kop dokumen, dan Plh. Setiap perubahan tercatat.',
   // Bisnis
   merchandise:'<strong>Beranda</strong> — penjualan hari ini, barang yang total stoknya (display + gudang) 5 atau kurang, dan barang yang display-nya perlu diisi dari gudang.',
-  'merchandise-products':'<strong>Daftar Barang</strong> — katalog, harga, serta stok <strong>display</strong> dan <strong>gudang</strong>. Tombol <strong>Stok</strong> untuk stok awal, barang masuk (ke gudang atau display), pindah gudang ↔ display, dan koreksi saldo.',
+  'merchandise-products':'<strong>Daftar Barang</strong> — katalog, harga, serta stok <strong>display</strong> dan <strong>gudang</strong>. Tombol <strong>Stok</strong> untuk stok awal, barang masuk (ke gudang atau display), pindah gudang ↔ display, dan koreksi saldo. Barang titipan berlabel <strong>UMKM</strong>; stoknya hanya bisa dipindah atau dikoreksi di sini.',
+  'merchandise-umkm':'<strong>Barang UMKM</strong> — barang titipan UMKM lokal. Koordinator ke atas mendaftarkan mitra, mencatat <strong>Terima barang</strong> (harga UMKM + 20%, dibulatkan, menjadi harga jual) dan <strong>Takeout</strong>, lalu mencetak tanda terima atau bukti takeout untuk ditandatangani. Keuangan membayar UMKM dari Ekspor Penjualan Bulanan.',
   'merchandise-sales':'<strong>Penjualan</strong> — catat setiap transaksi dan pilih pembayaran: Tunai, QRIS, Transfer, Card, atau Lainnya. Stok display berkurang otomatis; bila display kurang, catat dulu <strong>Pindah ke display</strong> dari gudang.',
-  'merchandise-stock':'<strong>Stok Barang</strong> — riwayat semua perubahan stok per lokasi (display/gudang): stok awal, barang masuk, pindah stok, penjualan, dan koreksi. Koreksi saldo hanya oleh yang berwenang.',
-  'merchandise-reports':'<strong>Laporan</strong> — rekap penjualan dan metode pembayaran per periode, serta ekspor Excel bulanan (stok display dan gudang dipisah).',
+  'merchandise-stock':'<strong>Stok Barang</strong> — riwayat semua perubahan stok per lokasi (display/gudang): stok awal, barang masuk, pindah stok, penjualan, takeout barang UMKM, dan koreksi. Koreksi saldo hanya oleh yang berwenang.',
+  'merchandise-reports':'<strong>Laporan</strong> — rekap penjualan dan metode pembayaran per periode, serta ekspor Excel bulanan (stok display dan gudang dipisah). Barang UMKM punya bagian sendiri: hak UMKM per mitra dan keuntungan BP.',
   // Kunjungan
   visits:'<strong>Dashboard</strong> — ringkasan penilaian guide bulan berjalan.',
   'visits-guides':'<strong>Data Guide</strong> — daftar guide beserta kategori dan regunya.',

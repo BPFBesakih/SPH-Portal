@@ -145,6 +145,35 @@ function officialXml(sheet,logo){
     }
     cursor++;
   }
+  // VIII. Stok barang UMKM (titipan): bukan aset BP, jadi tanpa nilai rupiah. Per mitra.
+  const umkm=sheet.umkm;
+  if(umkm?.groups?.length){
+    paragraph(cursor++,umkm.title);
+    const heads=['NO','JENIS BARANG','STOK AWAL (Pcs)','DITERIMA (Pcs)','TERJUAL (Pcs)','TAKEOUT (Pcs)','KOREKSI (+/-)','STOK AKHIR (Pcs)','KET'];
+    line(cursor,heads.map((h,i)=>cText(letter(i)+cursor,h,3)).join(''),30);cursor++;
+    const subtotals=[],keys=[['C','opening'],['D','received'],['E','sold'],['F','takeout'],['G','adjustment'],['H','closing']];
+    const all=Object.fromEntries(keys.map(([,key])=>[key,0]));
+    for(const group of umkm.groups){
+      merged('A'+cursor,'I'+cursor);line(cursor,cText('A'+cursor,'UMKM: '+group.name,8),21);cursor++;
+      const first=cursor;
+      for(const p of group.rows){
+        const r=cursor;
+        let cells=cNum('A'+r,p.no,4)+cText('B'+r,p.name,5)+cNum('C'+r,p.opening,4)+cNum('D'+r,p.received,4)+cNum('E'+r,p.sold,4)+cNum('F'+r,p.takeout,4)+cNum('G'+r,p.adjustment,4);
+        cells+=cFormula('H'+r,'C'+r+'+D'+r+'-E'+r+'-F'+r+'+G'+r,p.closing,4)+cText('I'+r,p.note,9);
+        line(r,cells,noteHeight(p.note));cursor++;
+      }
+      const last=cursor-1,r=cursor;
+      merged('A'+r,'B'+r);
+      let sums=cText('A'+r,'JUMLAH '+String(group.name).toUpperCase(),8);
+      for(const [col,key] of keys){const value=group.rows.reduce((n,row)=>n+asNumber(row[key]),0);all[key]+=value;sums+=cFormula(col+r,'SUM('+col+first+':'+col+last+')',value,4);}
+      line(r,sums+'<c r="I'+r+'" s="9"/>',23);subtotals.push(r);cursor++;
+    }
+    const r=cursor;merged('A'+r,'B'+r);
+    let sums=cText('A'+r,'JUMLAH SEMUA MITRA',8);
+    for(const [col,key] of keys)sums+=cFormula(col+r,subtotals.map(row=>col+row).join('+'),all[key],4);
+    line(r,sums+cText('I'+r,'Bukan aset BP; tidak masuk nilai stok.',9),noteHeight('Bukan aset BP; tidak masuk nilai stok.'));
+    cursor=r+2;
+  }
   const final=Math.max(total,cursor-1);
   return sheetRoot('<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:I'+final+'"/>'+
     '<sheetViews><sheetView workbookViewId="0"><pane ySplit="23" topLeftCell="A24" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'+

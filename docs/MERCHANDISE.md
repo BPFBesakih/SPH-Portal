@@ -3,10 +3,13 @@
 Status: **aktif di production** sejak akhir Oktober 2026. Perubahan stok display &
 gudang serta pembayaran CARD (20 November 2026) dijelaskan di bagian
 [Stok display & gudang, pindah stok, dan CARD](#stok-display--gudang-pindah-stok-dan-card).
+Barang titipan UMKM (25 November 2026, belum dirilis) dijelaskan di bagian
+[Barang titipan UMKM](#barang-titipan-umkm).
 Bagian "Persiapan database dan akun" di bawah adalah catatan peluncuran awal.
 
 Modul Bidang Bisnis ditambahkan pada menu SPH Portal dengan lima halaman:
-Beranda, Daftar Barang, Penjualan, Stok Barang, dan Laporan.
+Beranda, Daftar Barang, Penjualan, Stok Barang, dan Laporan. Halaman keenam,
+Barang UMKM, ditambahkan bersama barang titipan UMKM.
 
 ## Operasional
 
@@ -169,3 +172,137 @@ Jalankan langkah 1–3 berurutan dalam satu sesi rilis.
   sudah ditambal. Snapshot lama: `git show <commit-sebelum-cabang>:supabase/deploy/portal-api/index.ts`.
 - Basis data lokal SQLite lama ditingkatkan otomatis saat `openDb` (tabel
   `merchandise_sales` dan `merchandise_stock_movements` dibangun ulang dengan nama tetap).
+
+## Barang titipan UMKM
+
+Keputusan tim Bisnis dan Keuangan 25 November 2026. Cabang `claude/bisnis-barang-umkm`.
+Barang UMKM lokal dipajang dan dijual bersama merchandise BP, tetapi tetap milik UMKM
+sampai terjual.
+
+### Aturan
+
+| Hal | Aturan |
+| --- | --- |
+| Penanda | `merchandise_products.umkm_partner_id` terisi = barang UMKM; NULL = barang BP (semua barang lama). SKU otomatis `UMKM-<kode mitra>-NN`; awalan `UMKM-` ditolak untuk barang BP. |
+| Harga | UMKM menyebut harga yang ingin diterimanya (**harga UMKM**, disimpan di `buy_price`). Harga jual = harga UMKM + 20%, dibulatkan **ke atas** ke kelipatan Rp500 (di bawah Rp5.000: kelipatan Rp100). Selisih pembulatan masuk keuntungan BP. Contoh: Rp4.100 → Rp4.920 → **Rp5.000** (keuntungan BP Rp820 + pembulatan Rp80). |
+| Ubah harga | Harga jual tidak bisa diketik. Manager mengubah harga UMKM lewat Daftar Barang → Ubah; harga jual dihitung ulang. Transaksi lama memakai snapshot harganya sendiri. |
+| Terima barang | Hanya koordinator ke atas. Satu **tanda terima** (`TU-…`) per penyerahan, berisi barang terdaftar atau barang baru (nama + harga UMKM) dan lokasi display/gudang. Stok bertambah lewat mutasi `IN`. Mitra nonaktif tidak bisa menitipkan barang. |
+| Takeout | Barang UMKM yang keluar selain terjual **wajib** dicatat lebih dulu sebagai takeout (`TO-…`, mutasi `TAKEOUT`), lalu buktinya dicetak dan ditandatangani. Alasan: diambil kembali, rusak, tidak laku, berhenti menitip, lainnya (wajib keterangan). Tidak ada batas waktu titip. Mitra nonaktif tetap bisa takeout. |
+| Stok | Barang UMKM tidak bisa diberi stok awal atau barang masuk lewat Stok Barang; hanya pindah display ↔ gudang dan koreksi saldo. |
+| Koreksi | Bila saldo berubah, wajib dipilih **tanggungan selisih** (`umkm_loss_borne_by`): BP atau UMKM. Kekurangan yang ditanggung BP tetap dibayar ke UMKM sebesar harga UMKM (menambah hak UMKM, mengurangi keuntungan BP); kelebihan yang ditanggung BP mengurangi tanggungan itu. Kekurangan yang ditanggung UMKM tidak dibayar. |
+| Penjualan | Barang UMKM dan barang BP boleh dalam satu transaksi. Baris penjualan menyimpan snapshot mitra, harga UMKM (`unit_cost`), dan persen keuntungan (`umkm_markup_pct`). |
+| Pembatalan | Transaksi yang berisi barang UMKM, serta tanda terima/takeout, hanya bisa dibatalkan **pada bulan yang sama** (WITA) oleh pemegang `merchandise.sales.void`, karena laporan bulanannya menjadi dasar pembayaran. Pembatalan tanda terima ditolak bila barangnya sudah terjual atau di-takeout. |
+| Pembayaran | Uang penjualan disetor utuh ke Keuangan. Keuangan membayar tiap UMKM sebesar subtotal hak UMKM di **Ekspor Penjualan Bulanan**. Portal tidak mencatat pembayaran ke UMKM. |
+| Kerahasiaan | Harga UMKM mengikuti izin `merchandise.catalog.costs` (tidak terlihat oleh petugas), termasuk di dokumen, mutasi, dan ekspor. |
+| Jenis barang | Belum ditetapkan (masih dibahas dengan UMKM); portal tidak membatasi jenis barang. |
+
+### Izin
+
+| Izin | Isi | Role Bisnis |
+| --- | --- | --- |
+| `merchandise.umkm.read` | Halaman Barang UMKM, daftar mitra dan dokumen | PIMPINAN, MANAGER, KOORDINATOR |
+| `merchandise.umkm.receive` | Tambah/ubah mitra, terima barang, takeout | MANAGER, KOORDINATOR |
+
+Petugas tidak melihat menu Barang UMKM tetapi tetap bisa menjual barang UMKM.
+Migrasi menambahkan kedua izin ke template role Bisnis yang sudah ada tanpa mengubah
+penugasan akun. Di SQLite lokal, `seedPermissions` (migrasi versi 11) melakukan hal yang sama.
+
+### Data
+
+- Tabel baru (ber-RLS, tanpa grant ke klien): `merchandise_umkm_partners` (kode 2–8
+  huruf/angka, nama usaha, pemilik, WhatsApp, alamat, catatan, aktif),
+  `merchandise_umkm_docs` (`TERIMA`/`TAKEOUT`, `ACTIVE`/`VOID`), dan
+  `merchandise_umkm_doc_items` (urutan baris, snapshot nama, SKU, lokasi, jumlah, harga UMKM, harga jual).
+- Kolom baru: `merchandise_products.umkm_partner_id`;
+  `merchandise_sale_items.umkm_partner_id`, `umkm_partner_name`, `umkm_markup_pct`;
+  `merchandise_stock_movements.umkm_doc_id`, `unit_cost`, `umkm_loss_borne_by`.
+  Jenis mutasi `TAKEOUT` ditambahkan ke CHECK `kind`.
+
+### API (portal-api)
+
+- `GET merchandise/umkm/partners`; `POST merchandise/umkm/partners`
+  (`code`, `name`, `owner_name`, `phone`, `address`, `notes`);
+  `PATCH merchandise/umkm/partners/:id` (kolom yang sama tanpa `code`, ditambah `is_active`
+  dan `row_version`).
+- `GET merchandise/umkm/docs?from=&to=` dan `GET merchandise/umkm/docs/:id` (dengan data mitra).
+- `POST merchandise/umkm/receipts` — `partner_id`, `counterpart_name`, `note`,
+  `items[]`: `{product_id | name + umkm_price, quantity, location}` (1–50 baris).
+- `POST merchandise/umkm/takeouts` — `partner_id`, `counterpart_name`, `reason`
+  (`DIAMBIL_UMKM`, `RUSAK`, `TIDAK_LAKU`, `BERHENTI`, `LAINNYA`), `note`,
+  `items[]`: `{product_id, quantity, location}`.
+- `POST merchandise/umkm/docs/:id/void` — `reason`, `row_version`.
+- Perubahan endpoint lama: `POST merchandise/products/:id/stock` untuk barang UMKM hanya
+  menerima `TRANSFER` dan `ADJUST`, dan `ADJUST` yang mengubah saldo wajib `loss_borne_by`
+  (`BP`/`UMKM`). `PATCH merchandise/products/:id` menolak `sell_price` untuk barang UMKM.
+  `GET merchandise/reports` menambah `umkm_losses` (koreksi tanggungan BP pada periode, batas
+  hari WITA). Kemampuan pengguna menambah `umkm_read` dan `umkm_receive`.
+
+### Laporan
+
+- **Ekspor Penjualan Bulanan**: bila ada barang UMKM pada periode, rekap bagian I mendapat
+  baris PENJUALAN BARANG UMKM, HAK UMKM (DIBAYARKAN KEUANGAN), KEUNTUNGAN BP DARI BARANG
+  UMKM (20%, pembulatan, dan tanggungan hilang/rusak bila ada), TOTAL LABA BP, dan TOTAL
+  UANG DITERIMA. Bagian baru **III. PENJUALAN BARANG UMKM (TITIPAN)** dikelompokkan per mitra
+  dengan subtotal hak UMKM per mitra dan JUMLAH SEMUA MITRA; metode pembayaran menjadi
+  bagian IV. Tanpa barang UMKM, file **identik** dengan format sebelumnya.
+- **Ekspor Stok Bulanan**: barang UMKM tidak masuk tabel dan nilai stok BP. Bagian baru
+  **VIII. STOK BARANG UMKM (TITIPAN, BUKAN MILIK BP)**: stok awal, diterima, terjual,
+  takeout, koreksi, stok akhir per mitra. Lembar Penjualan dan Mutasi Stok mendapat kolom
+  PEMILIK hanya bila ada data UMKM.
+- **Ekspor Detail Transaksi**: kolom pemilik, harga UMKM, dan hak UMKM untuk baris UMKM.
+- Halaman **Laporan**: rekap **Barang UMKM per mitra** (terjual, penjualan, hak UMKM,
+  keuntungan BP, hilang/rusak ditanggung BP). Kartu Laba kotor sama dengan TOTAL LABA BP
+  di ekspor penjualan bulanan.
+- Tanda terima dan bukti takeout dicetak dari halaman Barang UMKM (kop BP, tanda tangan
+  kedua pihak).
+
+### Urutan rilis
+
+1. **Migrasi**. Pastikan migrasi `20261120090000_merchandise_stock_locations_card.sql`
+   sudah berjalan (kolom `warehouse_qty` ada), lalu jalankan
+   `supabase/migrations/20261125090000_merchandise_umkm.sql` di Supabase SQL Editor.
+   Migrasi ini aditif, tidak mengubah data lama, aman untuk portal-api yang sedang aktif,
+   dan aman dijalankan dua kali.
+2. **portal-api**: pastikan snapshot aktif sama dengan `master` sebelum cabang ini
+   (SHA-256 `650d36a28dccff137e2b2db17fca2cbe4ceea8a6df88b88df350794b507b1437`), lalu deploy
+   `supabase/deploy/portal-api/index.ts`
+   (SHA-256 `b307293f99653a2acbcba4045b43ef2b2e39bafa190f878075655e7926cddbe5`). Bila snapshot
+   aktif berbeda, bangun ulang di atas snapshot aktif:
+   `node scripts/build-merchandise-update.mjs <snapshot-aktif.ts> <sha256>`.
+3. **Frontend**: merge ke `master` (Cloudflare Pages memakai `site-info/dist`). Jangan
+   mendahului langkah 2: halaman Barang UMKM membutuhkan endpoint baru.
+4. Setelah rilis: koordinator/manager menambah mitra (kode mitra menjadi awalan SKU),
+   lalu mencatat penyerahan pertama lewat **Terima barang** dan mencetak tanda terimanya.
+
+> **Jangan** menjalankan ulang migrasi `20261120090000` setelah migrasi UMKM: migrasi itu
+> membuat ulang CHECK `kind` tanpa `TAKEOUT`. Bila terlanjur, jalankan ulang
+> `20261125090000` (aman diulang).
+
+### Rollback
+
+- **Kode**: revert merge PR dan deploy ulang portal-api snapshot sebelumnya (SHA
+  `650d36a2…1437` di atas). Migrasi **tidak perlu** dibatalkan: portal-api lama tetap
+  bekerja dengan tabel dan kolom baru (diuji di PGlite).
+- Setelah ada mitra, barang, atau dokumen UMKM, backend lama menganggap barang UMKM
+  sebagai barang BP biasa (harga jual bisa diketik, ekspor lama tidak memisahkan hak UMKM),
+  dan Ekspor Stok Bulanan versi lama menolak periode yang berisi mutasi `TAKEOUT`.
+  Lebih aman memperbaiki maju daripada rollback.
+- Membatalkan migrasi (hanya bila belum ada data UMKM): hapus izin `merchandise.umkm.*`
+  dari `app_role_permissions` lalu `app_permissions`; hapus kolom `umkm_doc_id`,
+  `unit_cost`, `umkm_loss_borne_by` (mutasi), `umkm_partner_id`, `umkm_partner_name`,
+  `umkm_markup_pct` (baris penjualan), dan `umkm_partner_id` (barang); kembalikan CHECK
+  `kind` tanpa `TAKEOUT`; lalu `DROP TABLE` dokumen baris, dokumen, dan mitra. Periksa dulu
+  tidak ada mutasi `TAKEOUT` atau barang dengan `umkm_partner_id` terisi.
+
+### Verifikasi
+
+- `node --test tests/merchandise*.test.mjs` — termasuk `merchandise-umkm.test.mjs` (aturan,
+  izin, harga, takeout, koreksi, pembatalan, upgrade SQLite) dan
+  `merchandise-umkm-xlsx.test.mjs` (ekspor penjualan dan stok).
+- `node scripts/verify-merchandise-umkm-postgres.mjs [pglite/dist/index.js] [snapshot-lama.ts]`
+  — migrasi di PostgreSQL, RLS dan syarat health portal-api, gateway lama sebelum/sesudah
+  migrasi, dan alur lengkap di gateway yang sudah ditambal.
+- Pratinjau lokal dengan data fiktif: `node scripts/preview-bisnis-umkm.mjs --reset`, buka
+  `http://127.0.0.1:4627`. Akun fiktif `manager.bisnis`, `koordinator.bisnis`,
+  `petugas.bisnis`, `pimpinan.bisnis`, password `Preview2026!`. Data di `data/pratinjau-bisnis/`
+  (diabaikan Git), tanpa Supabase.
