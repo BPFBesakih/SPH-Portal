@@ -21,7 +21,7 @@ import {randomUUID} from 'node:crypto';
 import {insert,one,all,now,today} from '../supabase/functions/_shared/portal/db.mjs';
 
 const MIGRATION='20261125090000_merchandise_umkm.sql';
-const {PGlite}=await import(pathToFileURL(resolve(process.argv[2]||'/tmp/pglite/node_modules/@electric-sql/pglite/dist/index.js')).href);
+const {PGlite}=await import(process.argv[2]?pathToFileURL(resolve(process.argv[2])).href:'@electric-sql/pglite');
 const oldSnapshot=process.argv[3]?readFileSync(resolve(process.argv[3]),'utf8'):null;
 const pg=new PGlite();let checks=0;
 const check=async(name,work)=>{await work();console.log('PASS '+name);checks++;};
@@ -174,14 +174,39 @@ try{
     const receipt=(await one(db,"SELECT id FROM merchandise_umkm_docs WHERE kind='TERIMA'")).id;
     await denied(api,voidDoc(manager,receipt),409,/sudah terjual atau di-takeout/);
     const kopi1=await sku('UMKM-KOPI-01');
+    const restock=await portal(coordinator,'merchandise/umkm/receipts','POST',{
+      partner_id:kopi.id,counterpart_name:'Ni Made',items:[{product_id:kopi1.id,quantity:4}]
+    });
+    assert.equal((await sku('UMKM-KOPI-01')).stock_qty,13);
+    await denied(api,voidDoc(manager,receipt),409,/sudah terjual atau di-takeout/);
+    await voidDoc(manager,restock.id);
+    assert.equal((await sku('UMKM-KOPI-01')).stock_qty,9);
+    await portal(coordinator,'merchandise/umkm/receipts','POST',{
+      partner_id:kopi.id,counterpart_name:'Ni Made',items:[{name:'Kopi Sachet',umkm_price:4167,quantity:1}]
+    });
+    assert.equal((await sku('UMKM-KOPI-04')).sell_price,5500);
     await denied(api,portal(manager,`merchandise/products/${kopi1.id}`,'PATCH',{sell_price:20000,row_version:kopi1.row_version}),422,/dihitung otomatis/);
     await denied(api,portal(coordinator,`merchandise/products/${kopi1.id}`,'PATCH',{buy_price:15000,row_version:kopi1.row_version}),403);
-    const saved=await portal(manager,`merchandise/products/${kopi1.id}`,'PATCH',{buy_price:15000,row_version:kopi1.row_version});
+    const saved=await portal(manager,`merchandise/products/${kopi1.id}`,'PATCH',{buy_price:15000,row_version:await version(kopi1.id)});
     assert.deepEqual([saved.buy_price,saved.sell_price],[15000,18000]);
     await denied(api,portal(manager,'merchandise/products','POST',{sku:'UMKM-X-01',name:'X',buy_price:1,sell_price:2}),422,/Awalan UMKM-/);
     const exported=await portal(manager,'merchandise/stock-export','GET',{},`from=${today()}&to=${today()}`);
     assert(exported.stock.some(p=>p.umkm_partner_code==='KOPI')&&exported.movements.some(m=>m.kind==='TAKEOUT'&&m.umkm_partner_name==='Kopi Kintamani'));
     assert(await healthy());
+  });
+  await check('stock surplus offsets only matching losses at their original price',async()=>{
+    const item=await sku('UMKM-KOPI-04');
+    const adjust=async quantity=>portal(coordinator,`merchandise/products/${item.id}/stock`,'POST',{
+      kind:'ADJUST',quantity,loss_borne_by:'BP',reason:'Opname',row_version:await version(item.id)
+    });
+    const losses=async()=> (await portal(manager,'merchandise/reports','GET',{},`from=${today()}&to=${today()}`))
+      .umkm_losses.filter(m=>m.sku===item.sku);
+    await adjust(3);
+    assert.deepEqual(await losses(),[]);
+    await adjust(2);
+    await portal(manager,`merchandise/products/${item.id}`,'PATCH',{buy_price:6000,row_version:await version(item.id)});
+    await adjust(5);
+    assert.deepEqual((await losses()).map(m=>[m.quantity_delta,m.unit_cost]),[[-1,4167],[1,4167]]);
   });
   console.log(`OK ${checks} pemeriksaan barang UMKM PostgreSQL${oldSnapshot?' (termasuk gateway lama)':''}.`);
 }finally{await pg.close();}

@@ -43,6 +43,7 @@ ALTER TABLE portal.merchandise_sale_items ADD COLUMN IF NOT EXISTS umkm_markup_p
 ALTER TABLE portal.merchandise_stock_movements ADD COLUMN IF NOT EXISTS umkm_doc_id TEXT REFERENCES portal.merchandise_umkm_docs(id);
 ALTER TABLE portal.merchandise_stock_movements ADD COLUMN IF NOT EXISTS unit_cost BIGINT;
 ALTER TABLE portal.merchandise_stock_movements ADD COLUMN IF NOT EXISTS umkm_loss_borne_by TEXT;
+ALTER TABLE portal.merchandise_stock_movements ADD COLUMN IF NOT EXISTS product_stock_version INTEGER;
 DO $c$ BEGIN
   ALTER TABLE portal.merchandise_sale_items ADD CONSTRAINT merchandise_sale_items_umkm_markup_check
     CHECK (umkm_markup_pct IS NULL OR umkm_markup_pct BETWEEN 0 AND 100);

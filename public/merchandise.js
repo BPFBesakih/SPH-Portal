@@ -35,8 +35,10 @@ export const LOW_STOCK_LIMIT=5,RESTOCK_SALES_DAYS=30;
 // rincian laporan; harga yang tersimpan selalu dihitung server.
 export const UMKM_MARKUP_PCT=20;
 export function umkmPricing(cost,pct=UMKM_MARKUP_PCT){
-  const value=Number(cost),markup=Math.round(value*pct/100),base=value+markup,step=base<5000?100:500,sell=Math.ceil(base/step)*step;
-  return {cost:value,markup,base,rounding:sell-base,sell,profit:sell-value};
+  const value=Number(cost),scaled=value*(100+pct);
+  const step=scaled<5000*100?100:500,sell=Math.ceil(scaled/(step*100))*step;
+  const markup=Math.round(value*pct/100);
+  return {cost:value,markup,base:scaled/100,rounding:sell-value-markup,sell,profit:sell-value};
 }
 export const isUmkm=item=>Boolean(item?.umkm_partner_id);
 const umkmTag=name=>`<span class="badge neutral mm-umkm-tag">UMKM · ${esc(name||'')}</span>`;
@@ -335,7 +337,9 @@ function saveBlob(blob,filename){
 // Detail Transaksi. Kolom pemilik dan hak UMKM hanya muncul bila ada barang UMKM, supaya
 // ekspor tanpa barang UMKM tetap sama seperti sebelumnya.
 export function detailWorkbookSheets(r,canCost){
-  const withUmkm=r.stock.some(isUmkm)||r.sales.some(s=>(s.items||[]).some(isUmkm));
+  const periodEnd=r.to?Date.parse(r.to+'T23:59:59.999+08:00'):NaN;
+  const stock=r.stock.filter(p=>!isUmkm(p)||!p.created_at||!Number.isFinite(periodEnd)||Date.parse(p.created_at)<=periodEnd);
+  const withUmkm=stock.some(isUmkm)||r.movements.some(isUmkm)||r.sales.some(s=>(s.items||[]).some(isUmkm));
   const owner=item=>isUmkm(item)?'UMKM '+(item.umkm_partner_name||''):'BP';
   const columns=[
     {key:'date',header:'Tanggal',kind:'date'},{key:'number',header:'Nomor transaksi'},{key:'method',header:'Pembayaran'},
@@ -347,7 +351,7 @@ export function detailWorkbookSheets(r,canCost){
   return [
     {name:'Penjualan',columns,rows},
     {name:'Stok',columns:[{key:'sku',header:'SKU'},{key:'name',header:'Barang'},...(withUmkm?[{key:'owner',header:'Pemilik'}]:[]),{key:'display',header:'Stok display',kind:'number'},{key:'warehouse',header:'Stok gudang',kind:'number'},{key:'total',header:'Total stok',kind:'number'},{key:'price',header:'Harga jual',kind:'number'}],
-      rows:r.stock.map(p=>({sku:p.sku,name:p.name,...(withUmkm?{owner:owner(p)}:{}),display:p.stock_qty,warehouse:p.warehouse_qty??null,total:counted(p.stock_qty)?totalStock(p):null,price:p.sell_price}))},
+      rows:stock.map(p=>({sku:p.sku,name:p.name,...(withUmkm?{owner:owner(p)}:{}),display:p.stock_qty,warehouse:p.warehouse_qty??null,total:counted(p.stock_qty)?totalStock(p):null,price:p.sell_price}))},
     {name:'Mutasi Stok',columns:[{key:'date',header:'Waktu',kind:'datetime'},{key:'sku',header:'SKU'},{key:'name',header:'Barang'},...(withUmkm?[{key:'owner',header:'Pemilik'}]:[]),{key:'kind',header:'Jenis'},{key:'location',header:'Lokasi'},{key:'delta',header:'Perubahan',kind:'number'},{key:'balance',header:'Saldo akhir lokasi',kind:'number'},{key:'reason',header:'Alasan'}],
       rows:r.movements.map(m=>({date:m.created_at,sku:m.sku,name:m.product_name,...(withUmkm?{owner:owner(m)}:{}),kind:STOCK_KIND_LABELS[m.kind]||m.kind,location:locationLabel(m.location),delta:m.quantity_delta,balance:m.balance_after,reason:withUmkm?movementNote(m):m.reason}))}
   ];
@@ -563,7 +567,7 @@ function voidUmkmDoc(id){
   const doc=M.umkm.docs.find(d=>d.id===id);if(!doc)return;
   formDialog('Batalkan '+doc.doc_no,`<label class="field full"><span>Alasan pembatalan</span><textarea name="reason" maxlength="300" required></textarea></label>`,
     async d=>{await post(`merchandise/umkm/docs/${id}/void`,{reason:d.reason,row_version:doc.row_version});toast('Dokumen dibatalkan dan stok disesuaikan.');refresh();},
-    {note:doc.kind==='TERIMA'?'Stok dari tanda terima ini dikurangi lagi. Ditolak bila sebagian barangnya sudah terjual atau di-takeout.':'Barang yang di-takeout dikembalikan ke stok titipan.'});
+    {note:doc.kind==='TERIMA'?'Stok dari tanda terima ini dikurangi lagi. Pembatalan ditolak jika barang yang sama kemudian terjual, di-takeout, atau dikoreksi turun.':'Barang yang di-takeout dikembalikan ke stok titipan.'});
 }
 
 export function bindMerchandisePage(){

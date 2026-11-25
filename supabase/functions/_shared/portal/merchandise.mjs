@@ -4,7 +4,7 @@ import {all, one, get, insert, update, tx, audit, assert, text, integer, enumVal
 import {has, requireAccess} from './auth.mjs';
 const price = value => integer(value, 'Harga (rupiah)', 0, 1000000000);
 const qty = value => integer(value, 'Jumlah barang', 0, 1000000);
-const productFields = 'p.id,p.sku,p.name,p.buy_price,p.sell_price,p.stock_qty,p.warehouse_qty,p.is_active,p.row_version,p.umkm_partner_id,mp.code umkm_partner_code,mp.name umkm_partner_name';
+const productFields = 'p.id,p.sku,p.name,p.buy_price,p.sell_price,p.stock_qty,p.warehouse_qty,p.is_active,p.row_version,p.created_at,p.umkm_partner_id,mp.code umkm_partner_code,mp.name umkm_partner_name';
 const LOCATIONS = ['DISPLAY', 'GUDANG'];
 const stockColumn = location => location === 'GUDANG' ? 'warehouse_qty' : 'stock_qty';
 const PAYMENT_METHODS = ['TUNAI', 'QRIS', 'TRANSFER', 'CARD', 'LAINNYA'];
@@ -13,8 +13,9 @@ const UMKM_MARKUP_PCT = 20;
 const UMKM_TAKEOUT_REASONS = ['DIAMBIL_UMKM', 'RUSAK', 'TIDAK_LAKU', 'BERHENTI', 'LAINNYA'];
 const umkmPrice = value => integer(value, 'Harga UMKM (rupiah)', 100, 100000000);
 function umkmSellPrice(cost) {
-  const base = cost + Math.round(cost * UMKM_MARKUP_PCT / 100), step = base < 5000 ? 100 : 500;
-  return Math.ceil(base / step) * step;
+  const scaled = cost * (100 + UMKM_MARKUP_PCT);
+  const step = scaled < 5000 * 100 ? 100 : 500;
+  return Math.ceil(scaled / (step * 100)) * step;
 }
 const isActive = row => row.is_active === 1 || row.is_active === true;
 const visibleProduct = (row, costs) => costs ? row : (({buy_price, ...rest}) => rest)(row);
@@ -27,6 +28,64 @@ const canCosts = async (db, user) => await has(db, user, 'merchandise.catalog.co
 const stockHistory = 'SELECT m.*,p.sku,p.name product_name,p.umkm_partner_id,mp.name umkm_partner_name,u.username actor_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id LEFT JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id JOIN users u ON u.id=m.created_by';
 async function movementsSince(db, from) {
   return await all(db, `${stockHistory} WHERE m.created_at>=? ORDER BY m.created_at DESC,m.id DESC LIMIT ${STOCK_EXPORT_LIMIT}`, witaMidnight(from));
+}
+async function receiptStockMayHaveBeenUsed(db, productId, docId) {
+  const received = await one(db, `SELECT created_at,product_stock_version FROM merchandise_stock_movements
+    WHERE product_id=? AND umkm_doc_id=? AND kind='IN' AND quantity_delta>0
+    ORDER BY created_at,id LIMIT 1`, productId, docId);
+  if (!received) return true;
+  return Boolean(await one(db, `SELECT m.id FROM merchandise_stock_movements m
+    LEFT JOIN merchandise_sales s ON s.id=m.sale_id
+    LEFT JOIN merchandise_umkm_docs d ON d.id=m.umkm_doc_id
+    WHERE m.product_id=? AND m.quantity_delta<0
+      AND (m.kind='ADJUST' OR (m.kind='SALE' AND COALESCE(s.status,'COMPLETED')='COMPLETED')
+        OR (m.kind='TAKEOUT' AND COALESCE(d.status,'ACTIVE')='ACTIVE'))
+      AND (CASE WHEN m.product_stock_version IS NOT NULL AND CAST(? AS INTEGER) IS NOT NULL
+        THEN m.product_stock_version>? ELSE m.created_at>=? END)
+    LIMIT 1`, productId, received.product_stock_version, received.product_stock_version, received.created_at));
+}
+async function umkmLossesForReport(db, from, to, costs) {
+  const movements = await all(db, `SELECT m.id,m.product_id,m.location,m.quantity_delta,m.unit_cost,m.created_at,m.reason,
+      p.sku,p.name product_name,p.umkm_partner_id,mp.name umkm_partner_name
+    FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id
+    JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id
+    WHERE m.kind='ADJUST' AND m.umkm_loss_borne_by='BP' AND m.quantity_delta<>0
+      AND m.created_at>=? AND m.created_at<?
+    ORDER BY m.created_at,COALESCE(m.product_stock_version,0),m.id`, from, to);
+  const outstanding = new Map(), entries = [];
+  for (const movement of movements) {
+    const day = new Date(Date.parse(movement.created_at) + 8 * 3600000).toISOString().slice(0, 10);
+    const key = [monthOf(day), movement.product_id, movement.location].join('/');
+    if (!outstanding.has(key)) outstanding.set(key, {
+      losses: [],
+      first: 0
+    });
+    const pending = outstanding.get(key);
+    const delta = Number(movement.quantity_delta);
+    if (delta < 0) {
+      pending.losses.push({
+        movement,
+        remaining: -delta
+      });
+      entries.push(movement);
+      continue;
+    }
+    let recovered = delta;
+    while (recovered > 0 && pending.first < pending.losses.length) {
+      const loss = pending.losses[pending.first];
+      const matched = Math.min(recovered, loss.remaining);
+      entries.push({
+        ...movement,
+        id: movement.id + ':' + loss.movement.id,
+        quantity_delta: matched,
+        unit_cost: loss.movement.unit_cost
+      });
+      loss.remaining -= matched;
+      recovered -= matched;
+      if (!loss.remaining) pending.first++;
+    }
+  }
+  return entries.map(movement => withoutCost(movement, costs));
 }
 function reportedPayment(sale) {
   const legacy = sale.sold_on >= '2026-11-01' && sale.sold_on <= '2026-11-07' && sale.payment_method === 'LAINNYA';
@@ -63,6 +122,7 @@ async function applyStock(db, user, product, kind, changes, reason, saleId = nul
     balance_after: row.after,
     reason,
     created_by: user.id,
+    product_stock_version: product.umkm_partner_id ? product.row_version + 1 : null,
     ...extra
   }));
   return saved;
@@ -389,10 +449,14 @@ async function umkmRoutes(c) {
       assert(monthOf(doc.doc_date) === monthOf(today()), 'Dokumen bulan sebelumnya tidak dapat dibatalkan. Catat takeout atau koreksi stok di bulan ini.', 409);
       const grouped = new Map();
       for (const item of await all(db, 'SELECT * FROM merchandise_umkm_doc_items WHERE doc_id=? ORDER BY line_no', doc.id)) {
-        if (!grouped.has(item.product_id)) grouped.set(item.product_id, {
-          product: await get(db, 'merchandise_products', item.product_id),
-          changes: []
-        });
+        if (!grouped.has(item.product_id)) {
+          const product = await get(db, 'merchandise_products', item.product_id);
+          if (doc.kind === 'TERIMA') assert(!await receiptStockMayHaveBeenUsed(db, product.id, doc.id), product.name + ': stok mungkin sudah terjual atau di-takeout, atau pernah dikoreksi turun setelah tanda terima ini. Gunakan takeout atau koreksi stok.', 409);
+          grouped.set(product.id, {
+            product,
+            changes: []
+          });
+        }
         const entry = grouped.get(item.product_id), amount = Number(item.quantity);
         if (doc.kind === 'TERIMA') {
           const available = Number(entry.product[stockColumn(item.location)] ?? 0);
@@ -740,16 +804,20 @@ export async function merchandiseRoutes(c) {
     const {from, to} = dateRange(url), sales = await saleList(db, user, from, to);
     const summary = totals(sales), costs = await canCosts(db, user);
     const next = new Date(Date.parse(`${to}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    const start = witaMidnight(from), end = witaMidnight(next);
     return {
       from,
       to,
       summary: costs ? summary : (({cost, ...rest}) => rest)(summary),
       sales,
       stock: await productList(db, user),
-      movements: await has(db, user, 'merchandise.stock.read') ? (await all(db, 'SELECT m.*,p.sku,p.name product_name,p.umkm_partner_id,mp.name umkm_partner_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id LEFT JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id WHERE substr(m.created_at,1,10)>=? AND substr(m.created_at,1,10)<=? ORDER BY m.created_at DESC', from, to)).map(m => withoutCost(m, costs)) : [],
-      umkm_losses: (await all(db, `SELECT m.id,m.product_id,m.quantity_delta,m.unit_cost,m.created_at,m.reason,p.sku,p.name product_name,p.umkm_partner_id,mp.name umkm_partner_name
-        FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id
-        WHERE m.kind='ADJUST' AND m.umkm_loss_borne_by='BP' AND m.created_at>=? AND m.created_at<? ORDER BY m.created_at,m.id`, witaMidnight(from), witaMidnight(next))).map(m => withoutCost(m, costs))
+      movements: await has(db, user, 'merchandise.stock.read') ? (await all(db, `SELECT m.*,p.sku,p.name product_name,p.umkm_partner_id,mp.name umkm_partner_name
+          FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id
+          LEFT JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id
+          WHERE (p.umkm_partner_id IS NULL AND substr(m.created_at,1,10) BETWEEN ? AND ?)
+            OR (p.umkm_partner_id IS NOT NULL AND m.created_at>=? AND m.created_at<?)
+          ORDER BY m.created_at DESC`, from, to, start, end)).map(m => withoutCost(m, costs)) : [],
+      umkm_losses: await umkmLossesForReport(db, start, end, costs)
     };
   }
   if (part === 'reports' && p[2] === 'export' && method === 'POST') {

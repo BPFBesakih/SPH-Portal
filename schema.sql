@@ -333,7 +333,8 @@ CREATE TABLE IF NOT EXISTS merchandise_stock_movements (
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, row_version INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id),
  location TEXT NOT NULL DEFAULT 'DISPLAY' CHECK(location IN('DISPLAY','GUDANG')),
  umkm_doc_id TEXT REFERENCES merchandise_umkm_docs(id), unit_cost INTEGER CHECK(unit_cost IS NULL OR unit_cost>=0),
- umkm_loss_borne_by TEXT CHECK(umkm_loss_borne_by IS NULL OR umkm_loss_borne_by IN('BP','UMKM')));
+ umkm_loss_borne_by TEXT CHECK(umkm_loss_borne_by IS NULL OR umkm_loss_borne_by IN('BP','UMKM')),
+ product_stock_version INTEGER);
 CREATE INDEX IF NOT EXISTS merchandise_stock_product_idx ON merchandise_stock_movements(product_id,created_at);
 CREATE INDEX IF NOT EXISTS merchandise_stock_created_idx ON merchandise_stock_movements(created_at);
 -- Pengelolaan Kunjungan: tautan pos dan catatan kiriman (catatan tanpa nama guide/nilai/catatan).

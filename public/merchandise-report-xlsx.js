@@ -108,7 +108,7 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
   if(!stock.length)throw new Error('Katalog barang belum tersedia.');
   if(movements.length>=MOVEMENT_LIMIT)throw new Error('Jumlah mutasi mencapai batas API ('+MOVEMENT_LIMIT.toLocaleString('id-ID')+'). Ekspor ditunda agar laporan tidak terpotong.');
   const dates=dayList(from,to),dateSet=new Set(dates);
-  const umkmStock=stock.filter(p=>p.umkm_partner_id),withUmkm=umkmStock.length>0;
+  const umkmStock=stock.filter(p=>p.umkm_partner_id);
   const products=stock.filter(p=>!p.umkm_partner_id).sort((a,b)=>String(a.sku).localeCompare(String(b.sku),'id'));
   if(!products.length)throw new Error('Katalog barang belum tersedia.');
   if(products.some(p=>p.stock_qty===null||!Number.isSafeInteger(Number(p.stock_qty))))
@@ -170,7 +170,7 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
     else throw new Error('Jenis mutasi belum didukung pada ekspor: '+m.kind);
   }
   const revenueByDay=new Map();
-  const paid=sales.filter(s=>s.status==='COMPLETED');
+  const paid=sales.filter(s=>s.status==='COMPLETED'&&dateSet.has(s.sold_on));
   for(const sale of paid){
     if(!dateSet.has(sale.sold_on))continue;
     if(!revenueByDay.has(sale.sold_on))revenueByDay.set(sale.sold_on,new Map());
@@ -231,8 +231,12 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
     if(balance<0)throw new Error('Saldo historis barang UMKM negatif untuk '+p.sku+'; data mutasi perlu direkonsiliasi.');
     return [p.sku,balance];
   }));
+  const umkmActivity=new Set(sheetMovements.map(m=>m.sku));
+  for(const sale of paid)for(const item of sale.items||[])if(umkmBySku.has(item.sku))umkmActivity.add(item.sku);
+  const umkmInPeriod=umkmStock.filter(p=>umkmOpening.get(p.sku)>0||umkmActivity.has(p.sku));
+  const withUmkm=umkmInPeriod.length>0;
   const umkmGroups=[];
-  for(const p of [...umkmStock].sort((a,b)=>String(a.umkm_partner_name).localeCompare(String(b.umkm_partner_name),'id')||String(a.sku).localeCompare(String(b.sku),'id',{numeric:true}))){
+  for(const p of umkmInPeriod.sort((a,b)=>String(a.umkm_partner_name).localeCompare(String(b.umkm_partner_name),'id')||String(a.sku).localeCompare(String(b.sku),'id',{numeric:true}))){
     let group=umkmGroups.find(g=>g.id===p.umkm_partner_id);
     if(!group)umkmGroups.push(group={id:p.umkm_partner_id,name:p.umkm_partner_name||'',products:[]});
     group.products.push(p);

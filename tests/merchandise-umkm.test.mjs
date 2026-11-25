@@ -30,9 +30,13 @@ test('harga jual barang UMKM: +20% lalu dibulatkan ke atas ke Rp500 (di bawah Rp
   const cases=[[12500,15000,2500,0],[13000,16000,2600,400],[7250,9000,1450,300],[2700,3300,540,60],[50000,60000,10000,0],[15000,18000,3000,0],[4100,5000,820,80],[100,200,20,80]];
   for(const [cost,sell,markup,rounding] of cases)
     assert.deepEqual(umkmPricing(cost),{cost,markup,base:cost+markup,rounding,sell,profit:sell-cost},String(cost));
+  assert.equal(umkmPricing(167).sell,300);
+  assert.equal(umkmPricing(4167).sell,5500);
   for(let cost=100;cost<=200000;cost+=137){
     const p=umkmPricing(cost);
-    assert(p.sell>=p.base&&p.rounding<(p.base<5000?100:500)&&p.sell%(p.base<5000?100:500)===0,String(cost));
+    const step=p.base<5000?100:500;
+    assert(p.sell>=p.base&&p.sell-step<p.base&&p.sell%step===0,String(cost));
+    assert.equal(p.markup+p.rounding,p.profit);
   }
 });
 
@@ -185,6 +189,8 @@ test('pembatalan dokumen: hanya manager, bulan yang sama, dan tanda terima yang 
   assert.throws(()=>voidDoc(first.id,'coordinator'),/akses/);
   assert.throws(()=>voidDoc(first.id),/sudah terjual atau di-takeout/);
   const second=f.receive(kopi.id,[{product_id:item.id,quantity:3}]);
+  assert.throws(()=>voidDoc(first.id),/sudah terjual atau di-takeout/,'stok baru tidak membuka tanda terima yang sudah dipakai');
+  assert.equal(f.product('UMKM-KOPI-01').stock_qty,5);
   voidDoc(second.id);
   assert.equal(f.product('UMKM-KOPI-01').stock_qty,2);
   assert.deepEqual([docOf(second.id).status,docOf(second.id).void_reason],['VOID','Salah catat']);
@@ -238,16 +244,34 @@ test('laporan: tanggungan BP pada periode WITA, tanpa harga UMKM bagi yang tidak
   const item=()=>f.product('UMKM-KOPI-01');
   const adjust=(quantity,borne)=>f.call('coordinator',`products/${item().id}/stock`,'POST',{kind:'ADJUST',location:'DISPLAY',quantity,loss_borne_by:borne,reason:'Opname',row_version:item().row_version});
   adjust(4,'BP');adjust(3,'UMKM');adjust(4,'BP');
-  const moves=all(f.db,"SELECT id FROM merchandise_stock_movements WHERE kind='ADJUST' ORDER BY created_at,rowid").map(r=>r.id);
+  const moves=all(f.db,"SELECT id FROM merchandise_stock_movements WHERE kind='ADJUST' ORDER BY product_stock_version").map(r=>r.id);
   // 30 Nov 16.30 UTC = 1 Des 00.30 WITA: masuk Desember, bukan November.
   f.db.prepare("UPDATE merchandise_stock_movements SET created_at='2026-11-30T15:30:00.000Z' WHERE id=?").run(moves[0]);
   f.db.prepare("UPDATE merchandise_stock_movements SET created_at='2026-11-30T16:30:00.000Z' WHERE id IN (?,?)").run(moves[1],moves[2]);
   const nov=f.call('manager','reports','GET',{},'from=2026-11-01&to=2026-11-30').umkm_losses;
   const dec=f.call('manager','reports','GET',{},'from=2026-12-01&to=2026-12-31').umkm_losses;
   assert.deepEqual(nov.map(m=>[m.quantity_delta,m.unit_cost,m.umkm_partner_name]),[[-2,12500,'Kopi Kintamani Bu Sari']]);
-  assert.deepEqual(dec.map(m=>m.quantity_delta),[1],'hanya tanggungan BP; koreksi tanggungan UMKM tidak masuk');
+  assert.deepEqual(dec,[],'kelebihan tidak mengurangi hak UMKM ketika kekurangan BP berasal dari bulan sebelumnya');
   const report=f.call('leader','reports','GET',{},'from=2026-11-01&to=2026-11-30');
   assert(report.stock.some(p=>p.umkm_partner_name==='Kopi Kintamani Bu Sari'));
+});
+
+test('saldo lebih hanya membalik kekurangan BP yang masih tercatat, dengan harga saat kehilangan',t=>{
+  const f=fixture(t),kopi=f.partner();
+  f.receive(kopi.id,[{name:'Kopi Bubuk',umkm_price:12500,quantity:6}]);
+  const item=()=>f.product('UMKM-KOPI-01');
+  const adjust=(quantity,location='DISPLAY')=>f.call('coordinator',`products/${item().id}/stock`,'POST',{
+    kind:'ADJUST',location,quantity,loss_borne_by:'BP',reason:'Opname',row_version:item().row_version
+  });
+  const report=()=>f.call('manager','reports','GET',{},`from=${today()}&to=${today()}`).umkm_losses;
+  adjust(8);
+  assert.deepEqual(report(),[],'kelebihan tanpa kehilangan tidak mengurangi hak');
+  adjust(6);
+  assert.equal(report()[0].unit_cost,12500);
+  f.call('manager',`products/${item().id}`,'PATCH',{buy_price:15000,row_version:item().row_version});
+  adjust(1,'GUDANG');
+  adjust(9);
+  assert.deepEqual(report().map(m=>[m.location,m.quantity_delta,m.unit_cost]),[['DISPLAY',-2,12500],['DISPLAY',2,12500]]);
 });
 
 test('basis data lokal sebelum barang UMKM ditingkatkan: kolom baru, TAKEOUT diterima, data lama utuh',t=>{
@@ -259,6 +283,7 @@ test('basis data lokal sebelum barang UMKM ditingkatkan: kolom baru, TAKEOUT dit
   oldSchema=oldSchema.replace('warehouse_qty INTEGER CHECK(warehouse_qty IS NULL OR warehouse_qty>=0)\n','warehouse_qty INTEGER CHECK(warehouse_qty IS NULL OR warehouse_qty>=0));\n');
   oldSchema=strip(oldSchema,"\n umkm_partner_id TEXT REFERENCES merchandise_umkm_partners(id), umkm_partner_name TEXT, umkm_markup_pct INTEGER CHECK(umkm_markup_pct IS NULL OR umkm_markup_pct BETWEEN 0 AND 100),");
   oldSchema=strip(oldSchema,",\n umkm_doc_id TEXT REFERENCES merchandise_umkm_docs(id), unit_cost INTEGER CHECK(unit_cost IS NULL OR unit_cost>=0),\n umkm_loss_borne_by TEXT CHECK(umkm_loss_borne_by IS NULL OR umkm_loss_borne_by IN('BP','UMKM'))");
+  oldSchema=strip(oldSchema,",\n product_stock_version INTEGER");
   oldSchema=oldSchema.replace("'VOID','TRANSFER','TAKEOUT'","'VOID','TRANSFER'");
   for(const table of ['merchandise_umkm_partners','merchandise_umkm_docs','merchandise_umkm_doc_items'])oldSchema=oldSchema.replace(new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\([\\s\\S]*?;\\n`),'').replace(new RegExp(`CREATE INDEX IF NOT EXISTS \\w+ ON ${table}\\([^;]+;\\n`,'g'),'');
   assert(!/umkm|TAKEOUT/i.test(oldSchema.replace(/--[^\n]*/g,'')),'skema lama tiruan tanpa barang UMKM');
@@ -275,7 +300,7 @@ test('basis data lokal sebelum barang UMKM ditingkatkan: kolom baru, TAKEOUT dit
   const columns=table=>db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name);
   assert(columns('merchandise_products').includes('umkm_partner_id'));
   assert(['umkm_partner_id','umkm_partner_name','umkm_markup_pct'].every(c=>columns('merchandise_sale_items').includes(c)));
-  assert(['umkm_doc_id','unit_cost','umkm_loss_borne_by','location'].every(c=>columns('merchandise_stock_movements').includes(c)));
+  assert(['umkm_doc_id','unit_cost','umkm_loss_borne_by','location','product_stock_version'].every(c=>columns('merchandise_stock_movements').includes(c)));
   assert.deepEqual({...one(db,'SELECT stock_qty,warehouse_qty,umkm_partner_id FROM merchandise_products')},{stock_qty:7,warehouse_qty:3,umkm_partner_id:null});
   assert.deepEqual(all(db,'SELECT kind,location,quantity_delta,umkm_doc_id FROM merchandise_stock_movements ORDER BY kind').map(m=>({...m})),[
     {kind:'SALE',location:'DISPLAY',quantity_delta:-1,umkm_doc_id:null},{kind:'TRANSFER',location:'GUDANG',quantity_delta:1,umkm_doc_id:null}]);

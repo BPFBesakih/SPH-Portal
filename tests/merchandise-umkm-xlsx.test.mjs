@@ -116,6 +116,19 @@ test('stok bulanan: barang UMKM bukan aset BP, punya bagian VIII per mitra, dan 
   assert.throws(()=>merchandiseMonthlyWorkbook({...base,stock:[...bp,{...umkm[0],stock_qty:1}],sales,movements}),/Saldo historis barang UMKM negatif/);
 });
 
+test('titipan yang masuk setelah periode tidak mengubah stok maupun detail Excel periode lama',async()=>{
+  const bp={...stock[0],stock_qty:3,warehouse_qty:0};
+  const later={...stock[2],created_at:'2026-11-03T16:30:00.000Z',stock_qty:4,warehouse_qty:0};
+  const move={sku:later.sku,kind:'IN',quantity_delta:4,created_at:later.created_at,reason:'Terima barang',location:'DISPLAY'};
+  const period={from:'2026-11-01',to:'2026-11-03',today:'2026-11-25',stock:[bp],sales:[],movements:[],canCost:true};
+  const original=merchandiseMonthlyWorkbook(period);
+  const withNewStock=merchandiseMonthlyWorkbook({...period,stock:[bp,later],movements:[move]});
+  assert.equal(withNewStock.umkmClosing,null);
+  assert.deepEqual(new Uint8Array(await withNewStock.blob.arrayBuffer()),new Uint8Array(await original.blob.arrayBuffer()));
+  assert.deepEqual(detailWorkbookSheets({...period,stock:[bp,later]},true),detailWorkbookSheets(period,true));
+  assert.equal(detailWorkbookSheets({...period,to:'2026-11-04',stock:[bp,later]},true)[1].rows[1].sku,later.sku);
+});
+
 test('detail transaksi dan rekap halaman Laporan memisahkan barang UMKM per mitra',()=>{
   const report={sales,stock,movements:[{created_at:'2026-11-02T03:00:00Z',sku:'UMKM-KOPI-02',product_name:'Kopi Biji 500 g',kind:'ADJUST',location:'DISPLAY',quantity_delta:-1,balance_after:2,reason:'Pecah',umkm_partner_id:K[0],umkm_partner_name:K[1],umkm_loss_borne_by:'BP'}]};
   const [penjualan,stok,mutasi]=detailWorkbookSheets(report,true);

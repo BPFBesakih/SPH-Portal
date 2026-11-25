@@ -220,6 +220,7 @@ test('basis data lokal lama ditingkatkan: stok lama jadi display, riwayat lama D
     .replace("payment_method IN('TUNAI','QRIS','TRANSFER','CARD','LAINNYA')","payment_method IN('TUNAI','QRIS','TRANSFER','LAINNYA')")
     .replace("kind IN('INITIAL','IN','ADJUST','SALE','VOID','TRANSFER','TAKEOUT')","kind IN('INITIAL','IN','ADJUST','SALE','VOID')")
     .replace(",\n location TEXT NOT NULL DEFAULT 'DISPLAY' CHECK(location IN('DISPLAY','GUDANG')),\n umkm_doc_id TEXT REFERENCES merchandise_umkm_docs(id), unit_cost INTEGER CHECK(unit_cost IS NULL OR unit_cost>=0),\n umkm_loss_borne_by TEXT CHECK(umkm_loss_borne_by IS NULL OR umkm_loss_borne_by IN('BP','UMKM'))","")
+    .replace(",\n product_stock_version INTEGER","")
     .replace(/CREATE TABLE IF NOT EXISTS merchandise_umkm_(partners|docs|doc_items) \([\s\S]*?;\n/g,'').replace(/CREATE INDEX IF NOT EXISTS \w+ ON merchandise_umkm_\w+\([^;]+;\n/g,'');
   assert(!oldSchema.includes('warehouse_qty INTEGER')&&!oldSchema.includes("'CARD'")&&!oldSchema.includes("'VOID','TRANSFER'")&&!oldSchema.includes('location TEXT NOT NULL')&&!/umkm_partner_id TEXT|umkm_doc_id/.test(oldSchema),'skema lama tiruan');
   db=new DatabaseSync(path);db.exec(oldSchema);db.exec('PRAGMA foreign_keys=ON');
