@@ -16,7 +16,10 @@ body { font-weight: 400; line-height: 1.6; }
 h1, h2, h3, .page-heading h1, .hero h1 { font-weight: 700; }
 .page-heading > div:first-child { min-width: 0; }
 .page-heading h1, .record-info strong { overflow-wrap: anywhere; }
-.page-heading p { max-width: 65ch; }
+/* Penjelasan judul halaman memakai lebar yang tersedia, supaya sisi kanannya tidak kosong di desktop.
+   Jarak ke tombol di kanan dilebarkan agar teks panjang tidak menempel ke tombol. */
+.page-heading p { max-width: none; }
+@media (min-width: 840px) { .page-heading { column-gap: 32px; } }
 .page-heading .actions { flex-shrink: 0; }
 .button { min-height: 48px; line-height: 1.4; }
 .icon-button { width: 48px; height: 48px; }
