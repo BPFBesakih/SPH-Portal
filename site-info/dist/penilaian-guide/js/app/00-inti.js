@@ -40,6 +40,9 @@
     // begitu guide atau pos berganti — persetujuan untuk satu situasi tidak
     // boleh diam-diam berlaku untuk situasi lain.
     form: { pos: null, guide: null, crit: kritKosong(), catatan: '', lanjutJeda: null },
+    // Formulir menu Review Negatif / Komplain (2.4.0). Satu draf untuk kedua menu: pindah menu
+    // mempertahankan guide dan ketikan, jenis keluhan dipilih ulang dari daftar menu itu.
+    laporan: null,
     // Tautan pos tersimpan di HP: [{token, pos, label, dicabut}]. Pos penilaian
     // selalu diambil dari sini, bukan dipilih bebas oleh petugas.
     tautan: [],
@@ -66,7 +69,7 @@
   // beriringan: kalau APP_VERSION mandek, laporan staff ("versi berapa yang
   // muncul di layar Tentang?") tidak bisa dipakai memastikan HP mana yang
   // sudah menerima pembaruan.
-  const APP_VERSION = '2.3.0';
+  const APP_VERSION = '2.4.0';
 
   const $ = s => document.querySelector(s);
 
@@ -75,6 +78,8 @@
   const TITLES = {
     home: 'Penilaian Guide',
     nilai: 'Penilaian Baru',
+    review: 'Review Negatif',
+    komplain: 'Komplain',
     guides: 'Daftar Guide',
     riwayat: 'Riwayat',
     pengaturan: 'Pengaturan',

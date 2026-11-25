@@ -7,7 +7,9 @@
 // daftar saran nama guide (nama + ID · regu, filter, keyboard, nama kembar),
 // isian "100 − potongan + Etika" (ID, seragam, Etika −10…+10 lewat tombol dengan patokan dan pengingat hukuman ganda, laporan berat
 // dengan catatan wajib, nama petugas sekali per shift), koreksi/draf dari formulir lama,
-// penilaian Etika yang ditahan di HP selama server belum menyimpan Etika,
+// penilaian Etika yang ditahan di HP selama server belum menyimpan Etika, menu Review Negatif
+// dan Komplain di HP pos (petugas wajib, guide dari daftar, draf, antrean bersama, ditahan selama
+// server belum menerimanya, Riwayat/CSV tanpa data wisatawan) beserta keputusannya di Verifikasi,
 // Verifikasi dan Aturan Nilai di ruang kerja,
 // salinan spreadsheet di latar belakang, serta Data Guide (impor .csv), Dashboard,
 // migrasi awal NilaiGuide (pratinjau, putus lalu lanjutkan, batalkan), dan Tautan Pos
@@ -23,7 +25,7 @@ import {createServer} from 'node:net';
 import {openDb,insert,one,all,now} from '../lib/db.mjs';
 import {seedPermissions,digest,hashPasswordSync} from '../lib/auth.mjs';
 import {guidePosts} from '../lib/guide-form.mjs';
-import {visitDayRows,visitOverview} from '../lib/visit-data.mjs';
+import {visitDayRows,visitOverview,witaDate} from '../lib/visit-data.mjs';
 import {createFakeGoogle} from './fake-google-sheets.mjs';
 import {createApp} from '../server.mjs';
 
@@ -502,6 +504,146 @@ try{
     // Tanpa temuan dengan Etika +2 → 102.
     assert.equal(visitOverview(db,saved.wita_date,saved.wita_date).perGuide.find(g=>g.guideId==='G-040').nilai,102);
     await page.unroute('**/api/guide-form/submit');await settle();
+  });
+
+  // Menu Review Negatif dan Komplain di HP pos (keputusan pemilik 23 November 2026).
+  const saranLap=()=>page.$$eval('#lapGuideSaran .saran-item',els=>els.map(e=>({id:e.dataset.lapSaran,nama:e.querySelector('.saran-nama').textContent})));
+  const pilihLap=async(ketik,id)=>{await page.fill('#lapGuideInput',ketik);await page.click(`#lapGuideSaran [data-lap-saran="${id}"]`);assert.match(await page.textContent('#lapGuidePicked'),new RegExp(id));};
+  const toastTerakhir=()=>page.$$eval('#toastWrap .toast',els=>els.length?els.at(-1).textContent:'');
+  // Toast "tersimpan" muncul setelah penyimpanan IndexedDB selesai (dan toast kiriman bisa
+  // langsung menyusul), jadi ditunggu di antara semua toast yang tampil.
+  const tungguToast=async re=>{const end=Date.now()+5000;for(;;){const t=await page.$$eval('#toastWrap .toast',els=>els.map(e=>e.textContent).join(' | '));if(re.test(t))return t;if(Date.now()>end)throw new Error(`Menunggu toast ${re}: "${t}"`);await page.waitForTimeout(100);}};
+  const patokanLap=()=>page.$$eval('[data-patokan-jenis].aktif',els=>els.map(e=>e.dataset.patokanJenis));
+  await check('HP: menu Review Negatif dan Komplain dari Beranda dan menu utama; nama petugas wajib, guide dipilih dari daftar, jenis keluhan, tanggal kejadian; pindah menu mempertahankan isian; draf pulih',async()=>{
+    await page.evaluate(()=>{Sync.Settings.set({petugas:null});App.go('home');});
+    for(const view of ['review','komplain']){assert.equal(await page.locator(`#view-home .duatombol [data-nav="${view}"]`).count(),1);assert.equal(await page.locator(`#drawer [data-nav="${view}"]`).count(),1);}
+    assert.equal(await page.textContent('.criterion[data-crit="idCard"] .crit-icon'),'🆔','ikon ID-Card yang terbaca di HP lama');
+    await page.click('#view-home .duatombol [data-nav="review"]');
+    assert(await page.isVisible('#view-laporan'));assert.equal(await page.textContent('#appTitle'),'Review Negatif');assert.deepEqual(await patokanLap(),['review']);
+    assert(await page.isHidden('#lapKronologi'));assert(await page.isHidden('#lapWisKontak'));assert(await page.isHidden('#lapServer'));
+    assert.equal(await page.inputValue('#lapTanggal'),await page.evaluate(()=>DB.tanggalLokal()));
+    assert.deepEqual(await page.$$eval('#lapKode option',o=>o.map(x=>x.value)),['','kurang-ramah','penjelasan-kurang','terburu-buru','terlambat','review-lain']);
+    // Nama petugas wajib; pilihannya sama dengan formulir penilaian (sekali per shift).
+    assert.match(await page.textContent('#lapPetugasBox'),/Nama petugas yang mencatat \(wajib/);
+    await page.click('#btnSaveLaporan');assert.match(await toastTerakhir(),/Pilih nama petugas/);
+    await page.selectOption('#lapPetugasSelect',petugasUji.id);await page.waitForSelector('#lapPetugasBox [data-ganti-petugas]');
+    assert.match(await page.textContent('#lapPetugasBox'),/Petugas Uji Satu · berlaku sampai/);assert.match(await page.textContent('#petugasBox'),/Petugas Uji Satu/);
+    // Guide tidak pernah ditebak dari ketikan.
+    await page.fill('#lapGuideInput','contoh a2-0');assert((await saranLap()).length>1);await page.click('#btnSaveLaporan');assert.match(await toastTerakhir(),/Pilih guide dari daftar/);
+    await page.click('#lapGuideSaran [data-lap-saran="G-011"]');assert.match(await page.textContent('#lapGuidePicked'),/Guide Contoh A2-01 · G-011/);assert(await page.isHidden('#lapGuideSaran'));
+    await page.click('#btnSaveLaporan');assert.match(await toastTerakhir(),/Pilih jenis keluhan/);
+    await page.selectOption('#lapKode','kurang-ramah');await page.click('#btnSaveLaporan');assert.match(await toastTerakhir(),/Tulis apa kata wisatawan/);
+    await page.fill('#lapKeterangan','Tamu bilang guide membentak saat antre.');
+    // Pindah menu: guide dan ketikan tetap, jenis keluhan dipilih ulang dari daftar menu tujuan.
+    await page.click('#lapGantiJenis');assert.equal(await page.textContent('#appTitle'),'Komplain');assert(await page.isVisible('#lapKronologi'));assert.deepEqual(await patokanLap(),['komplain']);
+    assert.deepEqual([await page.inputValue('#lapGuideInput'),await page.inputValue('#lapKeterangan'),await page.inputValue('#lapKode')],['Guide Contoh A2-01','Tamu bilang guide membentak saat antre.','']);
+    assert.equal(await page.$$eval('#lapKode option[value^="komplain-"]',o=>o.length),5);
+    await page.click('#lapGantiJenis');assert.equal(await page.textContent('#appTitle'),'Review Negatif');await page.selectOption('#lapKode','kurang-ramah');
+    // Draf terenkripsi pulih setelah dimuat ulang.
+    await page.waitForTimeout(500);await page.reload();await page.waitForFunction(()=>App.state.initialised&&App.state.guides.length>30);
+    await page.evaluate(()=>App.go('review'));
+    assert.deepEqual([await page.inputValue('#lapGuideInput'),await page.inputValue('#lapKode'),await page.inputValue('#lapKeterangan')],['Guide Contoh A2-01','kurang-ramah','Tamu bilang guide membentak saat antre.']);
+    assert.equal(await page.evaluate(()=>localStorage.getItem('bpb.pg.draftLaporan').includes('membentak')),false,'draf tidak tersimpan polos');
+  });
+  await check('HP: review negatif dan komplain masuk antrean yang sama dan terkirim; bukan penilaian (Beranda, Riwayat tanpa Perbaiki, CSV terpisah tanpa data wisatawan)',async()=>{
+    const before=await page.evaluate(()=>DB.counts()),pos=await page.evaluate(()=>App.state.form.pos);
+    await page.click('#btnSaveLaporan');await tungguToast(/Review negatif tersimpan/);
+    await until(c=>c.synced===before.synced+1,'review negatif terkirim');
+    const review=one(db,"SELECT * FROM visit_guest_reports WHERE guide_id='G-011'");
+    assert.deepEqual([review.status,review.jenis,review.kode,review.keterangan,review.petugas_nama,review.pos,review.kronologi,review.wisatawan_kontak],['menunggu','review','kurang-ramah','Tamu bilang guide membentak saat antre.','Petugas Uji Satu',pos,'','']);
+    // Komplain lewat menu utama; Enter memilih satu-satunya saran tanpa menyimpan.
+    await page.evaluate(()=>App.go('home'));await page.click('#btnMenu');await page.click('#drawer [data-nav="komplain"]');
+    assert.equal(await page.textContent('#appTitle'),'Komplain');assert.equal(await page.inputValue('#lapGuideInput'),'','formulir kosong setelah disimpan');
+    await page.fill('#lapGuideInput','contoh d1-02');assert.equal((await saranLap()).length,1);await page.press('#lapGuideInput','Enter');
+    assert.match(await page.textContent('#lapGuidePicked'),/G-022/);assert.equal((await page.evaluate(()=>DB.counts())).pending,0);
+    // Tanggal kejadian kemarin (bila masih bulan yang sama), dalam batas 7 hari ke belakang.
+    const tanggal=await page.evaluate(()=>{const t=DB.tanggalLokal(),d=new Date(t+'T00:00:00Z');d.setUTCDate(d.getUTCDate()-1);const k=d.toISOString().slice(0,10);return k.slice(0,7)===t.slice(0,7)?k:t;});
+    await page.selectOption('#lapKode','komplain-memaksa');await page.fill('#lapTanggal',tanggal);await page.fill('#lapKeterangan','Tamu dipaksa membeli kain di kios.');
+    await page.click('#btnSaveLaporan');assert.match(await toastTerakhir(),/Tulis kronologi komplain/);
+    await page.fill('#lapKronologi','Setelah turun dari bus, guide membawa tamu ke kios dan menolak melanjutkan tur sebelum tamu membeli.');
+    await page.fill('#lapWisNama','Tamu Uji');await page.fill('#lapWisAsal','Australia');await page.fill('#lapWisKontak','+61 400 000 000');
+    await page.click('#btnSaveLaporan');await tungguToast(/Komplain tersimpan/);
+    await until(c=>c.synced===before.synced+2,'komplain terkirim');
+    const komplain=one(db,"SELECT * FROM visit_guest_reports WHERE guide_id='G-022'");
+    assert.deepEqual([komplain.status,komplain.jenis,komplain.kode,komplain.wita_date,komplain.wisatawan_nama,komplain.wisatawan_asal,komplain.wisatawan_kontak],['menunggu','komplain','komplain-memaksa',tanggal,'Tamu Uji','Australia','+61 400 000 000']);
+    assert.match(komplain.kronologi,/menolak melanjutkan tur/);
+    // Pengaman rollback: catatan di HP membawa seragam "laporan" yang pasti ditolak bila dikirim PWA 2.3.
+    assert(await page.evaluate(async()=>(await DB.all()).filter(e=>e.laporan).every(e=>e.criteria?.seragam==='laporan')));
+    // Beranda: "Penilaian Hari Ini" tidak bertambah; catatan dihitung terpisah.
+    await page.evaluate(()=>App.go('home'));
+    assert.equal(await page.textContent('#statTotal'),String(before.today));assert.match(await page.textContent('#laporanHariIni'),/dicatat hari ini: 2/);
+    // Riwayat: kartu catatan tanpa tombol Perbaiki dan tanpa data wisatawan.
+    await page.evaluate(()=>App.go('riwayat'));await page.click('.chip[data-filter="laporan"]');await page.waitForTimeout(300);
+    const t=await page.textContent('#historyList');
+    assert.match(t,/👎 Review negatif: Kurang ramah atau tidak sopan/);assert.match(t,/📢 Komplain: Memaksa belanja atau donasi/);assert.match(t,/Terkirim — menunggu keputusan Pengelola/);
+    assert.match(t,/Data wisatawan tercatat/);assert.doesNotMatch(t,/\+61 400|Tamu Uji/);
+    assert.equal(await page.locator('#historyList .card').count(),2);assert.equal(await page.locator('#historyList [data-fix]').count(),0);
+    await page.click('.chip[data-filter="all"]');
+    const csv=await page.evaluate(async()=>{let out='';const orig=App.download;App.download=(n,c)=>{out=c;};await App.exportCsv();App.download=orig;return out;});
+    const penilaian=await page.evaluate(async()=>(await DB.all()).filter(e=>!DB.bukanPenilaian(e)).length);
+    assert.match(csv,new RegExp(`Total penilaian;${penilaian}\r`));assert.match(csv,/Review negatif tercatat;1/);assert.match(csv,/Komplain tercatat;1/);assert.match(csv,/REVIEW NEGATIF & KOMPLAIN/);
+    assert.match(csv,/;Review negatif;G-011;Guide Contoh A2-01;Kurang ramah atau tidak sopan;Tamu bilang guide membentak saat antre\.;;Petugas Uji Satu;Terkirim;/);
+    assert.match(csv,/;Komplain;G-022;Guide Contoh D1-02;Memaksa belanja atau donasi;Tamu dipaksa membeli kain di kios\.;Setelah turun dari bus/);assert.doesNotMatch(csv,/\+61 400|Tamu Uji|Australia/);
+  });
+  await check('Server belum menerima review negatif & komplain: catatan ditahan di HP (bukan ditolak) dengan spanduk; setelah server siap terkirim sendiri tanpa kunci evaluations',async()=>{
+    const bodies=[];
+    await page.route('**/api/guide-form/context',async route=>{const res=await route.fetch(),body=await res.json();delete body.penilaian.laporan;await route.fulfill({response:res,json:body});});
+    await page.route('**/api/guide-form/submit',route=>{bodies.push(JSON.parse(route.request().postData()));return route.continue();});
+    await page.evaluate(()=>Sync.refreshGuides({force:true}));assert.equal(await page.evaluate(()=>Sync.serverTerimaLaporan()),false);
+    await page.evaluate(()=>App.go('review'));assert(await page.isVisible('#lapServer'));assert.match(await page.textContent('#lapServer'),/Portal belum menerima review negatif/);
+    await pilihLap('contoh a2-06','G-016');await page.selectOption('#lapKode','terlambat');await page.fill('#lapKeterangan','Tamu menunggu guide 40 menit.');
+    await page.click('#btnSaveLaporan');await tungguToast(/Review negatif tersimpan/);
+    await page.evaluate(async()=>{for(let i=0;i<20&&(await Sync.syncNow()).skipped;i++)await new Promise(r=>setTimeout(r,250));});
+    await page.waitForFunction(()=>!document.querySelector('#serverNotice').hidden);
+    const notice=await page.textContent('#serverNotice');assert.match(notice,/1 review negatif\/komplain menunggu portal diperbarui/);assert.doesNotMatch(notice,/penilaian menunggu/);
+    assert(bodies.every(b=>!b.laporan),'server lama tidak pernah menerima catatan');
+    assert(await page.evaluate(async()=>(await DB.pending()).every(e=>!e.tolakan&&!e.lastError)),'ditahan bukan ditolak');
+    assert.equal(one(db,"SELECT count(*) n FROM visit_guest_reports WHERE guide_id='G-016'").n,0);
+    // Server diperbarui: bahan formulirnya membawa `laporan` lagi (Tes Koneksi atau pembaruan 10 menit).
+    await page.unroute('**/api/guide-form/context');
+    await page.evaluate(async()=>{await Sync.ping();for(let i=0;i<20&&(await Sync.syncNow()).skipped;i++)await new Promise(r=>setTimeout(r,250));});
+    await until(c=>c.pending===0,'catatan terkirim setelah server siap');await page.waitForFunction(()=>document.querySelector('#serverNotice').hidden);
+    assert(bodies.some(b=>Array.isArray(b.laporan)&&b.laporan.length===1&&b.evaluations===undefined),JSON.stringify(bodies.map(Object.keys)));
+    assert.equal(one(db,"SELECT kode FROM visit_guest_reports WHERE guide_id='G-016'").kode,'terlambat');
+    await page.unroute('**/api/guide-form/submit');
+  });
+  await check('Verifikasi: Pengelola melihat review negatif dan komplain (dengan data wisatawan), menyetujui review dengan potongan bawaan yang bisa diubah, komplain wajib klarifikasi, memindah dan menolak; laporan bulanan: gugur komplain dan nilai akhir; potongan bawaan di Aturan Nilai',async()=>{
+    await settle();
+    await portal.goto(base+'/#visits');await portal.reload();await portal.waitForSelector('text=Dashboard Kunjungan');await portal.waitForSelector('.stat-value');
+    const dash=await portal.textContent('main');assert.match(dash,/3 laporan menunggu verifikasi/);assert.match(dash,/1 komplain, 2 review negatif/);
+    await portal.goto(base+'/#visits-flags');await portal.waitForSelector('[data-visit="guest-approve"]');
+    const main=await portal.textContent('main');
+    assert.match(main,/Kurang ramah atau tidak sopan/);assert.match(main,/Memaksa belanja atau donasi/);assert.match(main,/Wisatawan: Tamu Uji · Australia · \+61 400 000 000/);assert.match(main,/Kronologi: Setelah turun dari bus/);
+    const row=name=>portal.locator('tr',{hasText:name});
+    // Review negatif: isian potongan berisi potongan bawaan (5) dan boleh diganti.
+    await row('Guide Contoh A2-01').locator('[data-visit="guest-approve"]').click();await portal.waitForSelector('dialog [name=potongan]');
+    assert.equal(await portal.inputValue('dialog [name=potongan]'),'5');await portal.fill('dialog [name=potongan]','25');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Review negatif disetujui.');
+    assert.deepEqual({...one(db,"SELECT status,potongan FROM visit_guest_reports WHERE guide_id='G-011'")},{status:'disetujui',potongan:25});
+    // Komplain: klarifikasi guide wajib sebelum disetujui.
+    await row('Guide Contoh D1-02').locator('[data-visit="guest-approve"]').click();await portal.waitForSelector('dialog [name=klarifikasi]');
+    await portal.click('dialog [type=submit]');await portal.waitForTimeout(300);assert.equal(one(db,"SELECT status FROM visit_guest_reports WHERE guide_id='G-022'").status,'menunggu');
+    await portal.fill('dialog [name=klarifikasi]','Guide tidak menanggapi saat dihubungi.');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Komplain disetujui.');
+    assert.equal(one(db,"SELECT status FROM visit_guest_reports WHERE guide_id='G-022'").status,'disetujui');
+    // Review yang ternyata dugaan pelanggaran dipindah ke komplain, lalu ditolak dengan alasan.
+    await row('Guide Contoh A2-06').locator('[data-visit="guest-move"]').click();await portal.waitForSelector('dialog [name=kode]');
+    await portal.selectOption('dialog [name=kode]','komplain-menelantarkan');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Catatan dipindah ke komplain.');
+    await row('Guide Contoh A2-06').locator('[data-visit="guest-reject"]').click();await portal.waitForSelector('dialog [name=catatan][required]');
+    await portal.fill('dialog [name=catatan][required]','Tamu salah mengenali guide.');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Catatan ditolak.');
+    assert.deepEqual({...one(db,"SELECT status,jenis,jenis_awal,kode FROM visit_guest_reports WHERE guide_id='G-016'")},{status:'ditolak',jenis:'komplain',jenis_awal:'review',kode:'komplain-menelantarkan'});
+    // Laporan bulanan: komplain menggugurkan, review memotong nilai akhir; ekspor tanpa data wisatawan.
+    await portal.goto(base+'/#visits-reports');await portal.waitForSelector('text=Ringkasan per guide');await portal.waitForSelector('[data-trend] svg');
+    const report=await portal.textContent('main');assert.match(report,/Gugur — komplain/);assert.match(report,/Nilai akhir/);
+    const today=witaDate(Date.now()),perGuide=visitOverview(db,`${today.slice(0,7)}-01`,today).perGuide,g11=perGuide.find(x=>x.guideId==='G-011'),g22=perGuide.find(x=>x.guideId==='G-022');
+    assert.deepEqual([g11.potonganReview,g11.nilaiAkhir],[25,Math.max(0,g11.nilai-25)]);assert.deepEqual([g22.status,g22.sebab,g22.nilaiAkhir,g22.peringkat],['gugur','komplain',0,null]);
+    const [monthly]=await Promise.all([portal.waitForEvent('download'),portal.click('[data-visit="export-report"]')]);
+    const files=await xlsxFiles(monthly);assert.deepEqual(sheetNames(files).map(n=>n.replaceAll('&amp;','&')),['Ringkasan','Per hari','Per minggu','Tren 12 bulan','Per pos','Per regu','Ringkasan per guide','Review & komplain']);
+    const sheet=files.get('xl/worksheets/sheet8.xml');assert.match(sheet,/Memaksa belanja atau donasi/);assert.match(sheet,/Guide tidak menanggapi saat dihubungi\./);assert.doesNotMatch(sheet,/\+61 400|Tamu Uji/);
+    await portal.waitForSelector('text=Laporan bulanan diekspor.');
+    // Potongan bawaan saat menyetujui review negatif.
+    await portal.goto(base+'/#visits-scoring');await portal.waitForSelector('[data-visit="report-settings"]');
+    assert.match(await portal.textContent('main'),/Potongan bawaan review negatif:\s*−5 poin per review/);
+    await portal.click('[data-visit="report-settings"]');await portal.fill('dialog [name=pot_review]','8');await portal.click('dialog [type=submit]');await portal.waitForSelector('text=Potongan bawaan disimpan.');
+    assert.equal(one(db,'SELECT pot_review FROM visit_form_settings WHERE id=1').pot_review,8);
   });
   assert.equal(dialogs,0);
   assert.deepEqual(errors,[]);

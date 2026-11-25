@@ -16,6 +16,8 @@
   const BACKUP_INTERVAL_MS = 5 * 60 * 1000; // §10: backup tiap 5 menit
   const STORAGE_LIMIT_BYTES = 10 * 1024 * 1024; // §10: batas 10 MB
   const DRAFT_KEY = 'bpb.pg.draft';
+  // Draf formulir Review Negatif / Komplain (2.4.0), terpisah dari draf penilaian.
+  const DRAFT_LAPORAN_KEY = 'bpb.pg.draftLaporan';
   const STATUS_BACKUP_KEY = 'bpb.pg.backupStatus';
   const JAM_KEY = 'bpb.pg.selisihJam';
 
@@ -206,13 +208,19 @@
     setEncryption(on) { encryptionEnabled = !!on; },
     isEncryptionActive() { return encryptionEnabled && canCrypto(); },
 
-    /** Simpan satu penilaian (status awal pending). */
+    /**
+     * Simpan satu entri antrean (status awal pending): penilaian, atau catatan review
+     * negatif / komplain wisatawan (2.4.0, `evaluation.laporan`). Keduanya memakai antrean,
+     * enkripsi, cadangan, dan kirim ulang yang sama; `jenisEntri` disimpan polos supaya
+     * hitungan Beranda dan pemeriksaan jeda bisa memisahkannya tanpa mendekripsi.
+     */
     async save(evaluation) {
       const packed = await encryptObject(evaluation);
       const record = {
         evaluationId: evaluation.evaluationId,
         timestamp: evaluation.timestamp,
         pos: evaluation.pos,
+        jenisEntri: evaluation.laporan ? evaluation.laporan.jenis : 'penilaian',
         syncState: 0,
         attempts: 0,
         tolakan: 0,
@@ -266,7 +274,7 @@
                        koreksiDari: r.koreksiDari || null, lastError: r.lastError || null });
         } catch {
           items.push({ evaluationId: r.evaluationId, timestamp: r.timestamp, pos: r.pos,
-                       guideName: '(data rusak)', guideId: '-', criteria: {}, corrupt: true,
+                       guideName: '(data rusak)', guideId: '-', criteria: {}, corrupt: true, jenisEntri: r.jenisEntri || 'penilaian',
                        buntu: !!r.buntu && r.syncState !== 1, lastError: r.lastError || null,
                        synced: r.syncState === 1 });
         }
@@ -289,7 +297,7 @@
         } catch (e) {
           console.warn('[db] gagal membuka entri', r.evaluationId, e);
           out.push({ evaluationId: r.evaluationId, timestamp: r.timestamp, pos: r.pos,
-                     guideName: '(data rusak)', guideId: '-', criteria: {}, corrupt: true,
+                     guideName: '(data rusak)', guideId: '-', criteria: {}, corrupt: true, jenisEntri: r.jenisEntri || 'penilaian',
                      buntu: !!r.buntu && r.syncState !== 1, lastError: r.lastError || null,
                      synced: r.syncState === 1 });
         }
@@ -356,7 +364,7 @@
                      tolakan: r.tolakan || 0, lastError: r.lastError || null });
         } catch {
           out.push({ evaluationId: r.evaluationId, timestamp: r.timestamp, pos: r.pos,
-                     guideName: '(data rusak)', guideId: '-', criteria: {}, corrupt: true,
+                     guideName: '(data rusak)', guideId: '-', criteria: {}, corrupt: true, jenisEntri: r.jenisEntri || 'penilaian',
                      synced: false, buntu: true, lastError: r.lastError || null });
         }
       }
@@ -395,6 +403,8 @@
       // menyimpan ribuan entri.
       const calon = [];
       for (const r of await DB._mentah(false)) {
+        // Review negatif / komplain bukan pengantaran: tidak pernah menghalangi penilaian.
+        if (DB.bukanPenilaian(r)) continue;
         if (Number(r.pos) !== Number(pos) || r.diganti || (r.buntu && r.syncState !== 1)) continue;
         if (Math.abs(new Date(r.timestamp).getTime() - ms) >= batas) continue;
         try { calon.push({ ...(await decryptObject(r)), diganti: false, buntu: false }); } catch {}
@@ -472,15 +482,21 @@
      */
     async counts() {
       const today = DB.tanggalLokal();
-      let total = 0, pending = 0, synced = 0, buntu = 0, hariIni = 0;
+      let total = 0, pending = 0, synced = 0, buntu = 0, hariIni = 0, laporanHariIni = 0;
       for (const r of await DB._mentah(false)) {
         total++;
         if (r.syncState === 1) synced++;
         else if (r.buntu) buntu++;
         else pending++;
-        if (DB.tanggalLokal(r.timestamp) === today) hariIni++;
+        // "Penilaian Hari Ini" hanya pengantaran; review negatif & komplain dihitung terpisah.
+        if (DB.tanggalLokal(r.timestamp) === today) { if (DB.bukanPenilaian(r)) laporanHariIni++; else hariIni++; }
       }
-      return { total, pending, synced, buntu, today: hariIni };
+      return { total, pending, synced, buntu, today: hariIni, laporanToday: laporanHariIni };
+    },
+
+    /** true untuk catatan review negatif / komplain (record mentah maupun yang didekripsi). */
+    bukanPenilaian(r) {
+      return !!r && (r.jenisEntri === 'review' || r.jenisEntri === 'komplain' || !!r.laporan);
     },
 
     async markSynced(evaluationId) {
@@ -915,6 +931,23 @@
       DB._draftTimer = null;
       DB._draftTerakhir = null;
       try { localStorage.removeItem(DRAFT_KEY); } catch {}
+    },
+
+    /* Draf Review Negatif / Komplain: isinya keterangan wisatawan, jadi dikunci sama seperti draf penilaian. */
+    async simpanDraftLaporan(obj) {
+      try {
+        if (!obj) { localStorage.removeItem(DRAFT_LAPORAN_KEY); return; }
+        localStorage.setItem(DRAFT_LAPORAN_KEY, JSON.stringify(await encryptObject(obj)));
+      } catch (e) { console.warn('[db] draf laporan gagal disimpan', e); }
+    },
+    async bacaDraftLaporan() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(DRAFT_LAPORAN_KEY) || 'null');
+        return raw && typeof raw === 'object' ? await decryptObject(raw) : null;
+      } catch (e) { console.warn('[db] draf laporan tidak terbaca', e); return null; }
+    },
+    hapusDraftLaporan() {
+      try { localStorage.removeItem(DRAFT_LAPORAN_KEY); } catch {}
     },
 
     async exportJson() {

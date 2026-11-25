@@ -80,6 +80,7 @@
     $('#btnMuatUlang').addEventListener('click', async () => {
       // Draf disimpan dulu, jadi isian formulir pulih setelah dimuat ulang.
       await DB.simpanDraftSegera(App.state.form);
+      if (App.simpanDraftLaporan) await App.simpanDraftLaporan();
       location.reload();
     });
 
@@ -187,22 +188,69 @@
       if (el) el.addEventListener('change', () => { App.state.form.crit[kunci] = el.value; berubah(); });
     }
     // Nama petugas: pilih dari daftar, berlaku satu shift; "Ganti petugas" membuka daftarnya lagi.
-    const petugasBox = $('#petugasBox');
-    if (petugasBox) {
-      petugasBox.addEventListener('change', e => {
-        if (e.target.id !== 'petugasSelect') return;
-        delete petugasBox.dataset.ganti;
+    // Kotak yang sama ada di formulir penilaian dan formulir Review Negatif / Komplain.
+    const kotakPetugas = ['#petugasBox', '#lapPetugasBox'].map(sel => $(sel)).filter(Boolean);
+    for (const box of kotakPetugas) {
+      box.addEventListener('change', e => {
+        if (!e.target.matches('[data-pilih-petugas]')) return;
+        kotakPetugas.forEach(b => delete b.dataset.ganti);
         App.pilihPetugas(e.target.value);
         if (e.target.value) App.toast('Nama petugas dipakai sampai pergantian shift', 'ok', '👤');
       });
-      petugasBox.addEventListener('click', e => {
+      box.addEventListener('click', e => {
         if (!e.target.closest('[data-ganti-petugas]')) return;
-        petugasBox.dataset.ganti = '1';
+        box.dataset.ganti = '1';
         App.tampilkanPetugas();
       });
     }
 
     $('#formEval').addEventListener('submit', App.submitEval);
+
+    // Formulir Review Negatif / Komplain (03b-laporan.js). Dijaga: selama pembaruan, HP bisa
+    // sesaat memuat index.html lama dari cache yang belum punya formulir ini.
+    const formLaporan = $('#formLaporan');
+    if (formLaporan && App.simpanLaporan) {
+      formLaporan.addEventListener('submit', App.simpanLaporan);
+      // Isian teks/pilihan disalin ke state dan draf; kotak nama guide punya jalurnya sendiri.
+      formLaporan.addEventListener('input', e => App.ubahIsianLaporan(e.target));
+      formLaporan.addEventListener('change', e => App.ubahIsianLaporan(e.target));
+      const lapInput = $('#lapGuideInput'), lapSaran = $('#lapGuideSaran');
+      lapInput.addEventListener('input', () => App.ketikGuideLaporan());
+      lapInput.addEventListener('focus', () => App.tampilkanSaranLaporan());
+      lapInput.addEventListener('click', () => { if (!App.saranLaporanTerbuka()) App.tampilkanSaranLaporan(); });
+      lapInput.addEventListener('keydown', e => {
+        if (e.isComposing) return;
+        if (e.key === 'Tab') { App.tutupSaranLaporan(); return; }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          if (!App.saranLaporanTerbuka()) App.tampilkanSaranLaporan();
+          if (!App.saranLaporanTerbuka()) return;
+          e.preventDefault();
+          App.geserSaranLaporan(e.key === 'ArrowDown' ? 1 : -1);
+        } else if (e.key === 'Enter') {
+          // Enter tidak pernah menyimpan dari kotak nama: memilih baris yang disorot atau satu-satunya baris.
+          e.preventDefault();
+          const id = App.saranLaporanUntukEnter();
+          if (id) App.pilihGuideLaporan(id);
+        } else if (e.key === 'Escape' && App.saranLaporanTerbuka()) {
+          e.preventDefault();
+          App.tutupSaranLaporan();
+        }
+      });
+      lapInput.addEventListener('blur', e => {
+        const ke = e.relatedTarget;
+        if (ke && !ke.closest('.saran-wrap') && !ke.closest('button')) App.tutupSaranLaporan();
+      });
+      document.addEventListener('click', e => {
+        if (App.saranLaporanTerbuka() && !e.target.closest('.saran-wrap')) App.tutupSaranLaporan();
+      });
+      lapSaran.addEventListener('mousedown', e => e.preventDefault());
+      lapSaran.addEventListener('click', e => {
+        const item = e.target.closest('[data-lap-saran]');
+        if (!item) return;
+        App.pilihGuideLaporan(item.dataset.lapSaran);
+        lapInput.blur();
+      });
+    }
 
     $('#guideSearch').addEventListener('input', App.renderGuideCards);
 
@@ -288,7 +336,11 @@
       App.go((location.hash || '#home').slice(1));
     });
     window.addEventListener('beforeunload', () => DB.backupNow());
-    document.addEventListener('visibilitychange', () => { if (document.hidden) DB.simpanDraftSegera(App.state.form); });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) return;
+      DB.simpanDraftSegera(App.state.form);
+      if (App.simpanDraftLaporan) App.simpanDraftLaporan();
+    });
   }
 
   /** Muat ulang daftar tautan dari IndexedDB ke state dan tampilan. */
@@ -375,7 +427,7 @@
       }
       if (state === 'tautan' || state === 'tautanDicabut') App.muatTautan();
       // Penilaian 2.3 menunggu server yang menyimpan Etika: spanduk, bukan toast tiap menit.
-      if (state === 'menungguServer') App.tampilkanMenungguServer(d.ditunda);
+      if (state === 'menungguServer') App.tampilkanMenungguServer(d);
       else if (state === 'done' || state === 'idle') App.tampilkanMenungguServer(0);
       if (state === 'offline') { /* badge saja */ }
       if (state === 'progress' || state === 'syncing') return;
@@ -416,6 +468,7 @@
 
     App.renderPenilaianForm();
     await App.loadDraft();
+    if (App.muatDraftLaporan) { try { await App.muatDraftLaporan(); } catch {} }
     App.applyCritUI();
     App.setNet();
     await App.refreshStats();
@@ -453,7 +506,7 @@
       let adaPengendali = !!navigator.serviceWorker.controller;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (!adaPengendali) { adaPengendali = true; return; }
-        if (App.state.current !== 'nilai' && App.formulirKosong()) { location.reload(); return; }
+        if (!['nilai', 'review', 'komplain'].includes(App.state.current) && App.formulirKosong()) { location.reload(); return; }
         App.state.versiBaruSiap = true;
         $('#updateBar').hidden = false;
       });

@@ -38,7 +38,8 @@ export default {fetch:withSupabase({auth:'secret'},async req=>{
    if(b.operation==='context')return {context:await guideFormContext(db,admitted.link)};
    const result=await submitGuideForm(db,admitted);
    await recordGuideFormResult(db,admitted,result,ipFingerprint(b.client_ip,env.VISITS_IP_HMAC_KEY));
-   return {receipt:guideFormReceipt(admitted,result),fresh:result.accepted.some(a=>!a.duplicate)};
+   // Catatan review negatif/komplain tidak disalin ke spreadsheet: hanya penilaian baru memicu penyalinan.
+   return {receipt:guideFormReceipt(admitted,result),fresh:result.accepted.some(a=>!a.duplicate&&!a.laporan)};
   },b.operation==='submit');
   assert(!outcome.limited,'Terlalu banyak kiriman. Coba lagi beberapa menit kemudian.',429);
   if(outcome.context)return Response.json({ok:true,result:outcome.context},{headers:{'Cache-Control':'no-store'}});

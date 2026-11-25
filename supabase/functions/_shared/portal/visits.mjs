@@ -6,7 +6,7 @@ import {digest, has as localHas} from './auth.mjs';
 import {guidePosts} from './guide-form.mjs';
 import {reguCodes, parseGuideId, visitGuideList, saveVisitGuide, importVisitGuides, visitRecordPage, visitOverview, visitReport, visitHistoryStatus, importVisitHistory, finishVisitHistory, cancelVisitHistory} from './visit-data.mjs';
 import {visitSheetStatus} from './visit-sheets.mjs';
-import {scoreRuleState, saveScoreRule, deleteScoreRule, findingTypeList, saveFindingType, assessorList, saveAssessor, formSettings, saveFormSettings, flagList, decideFlag, flagStatuses} from './visit-scoring.mjs';
+import {scoreRuleState, saveScoreRule, deleteScoreRule, findingTypeList, saveFindingType, assessorList, saveAssessor, formSettings, saveFormSettings, flagList, decideFlag, flagStatuses, guestReportList, decideGuestReport, guestReportStatuses, guestReportKinds, saveGuestReportSettings} from './visit-scoring.mjs';
 const localDeps = {
   has: localHas,
   audit: localAudit
@@ -244,12 +244,13 @@ export async function visitRoutes({db, user, p, method, body: b = {}, url}, deps
       can_manage: manage
     };
   }
-  if (p[1] === 'scoring' && p.length === 3 && method === 'POST' && ['rule', 'rule-delete', 'types', 'assessors', 'form'].includes(p[2])) {
+  if (p[1] === 'scoring' && p.length === 3 && method === 'POST' && ['rule', 'rule-delete', 'types', 'assessors', 'form', 'reports'].includes(p[2])) {
     assert(await has(db, user, 'visits.settings.manage'), 'Hanya pengelola kunjungan yang dapat mengubah aturan penilaian.', 403);
     if (p[2] === 'rule') return await tx(db, async () => await saveScoreRule(db, user, b, audit));
     if (p[2] === 'rule-delete') return await tx(db, async () => await deleteScoreRule(db, user, b, audit));
     if (p[2] === 'types') return await tx(db, async () => await saveFindingType(db, user, b, audit));
     if (p[2] === 'assessors') return await tx(db, async () => await saveAssessor(db, user, b, audit));
+    if (p[2] === 'reports') return await tx(db, async () => await saveGuestReportSettings(db, user, b, audit));
     return await tx(db, async () => await saveFormSettings(db, user, b, audit));
   }
   if (p[1] === 'flags' && p.length === 2 && method === 'GET') {
@@ -273,6 +274,30 @@ export async function visitRoutes({db, user, p, method, body: b = {}, url}, deps
   if (p[1] === 'flags' && p.length === 3 && p[2] === 'decide' && method === 'POST') {
     assert(await has(db, user, 'visits.settings.manage'), 'Hanya pengelola kunjungan yang dapat memverifikasi laporan.', 403);
     return await tx(db, async () => await decideFlag(db, user, b, audit));
+  }
+  if (p[1] === 'guest-reports' && p.length === 2 && method === 'GET') {
+    await requireAny(db, user, ['visits.settings.manage', 'visits.dashboard.read', 'visits.reports.read'], has);
+    const manage = await has(db, user, 'visits.settings.manage'), r = range(url), q = url.searchParams, filter = {
+      ...r
+    };
+    if (q.get('status')) {
+      filter.status = q.get('status');
+      assert(guestReportStatuses.includes(filter.status), 'Status catatan tidak valid.');
+    }
+    if (q.get('jenis')) {
+      filter.jenis = q.get('jenis');
+      assert(guestReportKinds.includes(filter.jenis), 'Jenis catatan tidak valid.');
+    }
+    return {
+      ...await guestReportList(db, filter, {
+        pribadi: manage
+      }),
+      can_decide: manage
+    };
+  }
+  if (p[1] === 'guest-reports' && p.length === 3 && p[2] === 'decide' && method === 'POST') {
+    assert(await has(db, user, 'visits.settings.manage'), 'Hanya pengelola kunjungan yang dapat memutuskan review negatif dan komplain.', 403);
+    return await tx(db, async () => await decideGuestReport(db, user, b, audit));
   }
   if (p[1] === 'sheet' && p.length === 2 && method === 'GET') {
     await requireAny(db, user, ['visits.dashboard.read', 'visits.forms.read', 'visits.settings.manage'], has);

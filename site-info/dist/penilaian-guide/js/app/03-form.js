@@ -76,24 +76,35 @@
     App.tampilkanPetugas();
   };
 
+  /**
+   * Kotak nama petugas di formulir penilaian (#petugasBox) dan di formulir Review Negatif /
+   * Komplain (#lapPetugasBox). Pilihan yang sama berlaku untuk keduanya selama satu shift.
+   * Penilaian boleh tanpa nama bila pengelola belum mengisi daftar; review negatif dan
+   * komplain tidak (nama petugas wajib), jadi kotaknya memberi tahu bila daftar masih kosong.
+   */
   App.tampilkanPetugas = function tampilkanPetugas() {
-    const box = $('#petugasBox');
-    if (!box) return;
     const daftar = App.konteksPenilaian().petugas || [];
-    // Tanpa daftar dari pengelola, penilaian tetap bisa disimpan tanpa nama petugas.
-    if (!daftar.length) { box.hidden = true; box.innerHTML = ''; return; }
-    box.hidden = false;
     const aktif = App.petugasAktif();
-    if (aktif && !box.dataset.ganti) {
-      const sampai = jamLokal(new Date(aktif.at + PETUGAS_JAM * 3600000).toISOString());
-      box.innerHTML = `<span>👤 <strong>${esc(aktif.nama)}</strong> <small>· berlaku sampai ${esc(sampai)}</small></span>` +
-        `<button type="button" class="chip" data-ganti-petugas="1">Ganti petugas</button>`;
-      return;
+    for (const [sel, selectId, wajib] of [['#petugasBox', 'petugasSelect', false], ['#lapPetugasBox', 'lapPetugasSelect', true]]) {
+      const box = $(sel);
+      if (!box) continue;
+      if (!daftar.length) {
+        box.hidden = !wajib;
+        box.innerHTML = wajib ? `<p class="help">⚠️ Daftar petugas belum diisi Pengelola Kunjungan. Nama petugas wajib untuk review negatif dan komplain — minta pengelola menambahkannya di Aturan Nilai, lalu buka Pengaturan → Tes Koneksi.</p>` : '';
+        continue;
+      }
+      box.hidden = false;
+      if (aktif && !box.dataset.ganti) {
+        const sampai = jamLokal(new Date(aktif.at + PETUGAS_JAM * 3600000).toISOString());
+        box.innerHTML = `<span>👤 <strong>${esc(aktif.nama)}</strong> <small>· berlaku sampai ${esc(sampai)}</small></span>` +
+          `<button type="button" class="chip" data-ganti-petugas="1">Ganti petugas</button>`;
+        continue;
+      }
+      box.innerHTML = `<label class="sublbl" for="${selectId}">${wajib ? 'Nama petugas yang mencatat (wajib, sekali per shift)' : 'Nama petugas yang menilai (sekali per shift)'}</label>` +
+        `<select id="${selectId}" class="bigselect" data-pilih-petugas="1"><option value="">Pilih nama Anda…</option>` +
+        daftar.map(p => `<option value="${esc(p.id)}"${aktif && aktif.id === p.id ? ' selected' : ''}>${esc(p.nama)}${p.keterangan ? ' — ' + esc(p.keterangan) : ''}</option>`).join('') +
+        `</select>`;
     }
-    box.innerHTML = `<label class="sublbl" for="petugasSelect">Nama petugas yang menilai (sekali per shift)</label>` +
-      `<select id="petugasSelect" class="bigselect"><option value="">Pilih nama Anda…</option>` +
-      daftar.map(p => `<option value="${esc(p.id)}"${aktif && aktif.id === p.id ? ' selected' : ''}>${esc(p.nama)}${p.keterangan ? ' — ' + esc(p.keterangan) : ''}</option>`).join('') +
-      `</select>`;
   };
 
   /* ---------------- Daftar pilihan dari portal ---------------- */
@@ -460,10 +471,13 @@
     }
   }
 
-  /** True bila formulir tidak berisi apa pun yang bisa hilang saat dimuat ulang. */
+  /**
+   * True bila formulir penilaian DAN formulir Review Negatif / Komplain tidak berisi apa pun
+   * yang bisa hilang saat dimuat ulang (versi baru menunggu sampai keduanya kosong).
+   */
   App.formulirKosong = function formulirKosong() {
     const f = App.state.form;
     return !App.state.koreksi && !f.guide && !String($('#guideInput').value || '').trim() &&
-      App.kriteriaKosong() && !String(f.catatan || '').trim();
+      App.kriteriaKosong() && !String(f.catatan || '').trim() && (!App.laporanBerisi || !App.laporanBerisi());
   }
 })();

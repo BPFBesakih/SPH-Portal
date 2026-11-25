@@ -24,6 +24,12 @@
     $('#drawerSync').textContent = `Menunggu sync: ${c.pending}`;
     $('#syncHint').textContent = c.pending ? `${c.pending} data menunggu dikirim` : 'Semua data sudah terkirim';
     $('#btnSyncNow').toggleAttribute('disabled', c.pending === 0);
+    // Review negatif & komplain tidak masuk "Penilaian Hari Ini" (bukan pengantaran).
+    const lap = $('#laporanHariIni');
+    if (lap) {
+      lap.hidden = !c.laporanToday;
+      lap.textContent = c.laporanToday ? `Review negatif & komplain dicatat hari ini: ${c.laporanToday}` : '';
+    }
 
     // Entri yang ditahan tidak masuk hitungan "Menunggu Sync" — kalau tidak
     // diberi tempat sendiri di layar utama, staff tidak akan pernah tahu ada
@@ -113,18 +119,29 @@
   }
 
   /**
-   * Spanduk Beranda bila penilaian 2.3 menunggu server portal yang menyimpan Etika.
-   * Datanya aman di HP dan tidak dihitung ditolak; terkirim sendiri setelah portal siap.
+   * Spanduk Beranda bila ada entri yang menunggu server portal diperbarui: penilaian 2.3
+   * (server belum menyimpan Etika) dan/atau review negatif & komplain (server belum
+   * menerimanya). Datanya aman di HP dan tidak dihitung ditolak; terkirim sendiri setelah
+   * portal siap. Menerima angka (penilaian saja, cara lama) atau {ditunda, laporan}.
    */
-  App.tampilkanMenungguServer = function tampilkanMenungguServer(jumlah) {
+  App.tampilkanMenungguServer = function tampilkanMenungguServer(tunggu) {
     const el = $('#serverNotice');
     if (!el) return;
-    el.hidden = !jumlah;
-    if (jumlah) {
-      el.innerHTML = `<strong>⏳ ${esc(jumlah)} penilaian menunggu portal diperbarui</strong>` +
+    const t = typeof tunggu === 'object' && tunggu ? tunggu : { ditunda: Number(tunggu) || 0, laporan: 0 };
+    const nilai = Number(t.ditunda) || 0, laporan = Number(t.laporan) || 0;
+    el.hidden = !(nilai || laporan);
+    let isi = '';
+    if (nilai) {
+      isi += `<strong>⏳ ${esc(nilai)} penilaian menunggu portal diperbarui</strong>` +
         `<p>Server portal belum menyimpan nilai Etika, jadi penilaian ini belum dikirim supaya Etika-nya tidak hilang. ` +
         `Datanya aman di HP dan terkirim sendiri setelah portal siap. Beri tahu Pengelola Kunjungan.</p>`;
     }
+    if (laporan) {
+      isi += `<strong>⏳ ${esc(laporan)} review negatif/komplain menunggu portal diperbarui</strong>` +
+        `<p>Server portal belum menerima review negatif dan komplain. Catatannya aman di HP dan terkirim sendiri ` +
+        `setelah portal siap. Beri tahu Pengelola Kunjungan.</p>`;
+    }
+    el.innerHTML = isi;
   }
 
   /** Spanduk Beranda bila tautan sebuah pos sudah tidak aktif (ATR-FL-07). */
@@ -184,7 +201,8 @@
     { i: '👋', t: 'Selamat Datang', b: 'Formulir ini untuk menilai guide di pos pemeriksaan Kawasan Besakih. Tidak perlu login — pos Anda sudah ditentukan tautan dari pengelola.' },
     { i: '📝', t: 'Langkah 1 — Pilih', b: 'Tekan tombol hijau “Penilaian Baru”. Pilih nama Anda sekali per shift, lalu pilih nama guide.' },
     { i: '✅', t: 'Langkah 2 — Catat yang terlihat', b: 'ID‑Card: Terpasang atau Tidak. Seragam: Lengkap, Kurang lengkap, atau Tidak berseragam. Etika: 0 = standar; kurangi hanya untuk perilaku yang perlu ditegur (bukan seragam atau ID), tambah hanya untuk yang benar-benar menonjol. Pelanggaran berat atau apresiasi: pilih jenisnya dan tulis catatan. Lalu tekan SIMPAN.' },
-    { i: '📶', t: 'Langkah 3 — Tenang', b: 'Tanpa sinyal pun data tetap tersimpan. Saat sinyal ada, data terkirim sendiri (⏳ menjadi ✅).' },
+    { i: '👎', t: 'Langkah 3 — Keluhan wisatawan', b: 'Wisatawan mengeluhkan guide? Pakai menu Review Negatif bila soal pelayanan (kurang ramah, terburu-buru), atau Komplain bila dugaan pelanggaran serius (pungutan, memaksa, kasar). Tulis apa kata wisatawan. Nilai guide baru berubah setelah Pengelola Kunjungan menyetujuinya.' },
+    { i: '📶', t: 'Langkah 4 — Tenang', b: 'Tanpa sinyal pun data tetap tersimpan. Saat sinyal ada, data terkirim sendiri (⏳ menjadi ✅).' },
   ];
 
   App.showTutorial = function showTutorial(force) {
