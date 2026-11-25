@@ -13,6 +13,9 @@ import {mountTrend,rangeLabel} from './visit-trend.js';
 // Nilai pengantaran = 100 − potongan (keputusan pemilik 11 November 2026): petugas pos
 // mencatat fakta, bobot potongan diatur per bulan di Aturan Nilai, dan laporan
 // pelanggaran berat/apresiasi diputuskan Pengelola di Verifikasi.
+// Review negatif & komplain (23 November 2026): dicatat petugas lewat menu HP pos dan diputuskan
+// di Verifikasi. Review memotong nilai akhir bulan itu; komplain (dan pelanggaran berat)
+// menghapus nilai bulan itu, gugur reward, dan tidak diperingkat.
 export const visitTitles={
  visits:'Dashboard Kunjungan',
  'visits-guides':'Data Guide',
@@ -36,7 +39,7 @@ const firstOfMonth=()=>localToday().slice(0,8)+'01';
 const shiftDay=(day,days)=>new Date(Date.parse(day+'T00:00:00Z')+days*86400000).toISOString().slice(0,10);
 const M={from:firstOfMonth(),to:localToday(),month:localToday().slice(0,7),overview:null,activity:null,sheet:null,guides:[],guideQuery:'',guideKategori:'',guideRegu:'',guideAktif:'1',
  records:[],recordsMore:false,recordsTotal:0,recordsFolded:null,recordFilter:{pos:'',regu:'',status:''},links:null,report:null,reportMode:null,reportDay:null,reportWeek:null,trendScope:'hari',
- flags:null,flagFrom:shiftDay(localToday(),-90),flagTo:localToday(),flagStatus:'menunggu',flagJenis:'',scoring:null};
+ flags:null,guestReports:null,flagFrom:shiftDay(localToday(),-90),flagTo:localToday(),flagStatus:'menunggu',flagJenis:'',scoring:null};
 const regu=['A1','A2','D1','D2'];
 const head=(title,note,actions='')=>`<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(note)}</p></div><div class="actions">${actions}</div></div>`;
 const btn=(label,visit,ico='plus',kind='primary',extra='')=>`<button type="button" class="button ${kind}" data-visit="${visit}" ${extra}>${icon(ico)}<span>${esc(label)}</span></button>`;
@@ -52,8 +55,18 @@ const etikaAvg=v=>v==null?'—':`${v>0?'+':v<0?'−':''}${Math.abs(v).toLocaleSt
 const uniformLabel={'-1':'Tidak sesuai','1':'Sesuai','2':'Bagus'};
 const seragamLabel={lengkap:'Lengkap',kurang:'Kurang lengkap',tidak:'Tidak berseragam'};
 const score=v=>v==null?'—':Number(v).toLocaleString('id-ID',{maximumFractionDigits:1});
-const rewardBadge={layak:['positive','Layak'],gugur:['negative','Gugur — pelanggaran berat'],bawah:['warm','Di bawah ambang'],kurang:['neutral','Belum cukup data']};
-const rewardCell=g=>{if(!g.status)return '—';const [kind,label]=rewardBadge[g.status]||['neutral',g.status];return `<span class="badge ${kind}" title="${esc(g.alasan||'')}">${esc(label)}</span>${g.beratMenunggu?`<br><span class="muted text-small">${number(g.beratMenunggu)} laporan berat menunggu</span>`:''}`;};
+const rewardBadge={layak:['positive','Layak'],gugur:['negative','Gugur'],bawah:['warm','Di bawah ambang'],kurang:['neutral','Belum cukup data']};
+// Gugur karena komplain atau pelanggaran berat (keduanya menghapus nilai bulan itu). portal-api
+// sebelum 23 November tidak mengirim `sebab`; saat itu gugur hanya karena pelanggaran berat.
+const gugurLabel={komplain:'Gugur — komplain',berat:'Gugur — pelanggaran berat'};
+const rewardLabel=g=>g.status==='gugur'?gugurLabel[g.sebab]||gugurLabel.berat:(rewardBadge[g.status]||[null,g.status])[1];
+const pendingNote=g=>[g.beratMenunggu?`${number(g.beratMenunggu)} laporan berat`:'',g.komplainMenunggu?`${number(g.komplainMenunggu)} komplain`:'',g.reviewMenunggu?`${number(g.reviewMenunggu)} review negatif`:''].filter(Boolean).join(', ');
+const rewardCell=g=>{if(!g.status)return '—';const [kind]=rewardBadge[g.status]||['neutral'];const wait=pendingNote(g);return `<span class="badge ${kind}" title="${esc(g.alasan||'')}">${esc(rewardLabel(g))}</span>${wait?`<br><span class="muted text-small">${esc(wait)} menunggu</span>`:''}`;};
+// Jumlah yang mungkin belum dikirim portal-api versi sebelumnya: tampil "—", bukan NaN.
+const count=v=>v==null?'—':number(v);
+const reviewCell=g=>g.review==null?'—':`${number(g.review)}${g.potonganReview?` <span class="muted text-small">(−${number(g.potonganReview)})</span>`:''}${g.reviewMenunggu?`<br><span class="muted text-small">${number(g.reviewMenunggu)} menunggu</span>`:''}`;
+const komplainCell=g=>g.komplain==null?'—':`${number(g.komplain)}${g.komplainMenunggu?`<br><span class="muted text-small">${number(g.komplainMenunggu)} menunggu</span>`:''}`;
+const rankCell=r=>r.peringkat==null?'<span class="muted" title="Nilai bulan ini dihapus (komplain atau pelanggaran berat)">—</span>':number(r.peringkat);
 // Ringkasan aturan yang dipakai, mis. "tanpa ID −20 · kurang lengkap −10 · …". Etika
 // −10…+10 ditambahkan langsung ke nilai (Etika menggantikan teguran sejak 17 November 2026).
 // Patokan Etika (pemilik, 18 November 2026); teks yang sama tampil di formulir HP pos.
@@ -77,7 +90,10 @@ function sheetLine(s){
 
 /* ---------- Dashboard ---------- */
 const rankMetric={
- nilai:['Nilai',r=>score(r.nilai)],
+ // Satu bulan: nilai akhir (sesudah potongan review negatif); rentang lain: nilai pengantaran.
+ nilai:['Nilai',r=>score(r.nilaiAkhir??r.nilai)],
+ komplain:['Komplain',r=>number(r.komplain)],
+ review:['Potongan review',r=>`−${number(r.potonganReview)} (${number(r.review)} review)`],
  tanpaId:['Tanpa ID',r=>`${number(r.tanpaId)} (${pct(r.porsiTanpaId)})`],
  seragam:['Seragam bermasalah',r=>`${number(r.kurangLengkap+r.tidakBerseragam)} (${pct(r.porsiSeragam)})`],
  etika:['Etika rata-rata',r=>`${etikaAvg(r.etikaRata)} (jumlah ${etikaSum(r.etika)})`],
@@ -88,27 +104,43 @@ function rankTable(title,rows,metric,note=''){
 }
 const figureCells=r=>`<td>${number(r.pengantaran)}</td><td><strong>${score(r.nilai)}</strong></td><td>${pct(r.persenId)}</td><td>${pct(r.persenSeragam)}</td><td>${etikaAvg(r.etikaRata)}</td>`;
 const figureHeads=['Pengantaran','Nilai','% ID terpasang','% seragam lengkap','Etika rata-rata'];
+// Per petugas: angka penilaian pos + review negatif/komplain yang dicatat (termasuk yang ditolak).
+const assessorHasReports=rows=>rows.some(r=>r.review!==undefined);
+const assessorReportCells=r=>`<td>${count(r.review)}</td><td>${count(r.komplain)}</td><td>${count(r.laporanDitolak)}</td>`;
+const assessorReportHeads=['Review dicatat','Komplain dicatat','Ditolak Pengelola'];
 const periodNote=d=>d.periode?.bulan_ringkasan?.length?` Bulan ${d.periode.bulan_ringkasan.map(m=>formatDate(m+'-01',{month:'long',year:'numeric'})).join(', ')} memakai ringkasan bulanan; rincian sampai ${formatDate(d.periode.folded_through)} ada di spreadsheet.`:'';
 function ruleNote(d){
  const a=d.aturan;if(!a)return '';
  const months=a.per_bulan||[],same=months.every(m=>ruleLine(m)===ruleLine(a));
  return same?`Nilai pengantaran = 100 − potongan + Etika (${ruleLine(a)}).`:`Nilai pengantaran = 100 − potongan + Etika, dengan aturan bulan masing-masing: ${months.map(m=>`${monthLabel(m.bulan)}: ${ruleLine(m)}`).join('; ')}.`;
 }
+// Catatan review negatif/komplain yang menunggu, untuk pemberitahuan di Dashboard dan Laporan.
+const reportWaiting=s=>({review:s.laporan?.review.menunggu||0,komplain:s.laporan?.komplain.menunggu||0});
+function waitingText(s){
+ const w=reportWaiting(s);
+ return [s.berat.menunggu?`${number(s.berat.menunggu)} pelanggaran berat`:'',s.apresiasi?.menunggu?`${number(s.apresiasi.menunggu)} apresiasi`:'',w.komplain?`${number(w.komplain)} komplain`:'',w.review?`${number(w.review)} review negatif`:''].filter(Boolean).join(', ');
+}
+function reportStatsCards(s,statCard){
+ if(!s.laporan)return '';
+ const r=s.laporan.review,k=s.laporan.komplain;
+ return statCard('Review negatif disetujui',number(r.disetujui),`potongan nilai akhir ${number(r.potongan)} poin${r.menunggu?` · ${number(r.menunggu)} menunggu`:''}`)+
+  statCard('Komplain disetujui',number(k.disetujui),`nilai bulan itu dihapus${k.menunggu?` · ${number(k.menunggu)} menunggu`:''}`);
+}
 function dashboard(){
  const d=M.overview,s=d.ringkasan,p=d.peringkat,a=d.aturan;
  const activity=(M.activity?.items||[]).map(x=>`<tr><td>${esc(x.label)}</td><td>${x.last_received_at?when(x.last_received_at):'Belum ada kiriman'}</td><td>${number(x.accepted_24h)}</td><td>${number(x.rejected_24h)}</td></tr>`);
- const waiting=s.berat.menunggu+s.apresiasi.menunggu;
- const petugas=(d.perPetugas||[]).map(r=>`<tr><td>${r.petugas?esc(r.petugas):'<span class="muted">Tanpa nama petugas</span>'}</td><td>${esc(r.pos.map(x=>'Pos '+x).join(', '))}</td>${figureCells(r)}</tr>`);
+ const w=reportWaiting(s),waiting=s.berat.menunggu+s.apresiasi.menunggu+w.review+w.komplain,withReports=assessorHasReports(d.perPetugas||[]);
+ const petugas=(d.perPetugas||[]).map(r=>`<tr><td>${r.petugas?esc(r.petugas):'<span class="muted">Tanpa nama petugas</span>'}</td><td>${esc(r.pos.map(x=>'Pos '+x).join(', '))}</td>${figureCells(r)}${withReports?assessorReportCells(r):''}</tr>`);
  return `${head('Dashboard Kunjungan',`Penilaian guide ${formatDate(d.from)} – ${formatDate(d.to)}. ${ruleNote(d)}`)}${filters()}
- ${waiting?`<div class="notice warning">${icon('incident')}<div><strong>${number(waiting)} laporan menunggu verifikasi</strong><p>${number(s.berat.menunggu)} pelanggaran berat dan ${number(s.apresiasi.menunggu)} apresiasi dari HP pos belum diputuskan Pengelola Kunjungan. Pelanggaran berat baru menggugurkan reward setelah disetujui.</p><p><a href="#visits-flags">Buka Verifikasi</a></p></div></div>`:''}
- <div class="stats-grid">${stat('Pengantaran',number(s.pengantaran),`${number(s.hariDinilai)} hari berpenilaian`)}${stat('Guide dinilai',number(s.guideDinilai),`dari ${number(s.guideAktif)} guide aktif`)}${stat('Nilai rata-rata',score(s.nilai),'100 − potongan + Etika per pengantaran')}${stat('ID terpasang',pct(s.persenId),`${number(s.tanpaId)} kali tanpa ID`)}${stat('Seragam lengkap',pct(s.persenSeragam),`${number(s.kurangLengkap)} kurang · ${number(s.tidakBerseragam)} tidak`)}${stat('Etika rata-rata',etikaAvg(s.etikaRata),`jumlah ${etikaSum(s.etika)} · ${number(s.berat.disetujui)} pelanggaran berat terverifikasi`)}${a?.satu_bulan?stat('Layak reward',number(s.layak),`nilai ≥ ${a.ambang}, ≥ ${a.minimal} antar, tanpa pelanggaran berat`):''}</div>
+ ${waiting?`<div class="notice warning">${icon('incident')}<div><strong>${number(waiting)} laporan menunggu verifikasi</strong><p>${esc(waitingText(s))} dari HP pos belum diputuskan Pengelola Kunjungan. Semuanya baru berdampak setelah disetujui: komplain dan pelanggaran berat menghapus nilai bulan itu, review negatif memotong nilai akhir.</p><p><a href="#visits-flags">Buka Verifikasi</a></p></div></div>`:''}
+ <div class="stats-grid">${stat('Pengantaran',number(s.pengantaran),`${number(s.hariDinilai)} hari berpenilaian`)}${stat('Guide dinilai',number(s.guideDinilai),`dari ${number(s.guideAktif)} guide aktif`)}${stat('Nilai rata-rata',score(s.nilai),'100 − potongan + Etika per pengantaran')}${stat('ID terpasang',pct(s.persenId),`${number(s.tanpaId)} kali tanpa ID`)}${stat('Seragam lengkap',pct(s.persenSeragam),`${number(s.kurangLengkap)} kurang · ${number(s.tidakBerseragam)} tidak`)}${stat('Etika rata-rata',etikaAvg(s.etikaRata),`jumlah ${etikaSum(s.etika)} · ${number(s.berat.disetujui)} pelanggaran berat terverifikasi`)}${reportStatsCards(s,stat)}${a?.satu_bulan?stat('Layak reward',number(s.layak),`nilai akhir ≥ ${a.ambang}, ≥ ${a.minimal} antar, tanpa komplain atau pelanggaran berat`):''}</div>
  <div class="visit-grid">${card('Per pos','Pos 1 dan Pos 3 dihitung masing-masing. Selisih besar biasanya tanda patokan antarpos belum sama.',table(['Pos','Guide',...figureHeads],d.perPos.map(r=>`<tr><td>Pos ${esc(r.pos)}</td><td>${number(r.guideDinilai)}</td>${figureCells(r)}</tr>`)))}
  ${card('Per regu','',table(['Regu','Kategori',...figureHeads],d.perRegu.map(r=>`<tr><td>${esc(r.regu)}</td><td>${esc(r.kategori)}</td>${figureCells(r)}</tr>`)))}</div>
- ${petugas.length?card('Per petugas penilai','Dari rincian 6 minggu terakhir. Petugas yang jauh lebih longgar atau ketat dari yang lain perlu dikalibrasi, termasuk patokan Etika (rata-rata jauh dari 0).',table(['Petugas','Pos',...figureHeads],petugas)):''}
+ ${petugas.length?card('Per petugas penilai',`Penilaian dari rincian 6 minggu terakhir. Petugas yang jauh lebih longgar atau ketat dari yang lain perlu dikalibrasi, termasuk patokan Etika (rata-rata jauh dari 0)${withReports?'; begitu juga yang jauh lebih sering mencatat review negatif atau komplain, atau sering ditolak':''}.`,table(['Petugas','Pos',...figureHeads,...(withReports?assessorReportHeads:[])],petugas)):''}
  ${M.activity?card('Kiriman dari HP pos','Kiriman terakhir yang diterima tiap pos dan jumlahnya dalam 24 jam terakhir.',table(['Pos','Kiriman terakhir','Diterima 24 jam','Ditolak 24 jam'],activity)):''}
- <p class="muted visit-note">Peringkat memakai rata-rata nilai per pengantaran, minimal ${number(d.minimalPengantaran)} pengantaran (${number(d.diperingkat)} guide memenuhi, ${number(d.belumCukup)} belum). Nilai sama mendapat peringkat sama; apresiasi terverifikasi menjadi penentu, bukan jumlah pengantaran. Guide nonaktif ikut di total, tidak di peringkat.${esc(periodNote(d))} Diperbarui ${when(d.diperbarui)}.</p>
+ <p class="muted visit-note">Peringkat memakai rata-rata nilai per pengantaran${a?.satu_bulan&&s.laporan?' dikurangi potongan review negatif (nilai akhir)':''}, minimal ${number(d.minimalPengantaran)} pengantaran (${number(d.diperingkat)} guide diperingkat, ${number(d.belumCukup)} belum cukup).${s.laporan?' Guide dengan komplain atau pelanggaran berat yang disetujui nilainya dihapus dan tidak diperingkat.':''} Nilai sama mendapat peringkat sama; apresiasi terverifikasi menjadi penentu, bukan jumlah pengantaran. Guide nonaktif ikut di total, tidak di peringkat.${esc(periodNote(d))} Diperbarui ${when(d.diperbarui)}.</p>
  ${sheetLine(M.sheet)}
- <div class="visit-grid">${rankTable('Nilai tertinggi',p.nilaiTertinggi,'nilai')}${rankTable('Nilai terendah',p.nilaiTerendah,'nilai')}${rankTable('Paling sering tanpa ID',p.tanpaIdTerbanyak,'tanpaId')}${rankTable('Paling sering seragam bermasalah',p.seragamTerbanyak,'seragam')}${rankTable('Etika rata-rata terendah',p.etikaTerendah||[],'etika','Hanya guide dengan Etika rata-rata di bawah 0.')}${rankTable('Pelanggaran berat terverifikasi',p.beratTerverifikasi,'berat','Menggugurkan reward bulan itu.')}${rankTable(`Belum cukup pengantaran (< ${d.minimalPengantaran})`,p.belumCukup,'nilai')}</div>`;
+ <div class="visit-grid">${rankTable('Nilai tertinggi',p.nilaiTertinggi,'nilai')}${rankTable('Nilai terendah',p.nilaiTerendah,'nilai')}${rankTable('Paling sering tanpa ID',p.tanpaIdTerbanyak,'tanpaId')}${rankTable('Paling sering seragam bermasalah',p.seragamTerbanyak,'seragam')}${rankTable('Etika rata-rata terendah',p.etikaTerendah||[],'etika','Hanya guide dengan Etika rata-rata di bawah 0.')}${rankTable('Pelanggaran berat terverifikasi',p.beratTerverifikasi,'berat',s.laporan?'Nilai bulan itu dihapus dan gugur reward.':'Menggugurkan reward bulan itu.')}${p.komplainDisetujui?rankTable('Komplain disetujui',p.komplainDisetujui,'komplain','Nilai bulan itu dihapus dan gugur reward.'):''}${p.reviewNegatif?rankTable('Review negatif disetujui',p.reviewNegatif,'review','Jumlah potongan nilai akhir; tanpa batas per bulan.'):''}${rankTable(`Belum cukup pengantaran (< ${d.minimalPengantaran})`,p.belumCukup,'nilai')}</div>`;
 }
 
 /* ---------- Data Guide ---------- */
@@ -431,7 +463,8 @@ function reportStats(d,mode){
   reportStat('ID terpasang',pct(s.persenId),delta('persenId','pct'),`${number(s.tanpaId)} kali tanpa ID`),
   reportStat('Seragam lengkap',pct(s.persenSeragam),delta('persenSeragam','pct'),`${number(s.kurangLengkap)} kurang · ${number(s.tidakBerseragam)} tidak`),
   reportStat('Etika rata-rata',etikaAvg(s.etikaRata),delta('etikaRata','etika'),`jumlah ${etikaSum(s.etika)}`),
-  ...(mode==='bulan'?[reportStat('Layak reward',s.layak==null?'-':number(s.layak),delta('layak','count'),a?`nilai ≥ ${a.ambang}, minimal ${a.minimal} pengantaran, tanpa pelanggaran berat`:'')]:[])].join('');
+  reportStatsCards(s,(label,value,detail)=>reportStat(label,value,'',detail)),
+  ...(mode==='bulan'?[reportStat('Layak reward',s.layak==null?'-':number(s.layak),delta('layak','count'),a?`nilai akhir ≥ ${a.ambang}, minimal ${a.minimal} pengantaran, tanpa komplain atau pelanggaran berat`:'')]:[])].join('');
 }
 // Rentang grafik per jenis laporan. Laporan harian: per jam (dari rincian ±6 minggu terakhir) dan 30 hari.
 function trendScopes(mode,d){
@@ -482,38 +515,53 @@ function mountReportChart(){
  const el=document.querySelector('#main [data-trend]');if(!el||!M.report?.laporan)return;
  const {slots,unit}=trendSlots(M.report,M.reportMode,M.trendScope);mountTrend(el,slots,unit);
 }
-const petugasRow=r=>`<tr><td>${r.petugas?esc(r.petugas):'<span class="muted">Tanpa nama petugas</span>'}</td><td>${esc(r.pos.map(x=>'Pos '+x).join(', '))}</td>${figureCells(r)}</tr>`;
+const petugasRow=(r,withReports)=>`<tr><td>${r.petugas?esc(r.petugas):'<span class="muted">Tanpa nama petugas</span>'}</td><td>${esc(r.pos.map(x=>'Pos '+x).join(', '))}</td>${figureCells(r)}${withReports?assessorReportCells(r):''}</tr>`;
 function reportsPage(){
  const d=M.report,mode=M.reportMode,daily=mode==='hari',monthly=mode==='bulan',canExport=permitted('visits.reports.export'),s=d.ringkasan,L=d.laporan,{from,to}=reportPeriod();
  const intro=daily?`Laporan harian ${dayTitle(from)} untuk memantau pos; reward memakai laporan bulanan.`
   :mode==='minggu'?`Laporan mingguan ${rangeLabel(from,to)} (Senin–Minggu WITA) untuk memantau; reward memakai laporan bulanan.`:'Laporan bulanan per guide untuk penetapan reward dan arsip.';
- const perGuide=d.perGuide.map(g=>`<tr><td>${number(g.peringkat)}</td><td><strong>${esc(g.nama)}</strong><br><span class="muted text-small">${esc(g.guideId)}</span></td><td>${esc(g.regu)}</td><td>${number(g.antar)}</td><td><strong>${score(g.nilai)}</strong></td>${monthly?`<td>${rewardCell(g)}</td>`:''}<td>${pct(g.persenId)}</td><td>${pct(g.persenSeragam)}</td><td>${etikaAvg(g.etikaRata)}</td><td>${number(g.berat)}</td><td>${number(g.apresiasi)}</td></tr>`);
- const guideHeads=['#','Guide','Regu','Antar','Nilai',...(monthly?['Status reward']:[]),'% ID','% seragam','Etika rata-rata','Berat','Apresiasi'];
- const guideNote=monthly?'Diurut menurut nilai. Bila reward terbatas: nilai lebih tinggi didahulukan, lalu apresiasi terverifikasi; selebihnya setara. Jumlah hari dan rincian temuan ada di Ekspor Excel.'
-  :`Diurut menurut nilai ${daily?'hari':'minggu'} ini. Status reward hanya di laporan bulanan. ${daily?'Rincian tiap penilaian ada di halaman Penilaian dan di Ekspor Excel.':'Jumlah hari dan rincian temuan ada di Ekspor Excel.'}`;
+ // Kolom review negatif & komplain hanya bila portal-api sudah mengirimnya (23 November 2026).
+ const reports=Boolean(s.laporan),finalScore=monthly&&reports;
+ const perGuide=d.perGuide.map(g=>`<tr class="${g.peringkat==null?'visit-dim':''}"><td>${rankCell(g)}</td><td><strong>${esc(g.nama)}</strong><br><span class="muted text-small">${esc(g.guideId)}</span></td><td>${esc(g.regu)}</td><td>${number(g.antar)}</td><td>${finalScore?score(g.nilai):`<strong>${score(g.nilai)}</strong>`}</td>${reports?`<td>${reviewCell(g)}</td><td>${komplainCell(g)}</td>`:''}${finalScore?`<td><strong>${score(g.nilaiAkhir)}</strong></td>`:''}${monthly?`<td>${rewardCell(g)}</td>`:''}<td>${pct(g.persenId)}</td><td>${pct(g.persenSeragam)}</td><td>${etikaAvg(g.etikaRata)}</td><td>${number(g.berat)}</td><td>${number(g.apresiasi)}</td></tr>`);
+ const guideHeads=['#','Guide','Regu','Antar',finalScore?'Nilai pengantaran':'Nilai',...(reports?['Review negatif','Komplain']:[]),...(finalScore?['Nilai akhir']:[]),...(monthly?['Status reward']:[]),'% ID','% seragam','Etika rata-rata','Berat','Apresiasi'];
+ const guideNote=monthly?`Diurut menurut ${finalScore?'nilai akhir (nilai pengantaran − potongan review negatif yang disetujui, paling rendah 0). Guide dengan komplain atau pelanggaran berat yang disetujui nilainya dihapus (0) dan tidak diperingkat. ':'nilai. '}Bila reward terbatas: nilai lebih tinggi didahulukan, lalu apresiasi terverifikasi; selebihnya setara. Jumlah hari dan rincian temuan ada di Ekspor Excel.`
+  :`Diurut menurut nilai ${daily?'hari':'minggu'} ini. Status reward dan nilai akhir hanya di laporan bulanan. ${daily?'Rincian tiap penilaian ada di halaman Penilaian dan di Ekspor Excel.':'Jumlah hari dan rincian temuan ada di Ekspor Excel.'}`;
  const records=daily&&permitted('visits.records.read')?btn('Rincian penilaian','report-records','log','outlined'):'';
  return `${head('Laporan & Ekspor',`${intro} ${ruleNote(d)}`,canExport?btn('Ekspor Excel','export-report','download','primary'):'')}
  ${periodBar()}
  ${L?.berjalan?`<p class="muted visit-note">${icon('clock')} ${esc(runningNote(L))}</p>`:''}
  ${L?'':`<div class="notice">${icon('incident')}<div><strong>Grafik tren dan pembanding belum tersedia</strong><p>Server portal belum diperbarui untuk laporan harian, mingguan, dan bulanan. Angka di bawah tetap benar.</p></div></div>`}
  <div class="stats-grid">${reportStats(d,mode)}</div>
- ${s.berat.menunggu?`<div class="notice warning">${icon('incident')}<div><strong>${number(s.berat.menunggu)} laporan pelanggaran berat belum diputuskan</strong><p>${monthly?'Putuskan di Verifikasi sebelum reward bulan ini dibagikan.':'Putuskan di Verifikasi; yang disetujui menggugurkan reward bulan itu.'}</p><p><a href="#visits-flags">Buka Verifikasi</a></p></div></div>`:''}
+ ${s.berat.menunggu+reportWaiting(s).review+reportWaiting(s).komplain?`<div class="notice warning">${icon('incident')}<div><strong>${esc([s.berat.menunggu?`${number(s.berat.menunggu)} pelanggaran berat`:'',reportWaiting(s).komplain?`${number(reportWaiting(s).komplain)} komplain`:'',reportWaiting(s).review?`${number(reportWaiting(s).review)} review negatif`:''].filter(Boolean).join(', '))} belum diputuskan</strong><p>${monthly?'Putuskan di Verifikasi sebelum reward bulan ini dibagikan.':'Putuskan di Verifikasi; yang disetujui berdampak pada nilai bulan kejadiannya.'}</p><p><a href="#visits-flags">Buka Verifikasi</a></p></div></div>`:''}
  ${L?trendCard(d,mode):''}
  <div class="visit-stack">${card('Per pos','Pos 1 dan Pos 3 dihitung masing-masing. Selisih besar biasanya tanda patokan antarpos belum sama.',table(['Pos','Guide',...figureHeads],d.perPos.map(r=>`<tr><td>Pos ${esc(r.pos)}</td><td>${number(r.guideDinilai)}</td>${figureCells(r)}</tr>`)))}
  ${card('Per regu','',table(['Regu','Kategori','Guide',...figureHeads],d.perRegu.map(r=>`<tr><td>${esc(r.regu)}</td><td>${esc(r.kategori)}</td><td>${number(r.guideDinilai)}</td>${figureCells(r)}</tr>`)))}
- ${daily&&d.perPetugas?.length?card('Per petugas penilai','Dari rincian penilaian. Petugas yang jauh lebih longgar atau ketat dari yang lain perlu dikalibrasi, termasuk patokan Etika (rata-rata jauh dari 0).',table(['Petugas','Pos',...figureHeads],d.perPetugas.map(petugasRow))):''}
+ ${daily&&d.perPetugas?.length?card('Per petugas penilai','Dari rincian penilaian. Petugas yang jauh lebih longgar atau ketat dari yang lain perlu dikalibrasi, termasuk patokan Etika (rata-rata jauh dari 0).',table(['Petugas','Pos',...figureHeads,...(assessorHasReports(d.perPetugas)?assessorReportHeads:[])],d.perPetugas.map(r=>petugasRow(r,assessorHasReports(d.perPetugas))))):''}
  ${card('Ringkasan per guide',guideNote,table(guideHeads,perGuide),records)}
  ${historyCard(M.history)}</div>
  <p class="muted visit-note">${esc(periodNote(d).trim())} Diperbarui ${when(d.diperbarui)}.</p>`;
 }
 function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}
 const guideColumns=[{header:'Peringkat',key:'peringkat',kind:'number'},{header:'guideId',key:'guideId'},{header:'Nama',key:'nama',width:30},{header:'Regu',key:'regu'},{header:'Kategori',key:'kategori'},{header:'Pengantaran',key:'antar',kind:'number'},{header:'Hari',key:'hari',kind:'number'},
- {header:'Nilai (100 − potongan + Etika)',key:'nilai',kind:'number'},{header:'Tanpa ID',key:'tanpaId',kind:'number'},{header:'Kurang lengkap',key:'kurangLengkap',kind:'number'},{header:'Tidak berseragam',key:'tidakBerseragam',kind:'number'},
+ {header:'Nilai (100 − potongan + Etika)',key:'nilai',kind:'number'},
+ {header:'Review negatif disetujui',key:'review',kind:'number'},{header:'Potongan review negatif',key:'potonganReview',kind:'number'},{header:'Review negatif menunggu',key:'reviewMenunggu',kind:'number'},
+ {header:'Komplain disetujui',key:'komplain',kind:'number'},{header:'Komplain menunggu',key:'komplainMenunggu',kind:'number'},{header:'Nilai akhir',key:'nilaiAkhir',kind:'number'},
+ {header:'Tanpa ID',key:'tanpaId',kind:'number'},{header:'Kurang lengkap',key:'kurangLengkap',kind:'number'},{header:'Tidak berseragam',key:'tidakBerseragam',kind:'number'},
  {header:'Jumlah Etika',key:'etika',kind:'number'},{header:'Etika rata-rata',key:'etikaRata',kind:'number'},
  {header:'% ID terpasang',key:'persenId',kind:'percent'},{header:'% seragam lengkap',key:'persenSeragam',kind:'percent'},{header:'Pelanggaran berat terverifikasi',key:'berat',kind:'number'},{header:'Laporan berat menunggu',key:'beratMenunggu',kind:'number'},{header:'Apresiasi terverifikasi',key:'apresiasi',kind:'number'},{header:'Status reward',key:'statusReward',width:28}];
-const rewardText=g=>g.status?`${(rewardBadge[g.status]||[null,g.status])[1]}${g.beratMenunggu?' (ada laporan berat menunggu)':''}`:'';
+const rewardText=g=>{if(!g.status)return '';const wait=pendingNote(g);return `${rewardLabel(g)}${wait?` (${wait} menunggu)`:''}`;};
 const round2=v=>v==null?null:Math.round(v*100)/100;
-const guideRows=list=>list.map(g=>({...g,nilai:round2(g.nilai),etikaRata:round2(g.etikaRata),statusReward:rewardText(g)}));
+const guideRows=list=>list.map(g=>({...g,nilai:round2(g.nilai),nilaiAkhir:round2(g.nilaiAkhir),etikaRata:round2(g.etikaRata),statusReward:rewardText(g)}));
+// Kolom per guide sesuai jenis laporan dan versi portal-api: nilai akhir dan status reward hanya bulanan.
+const guideColumnsFor=(monthly,reports)=>guideColumns.filter(c=>(monthly||!['statusReward','nilaiAkhir'].includes(c.key))&&(reports||!['review','potonganReview','reviewMenunggu','komplain','komplainMenunggu','nilaiAkhir'].includes(c.key)));
+// Lembar review negatif & komplain di Ekspor Excel, tanpa data wisatawan (nama/asal/kontak).
+const guestReportLabel={review:'Review negatif',komplain:'Komplain'};
+const guestStatusText={menunggu:'Menunggu',disetujui:'Disetujui',ditolak:'Ditolak'};
+const guestColumns=[{header:'Tanggal kejadian',key:'tanggal',kind:'date'},{header:'Dicatat',key:'waktu'},{header:'Pos',key:'pos',kind:'number'},{header:'guideId',key:'guideId'},{header:'Guide',key:'guideName',width:28},
+ {header:'Jenis',key:'jenisLabel'},{header:'Jenis keluhan',key:'label',width:30},{header:'Apa kata wisatawan',key:'keterangan',kind:'notes',width:40},{header:'Kronologi',key:'kronologi',kind:'notes',width:40},
+ {header:'Petugas pos',key:'petugas',width:24},{header:'Status',key:'statusLabel'},{header:'Potongan',key:'potongan',kind:'number'},{header:'Klarifikasi guide',key:'klarifikasi',kind:'notes',width:40},
+ {header:'Catatan keputusan',key:'keputusanCatatan',kind:'notes',width:36},{header:'Diputuskan oleh',key:'diputuskanOleh'},{header:'Diputuskan pada',key:'diputuskanPada'}];
+const guestExportRow=r=>({...r,jenisLabel:`${guestReportLabel[r.jenis]}${r.jenisAwal!==r.jenis?` (dipindah dari ${guestReportLabel[r.jenisAwal].toLowerCase()})`:''}`,statusLabel:guestStatusText[r.status]||r.status});
 // Kolom tren dan ringkasan periode di Ekspor Excel; persen disimpan sebagai pecahan berformat %.
 const trendColumns=[{header:'Periode',key:'periode',width:30},{header:'Dari',key:'mulai',kind:'date'},{header:'Sampai',key:'sampai',kind:'date'},{header:'Pengantaran',key:'pengantaran',kind:'number'},{header:'Guide dinilai',key:'guideDinilai',kind:'number'},{header:'Hari berpenilaian',key:'hariDinilai',kind:'number'},
  {header:'Nilai rata-rata (100 − potongan + Etika)',key:'nilai',kind:'number'},{header:'% ID terpasang',key:'persenId',kind:'percent'},{header:'% seragam lengkap',key:'persenSeragam',kind:'percent'},{header:'Etika rata-rata',key:'etikaRata',kind:'number'},
@@ -539,7 +587,7 @@ async function exportRecords(){
  if(!rows.length)throw new Error('Tidak ada penilaian pada saringan ini.');
  // Rentang yang memotong data lama (422) tetap bisa diekspor rinciannya, tanpa ringkasan.
  const summary=await api(`visits/overview?${range()}`).catch(error=>{if(error.status===422)return null;throw error;});
- download(createXlsx([{name:'Penilaian',columns:recordColumns,rows:rows.map(recordExportRow)},...(summary?[{name:'Ringkasan per guide',columns:guideColumns,rows:guideRows(summary.perGuide)}]:[])]),`penilaian-guide-${M.from}-sd-${M.to}.xlsx`);
+ download(createXlsx([{name:'Penilaian',columns:recordColumns,rows:rows.map(recordExportRow)},...(summary?[{name:'Ringkasan per guide',columns:guideColumnsFor(summary.aturan?.satu_bulan,Boolean(summary.ringkasan.laporan)),rows:guideRows(summary.perGuide)}]:[])]),`penilaian-guide-${M.from}-sd-${M.to}.xlsx`);
  await post('visits/exports',{kind:'records',from:M.from,to:M.to,rows:rows.length});
  toast(`${number(rows.length)} penilaian diekspor.`);
 }
@@ -558,9 +606,15 @@ async function exportReport(){
  }
  sheets.push({name:'Per pos',columns:figureColumns([{header:'Pos',key:'pos',kind:'number'}]),rows:d.perPos.map(r=>trendRow(r,''))});
  sheets.push({name:'Per regu',columns:figureColumns([{header:'Regu',key:'regu'},{header:'Kategori',key:'kategori'}]),rows:d.perRegu.map(r=>trendRow(r,''))});
- if(daily&&d.perPetugas?.length)sheets.push({name:'Per petugas',columns:figureColumns([{header:'Petugas',key:'petugas',width:28},{header:'Pos',key:'posList'}]).filter(c=>c.key!=='guideDinilai'),
+ if(daily&&d.perPetugas?.length)sheets.push({name:'Per petugas',columns:[...figureColumns([{header:'Petugas',key:'petugas',width:28},{header:'Pos',key:'posList'}]).filter(c=>c.key!=='guideDinilai'),
+  ...(assessorHasReports(d.perPetugas)?[{header:'Review negatif dicatat',key:'review',kind:'number'},{header:'Komplain dicatat',key:'komplain',kind:'number'},{header:'Ditolak Pengelola',key:'laporanDitolak',kind:'number'}]:[])],
   rows:d.perPetugas.map(r=>trendRow({...r,petugas:r.petugas||'Tanpa nama petugas',posList:r.pos.map(x=>'Pos '+x).join(', ')},''))});
- sheets.push({name:'Ringkasan per guide',columns:monthly?guideColumns:guideColumns.filter(c=>c.key!=='statusReward'),rows:guideRows(d.perGuide)});
+ sheets.push({name:'Ringkasan per guide',columns:guideColumnsFor(monthly,Boolean(d.ringkasan.laporan)),rows:guideRows(d.perGuide)});
+ // Review negatif & komplain periode ini beserta keputusannya (arsip dasar reward).
+ if(d.ringkasan.laporan){
+  const guest=await api(`visits/guest-reports?from=${d.from}&to=${d.to}`).catch(()=>null);
+  if(guest?.items.length)sheets.push({name:'Review & komplain',columns:guestColumns,rows:guest.items.map(guestExportRow)});
+ }
  // Laporan harian ikut memuat rincian tiap penilaian hari itu (selama rinciannya masih ada).
  if(daily&&permitted('visits.records.read')){
   const rows=[];
@@ -583,16 +637,83 @@ function flagRow(f,manage){
   <td><span class="badge ${kind}">${esc(label)}</span>${f.diputuskanPada?`<br><span class="muted text-small">${esc(f.diputuskanOleh)} · ${esc(when(f.diputuskanPada))}</span>`:''}${f.keputusanCatatan?`<br><span class="muted text-small">${esc(f.keputusanCatatan)}</span>`:''}</td>${manage?`<td><div class="actions">${actions}</div></td>`:''}</tr>`;
 }
 function flagsPage(){
- const d=M.flags,manage=d.can_decide;
+ const d=M.flags,g=M.guestReports,manage=d?.can_decide||g?.can_decide;
  const sel=(key,label,opts)=>`<label class="field"><span>${label}</span><select data-visit-field="${key}"><option value="">Semua</option>${opts.map(([v,t])=>`<option value="${v}" ${M[key]===v?'selected':''}>${t}</option>`).join('')}</select></label>`;
- return `${head('Verifikasi Laporan','Pelanggaran berat dan apresiasi yang dilaporkan petugas pos. Pelanggaran berat yang disetujui menggugurkan reward guide bulan itu; apresiasi yang disetujui menjadi penentu bila nilai sama.')}
- ${d.menunggu_semua?`<div class="notice warning">${icon('incident')}<div><strong>${number(d.menunggu_semua)} laporan menunggu keputusan</strong><p>${manage?'Periksa catatan petugas, lalu setujui atau tolak. Setiap keputusan diaudit dan bisa dibuka kembali bila salah pilih.':'Keputusan diambil Pengelola Kunjungan.'}</p></div></div>`:`<p class="muted visit-note">Tidak ada laporan yang menunggu keputusan.</p>`}
+ // Laporan pos (pelanggaran berat, apresiasi) dan catatan wisatawan (review negatif, komplain)
+ // digabung dalam satu daftar: yang menunggu dulu, lalu tanggal kejadian terbaru.
+ const rows=[...(d?.items||[]).map(f=>({sort:[f.status==='menunggu'?0:1,f.tanggal,f.waktu],html:flagRow(f,d.can_decide)})),
+  ...(g?.items||[]).map(r=>({sort:[r.status==='menunggu'?0:1,r.tanggal,r.waktu],html:guestRow(r,g.can_decide)}))]
+  .sort((a,b)=>a.sort[0]-b.sort[0]||(a.sort[1]<b.sort[1]?1:a.sort[1]>b.sort[1]?-1:0)||(a.sort[2]<b.sort[2]?1:a.sort[2]>b.sort[2]?-1:0)).map(x=>x.html);
+ const waiting=(d?.menunggu_semua||0)+(g?.menunggu_semua||0);
+ const waitingParts=[d?.menunggu_semua?`${number(d.menunggu_semua)} laporan pos`:'',g?.menunggu_jenis?.komplain?`${number(g.menunggu_jenis.komplain)} komplain`:'',g?.menunggu_jenis?.review?`${number(g.menunggu_jenis.review)} review negatif`:''].filter(Boolean).join(', ');
+ const kinds=[['berat','Pelanggaran berat'],['apresiasi','Apresiasi'],...(g?[['komplain','Komplain'],['review','Review negatif']]:[])];
+ const limited=(d&&d.items.length>=d.batas)||(g&&g.items.length>=g.batas);
+ return `${head('Verifikasi Laporan',`Pelanggaran berat dan apresiasi dari penilaian pos${g?', serta komplain dan review negatif wisatawan yang dicatat petugas pos':''}. Pelanggaran berat${g?' dan komplain':''} yang disetujui ${g?'menghapus nilai guide bulan itu (gugur reward); review negatif yang disetujui memotong nilai akhir bulan itu':'menggugurkan reward guide bulan itu'}; apresiasi yang disetujui menjadi penentu bila nilai sama.`)}
+ ${waiting?`<div class="notice warning">${icon('incident')}<div><strong>${number(waiting)} menunggu keputusan</strong><p>${esc(waitingParts)}. ${manage?'Periksa catatannya, lalu setujui atau tolak. Setiap keputusan diaudit dan bisa dibuka kembali bila salah pilih.':'Keputusan diambil Pengelola Kunjungan.'}</p></div></div>`:`<p class="muted visit-note">Tidak ada yang menunggu keputusan.</p>`}
  <div class="toolbar"><label class="field"><span>Dari tanggal</span><input type="date" data-visit-field="flagFrom" value="${esc(M.flagFrom)}" max="${localToday()}"></label><label class="field"><span>Sampai tanggal</span><input type="date" data-visit-field="flagTo" value="${esc(M.flagTo)}" max="${localToday()}"></label>
- ${sel('flagStatus','Status',[['menunggu','Menunggu'],['disetujui','Disetujui'],['ditolak','Ditolak'],['dibatalkan','Dibatalkan']])}${sel('flagJenis','Jenis',[['berat','Pelanggaran berat'],['apresiasi','Apresiasi']])}${btn('Terapkan','apply','filter','outlined')}</div>
- ${table(['Waktu','Guide','Laporan','Catatan petugas','Petugas','Status',...(manage?['']:[])],d.items.map(f=>flagRow(f,manage)),'Tidak ada laporan pada saringan ini.')}
- ${d.items.length>=d.batas?`<p class="muted visit-note">Menampilkan ${number(d.batas)} laporan pertama. Persempit rentang tanggal.</p>`:''}`;
+ ${sel('flagStatus','Status',[['menunggu','Menunggu'],['disetujui','Disetujui'],['ditolak','Ditolak'],['dibatalkan','Dibatalkan']])}${sel('flagJenis','Jenis',kinds)}${btn('Terapkan','apply','filter','outlined')}</div>
+ ${table(['Tanggal','Guide','Laporan','Catatan','Petugas','Status',...(manage?['']:[])],rows,'Tidak ada laporan pada saringan ini.')}
+ ${limited?`<p class="muted visit-note">Sebagian laporan tidak ditampilkan karena terlalu banyak. Persempit rentang tanggal.</p>`:''}
+ ${g?`<p class="muted visit-note">Tanggal = tanggal kejadian. Komplain baru bisa disetujui setelah klarifikasi guide dicatat. Review negatif dan komplain yang tertukar bisa dipindah selama masih menunggu.${g.can_decide?' Nama dan kontak wisatawan hanya terlihat oleh Pengelola Kunjungan.':''}</p>`:''}`;
 }
-const flagQuery=()=>{const q=new URLSearchParams({from:M.flagFrom,to:M.flagTo});if(M.flagStatus)q.set('status',M.flagStatus);if(M.flagJenis)q.set('jenis',M.flagJenis);return q.toString();};
+const flagKinds=['berat','apresiasi'],guestKinds=['review','komplain'];
+const flagQuery=()=>{const q=new URLSearchParams({from:M.flagFrom,to:M.flagTo});if(M.flagStatus)q.set('status',M.flagStatus);if(flagKinds.includes(M.flagJenis))q.set('jenis',M.flagJenis);return q.toString();};
+const guestQuery=()=>{const q=new URLSearchParams({from:M.flagFrom,to:M.flagTo});if(M.flagStatus)q.set('status',M.flagStatus);if(guestKinds.includes(M.flagJenis))q.set('jenis',M.flagJenis);return q.toString();};
+// Muat laporan pos dan catatan wisatawan sesuai saringan. portal-api sebelum 23 November tidak
+// punya rute guest-reports: daftar itu dilewati (null), laporan pos tetap tampil.
+async function loadVerification(){
+ const empty=list=>({items:[],counts:{},menunggu_semua:list?.menunggu_semua||0,batas:500,can_decide:list?.can_decide});
+ const wantFlags=!guestKinds.includes(M.flagJenis),wantGuest=!flagKinds.includes(M.flagJenis)&&M.flagStatus!=='dibatalkan';
+ const [flags,guest]=await Promise.all([api(`visits/flags?${wantFlags?flagQuery():new URLSearchParams({from:M.flagFrom,to:M.flagTo,status:'menunggu'})}`),
+  api(`visits/guest-reports?${wantGuest?guestQuery():new URLSearchParams({from:M.flagFrom,to:M.flagTo,status:'menunggu'})}`).catch(error=>{if(error.status===404)return null;throw error;})]);
+ M.flags=wantFlags?flags:{...empty(flags),menunggu_semua:flags.menunggu_semua,can_decide:flags.can_decide};
+ M.guestReports=guest&&!wantGuest?{...guest,items:[],menunggu_semua:guest.menunggu_semua}:guest;
+}
+/* ---------- Review negatif & komplain (menu HP pos, 23 November 2026) ---------- */
+const guestStatusLabel={menunggu:['warm','Menunggu'],disetujui:['positive','Disetujui'],ditolak:['neutral','Ditolak']};
+function guestRow(r,manage){
+ const [kind,label]=guestStatusLabel[r.status]||['neutral',r.status];
+ const actions=!manage?'':r.status==='menunggu'?`${btn('Setujui','guest-approve','check','primary',`data-id="${esc(r.id)}"`)}${btn('Tolak','guest-reject','close','outlined',`data-id="${esc(r.id)}"`)}${btn(r.jenis==='review'?'Pindah ke komplain':'Pindah ke review','guest-move','refresh','text',`data-id="${esc(r.id)}"`)}`:btn('Buka kembali','guest-reopen','refresh','text',`data-id="${esc(r.id)}"`);
+ const w=r.wisatawan,tourist=w&&(w.nama||w.asal||w.kontak)?`<br><span class="muted text-small">Wisatawan: ${esc([w.nama,w.asal,w.kontak].filter(Boolean).join(' · '))}</span>`:'';
+ const effect=r.status!=='disetujui'?'':r.jenis==='review'?`<br><span class="muted text-small">Nilai akhir −${number(r.potongan)}</span>`:'<br><span class="muted text-small">Nilai bulan itu dihapus</span>';
+ return `<tr><td>${esc(formatDate(r.tanggal))}<br><span class="muted text-small">dicatat ${esc(when(r.waktu))} · Pos ${esc(r.pos)}</span></td><td><strong>${esc(r.guideName)}</strong><br><span class="muted text-small">${esc(r.guideId)} · ${esc(r.regu||'—')}</span></td>
+  <td><span class="badge ${r.jenis==='komplain'?'negative':'warm'}">${r.jenis==='komplain'?'Komplain':'Review negatif'}</span><br>${esc(r.label)}${r.jenisAwal!==r.jenis?`<br><span class="muted text-small">dipindah dari ${r.jenisAwal==='komplain'?'komplain':'review negatif'}</span>`:''}</td>
+  <td>${esc(r.keterangan)}${r.kronologi?`<br><span class="muted text-small">Kronologi: ${esc(r.kronologi)}</span>`:''}${tourist}${r.klarifikasi?`<br><span class="muted text-small">Klarifikasi guide: ${esc(r.klarifikasi)}</span>`:''}</td><td>${esc(r.petugas||'—')}</td>
+  <td><span class="badge ${kind}">${esc(label)}</span>${effect}${r.diputuskanPada?`<br><span class="muted text-small">${esc(r.diputuskanOleh)} · ${esc(when(r.diputuskanPada))}</span>`:''}${r.keputusanCatatan?`<br><span class="muted text-small">${esc(r.keputusanCatatan)}</span>`:''}</td>${manage?`<td><div class="actions">${actions}</div></td>`:''}</tr>`;
+}
+async function guestAction(action,id){
+ const r=M.guestReports?.items.find(x=>x.id===id);if(!r)return;
+ const send=async body=>{await post('visits/guest-reports/decide',{id:r.id,row_version:r.row_version,...body});};
+ const who=`<p class="full">${esc(r.label)} — <strong>${esc(r.guideName)}</strong>, ${esc(formatDate(r.tanggal))}. ${esc(r.keterangan)}</p>`;
+ const month=esc(monthLabel(r.tanggal.slice(0,7)));
+ const clarify=(required,hint)=>`<label class="field full"><span>Klarifikasi guide${required?'':' (boleh kosong)'}</span><textarea name="klarifikasi" rows="3" maxlength="1000"${required?' required':''} placeholder="${esc(hint)}">${esc(r.klarifikasi||'')}</textarea></label>`;
+ const decisionNote=label=>`<label class="field full"><span>${label}</span><textarea name="catatan" rows="2" maxlength="500"></textarea></label>`;
+ if(action==='guest-reopen'){await send({action:'buka'});toast('Catatan dibuka kembali.');refresh();return;}
+ if(action==='guest-approve'&&r.jenis==='review'){
+  formDialog('Setujui review negatif',`${who}<label class="field"><span>Potongan nilai akhir (poin)</span><input type="number" name="potongan" min="1" max="100" step="1" required value="${esc(M.guestReports.pot_review||5)}"></label>${clarify(false,'Tanggapan guide, bila ada.')}${decisionNote('Catatan keputusan (boleh kosong)')}`,
+   async data=>{await send({action:'setujui',potongan:Number(data.potongan),klarifikasi:data.klarifikasi,catatan:data.catatan});toast('Review negatif disetujui.');refresh();},
+   {submit:'Setujui',note:`Nilai akhir ${r.guideName} bulan ${monthLabel(r.tanggal.slice(0,7))} dipotong sebesar ini. Tanpa batas per bulan; nilai akhir paling rendah 0. Keputusan diaudit dan bisa dibuka kembali.`});
+  return;
+ }
+ if(action==='guest-approve'){
+  formDialog('Setujui komplain',`${who}${r.kronologi?`<p class="full muted text-small">Kronologi: ${esc(r.kronologi)}</p>`:''}${clarify(true,'Tanggapan guide setelah dihubungi, atau tulis bahwa guide tidak menanggapi.')}${decisionNote('Catatan keputusan (boleh kosong)')}`,
+   async data=>{await send({action:'setujui',klarifikasi:data.klarifikasi,catatan:data.catatan});toast('Komplain disetujui.');refresh();},
+   {submit:'Setujui komplain',note:`Nilai ${r.guideName} bulan ${monthLabel(r.tanggal.slice(0,7))} dihapus (menjadi 0): gugur reward dan tidak diperingkat. Keputusan diaudit dan bisa dibuka kembali.`});
+  return;
+ }
+ if(action==='guest-reject'){
+  formDialog(r.jenis==='review'?'Tolak review negatif':'Tolak komplain',`${who}<label class="field full"><span>Alasan penolakan</span><textarea name="catatan" rows="3" maxlength="500" required></textarea></label>${r.jenis==='komplain'?clarify(false,'Tanggapan guide, bila ada.'):''}`,
+   async data=>{await send({action:'tolak',catatan:data.catatan,...(r.jenis==='komplain'?{klarifikasi:data.klarifikasi}:{})});toast('Catatan ditolak.');refresh();},{submit:'Tolak'});
+  return;
+ }
+ if(action==='guest-move'){
+  const target=r.jenis==='review'?'komplain':'review',choices=M.guestReports.jenis?.[target]||[];
+  if(!choices.length){toast(`Belum ada jenis ${target==='review'?'review negatif':'komplain'} yang aktif di Aturan Nilai.`,true);return;}
+  formDialog(target==='komplain'?'Pindahkan ke komplain':'Pindahkan ke review negatif',`${who}<label class="field full"><span>Jenis ${target==='review'?'review negatif':'komplain'}</span><select name="kode" required>${choices.map(t=>`<option value="${esc(t.kode)}">${esc(t.label)}</option>`).join('')}</select></label>${decisionNote('Alasan dipindah (boleh kosong)')}`,
+   async data=>{await send({action:'pindah',jenis:target,kode:data.kode,catatan:data.catatan});toast(`Catatan dipindah ke ${target==='review'?'review negatif':'komplain'}.`);refresh();},
+   {submit:'Pindahkan',note:target==='komplain'?`Bila nanti disetujui sebagai komplain, nilai ${r.guideName} bulan ${monthLabel(r.tanggal.slice(0,7))} dihapus.`:'Bila nanti disetujui sebagai review negatif, nilai akhir bulan itu dipotong sebesar yang ditetapkan.'});
+ }
+}
 async function flagAction(action,id){
  const f=M.flags.items.find(x=>x.id===id);if(!f)return;
  const send=async(tindakan,catatan='')=>{await post('visits/flags/decide',{id:f.id,row_version:f.row_version,action:tindakan,catatan});};
@@ -606,20 +727,29 @@ async function flagAction(action,id){
 }
 
 /* ---------- Aturan nilai, jenis temuan, petugas, petunjuk ---------- */
-const kindLabel={teguran:'Teguran',berat:'Pelanggaran berat',apresiasi:'Apresiasi'};
+const kindLabel={teguran:'Teguran',berat:'Pelanggaran berat',apresiasi:'Apresiasi',review:'Review negatif',komplain:'Komplain'};
+// Keterangan tiap daftar jenis. Sejak 23 November 2026 pelanggaran berat dan komplain yang disetujui
+// menghapus nilai bulan itu; review negatif memotong nilai akhir sebesar yang ditetapkan Pengelola.
+const kindNote=(k,reports)=>({berat:reports?'Dilihat sendiri oleh petugas pos. Bila disetujui Pengelola, nilai guide bulan itu dihapus (0) dan gugur reward.':'Tidak dirata-rata. Bila disetujui Pengelola, guide gugur reward bulan itu.',
+ apresiasi:'Tidak masuk nilai. Bila disetujui, menjadi penentu saat nilai sama.',
+ komplain:'Disampaikan wisatawan, dugaan pelanggaran; dicatat di menu Komplain HP pos. Bila disetujui, nilai guide bulan itu dihapus (0) dan gugur reward.',
+ review:'Disampaikan wisatawan, soal pelayanan; dicatat di menu Review Negatif HP pos. Bila disetujui, nilai akhir bulan itu dipotong sebesar yang ditetapkan Pengelola.'})[k];
 function scoringPage(){
- const d=M.scoring,manage=d.can_manage,a=d.aturan,now=a.berlaku,next=a.bulan_depan_aturan;
+ const d=M.scoring,manage=d.can_manage,a=d.aturan,now=a.berlaku,next=a.bulan_depan_aturan,reports=d.petunjuk.pot_review!==undefined;
  const ruleRow=r=>`<tr><td>${esc(monthLabel(r.berlaku_mulai))}</td><td>−${number(r.pot_id)}</td><td>−${number(r.pot_kurang)}</td><td>−${number(r.pot_tidak)}</td><td>${number(r.ambang)}</td><td>${number(r.minimal)}</td><td>${r.berlaku_mulai>a.bulan_ini?`<span class="badge warm">Rencana</span>${manage?` ${btn('Batalkan','rule-delete','close','text',`data-month="${esc(r.berlaku_mulai)}"`)}`:''}`:r.berlaku_mulai===now.berlaku_mulai?'<span class="badge positive">Berlaku</span>':'<span class="muted">Riwayat</span>'}</td></tr>`;
  const types=k=>d.jenis.filter(t=>t.jenis===k).map(t=>`<tr class="${t.aktif?'':'visit-dim'}"><td>${esc(t.label)}<br><span class="muted text-small">${esc(t.kode)}</span></td><td>${t.perlu_catatan?'Wajib':'Tidak'}</td><td>${t.aktif?'Aktif':'Nonaktif'}</td>${manage?`<td>${btn('Ubah','type-edit','settings','text',`data-kode="${esc(t.kode)}"`)}</td>`:''}</tr>`);
- const typeCard=k=>card(kindLabel[k],k==='berat'?'Tidak dirata-rata. Bila disetujui Pengelola, guide gugur reward bulan itu.':'Tidak masuk nilai. Bila disetujui, menjadi penentu saat nilai sama.',
+ const typeCard=k=>card(kindLabel[k],kindNote(k,reports),
   table(['Jenis','Catatan','Status',...(manage?['']:[])],types(k)),manage?btn('Tambah','type-new','plus','outlined',`data-jenis="${k}"`):'');
  // Teguran perilaku diganti Etika (−10…+10) sejak 17 November 2026; jenis teguran lama
  // tetap tersimpan untuk label penilaian formulir 2.2, tetapi tidak lagi diatur di sini.
- return `${head('Aturan Nilai','Nilai pengantaran = 100 − potongan + Etika. Petugas pos mencatat ID-Card, seragam, dan Etika; besar potongan ditetapkan di sini. Perubahan berlaku mulai bulan depan dan diaudit.')}
- <div class="stats-grid">${stat('Tanpa ID-Card',`−${now.pot_id}`)}${stat('Seragam kurang lengkap',`−${now.pot_kurang}`)}${stat('Tidak berseragam',`−${now.pot_tidak}`)}${stat('Etika','−10 … +10','ditambahkan langsung; 0 = standar')}${stat('Ambang layak reward',number(now.ambang))}${stat('Minimal pengantaran',number(now.minimal),'di bawahnya: belum cukup data')}</div>
+ return `${head('Aturan Nilai',`Nilai pengantaran = 100 − potongan + Etika. Petugas pos mencatat ID-Card, seragam, dan Etika; besar potongan ditetapkan di sini. Perubahan berlaku mulai bulan depan dan diaudit.${reports?' Review negatif dan komplain yang disetujui menentukan nilai akhir bulanan.':''}`)}
+ <div class="stats-grid">${stat('Tanpa ID-Card',`−${now.pot_id}`)}${stat('Seragam kurang lengkap',`−${now.pot_kurang}`)}${stat('Tidak berseragam',`−${now.pot_tidak}`)}${stat('Etika','−10 … +10','ditambahkan langsung; 0 = standar')}${stat('Ambang layak reward',number(now.ambang))}${stat('Minimal pengantaran',number(now.minimal),'di bawahnya: belum cukup data')}${reports?`${stat('Review negatif',`−${d.petunjuk.pot_review}`,'bawaan per review; bisa diubah saat menyetujui')}${stat('Komplain','nilai dihapus','begitu juga pelanggaran berat yang disetujui')}`:''}</div>
  <div class="visit-stack">${card(`Aturan bulan ${monthLabel(a.bulan_ini)} dan sesudahnya`,`${monthLabel(a.bulan_depan)}: ${ruleLine(next)}, ambang ${next.ambang}, minimal ${next.minimal} pengantaran. Aturan bulan berjalan tidak bisa diubah.`,
   table(['Berlaku mulai','Tanpa ID','Kurang lengkap','Tidak berseragam','Ambang','Minimal','Status'],a.riwayat.slice().reverse().map(ruleRow)),manage?btn(`Atur ${monthLabel(a.bulan_depan)}`,'rule-edit','settings','primary'):'')}
  <div class="visit-grid">${typeCard('berat')}${typeCard('apresiasi')}</div>
+ ${reports?card('Review negatif & komplain dari HP pos','Dicatat petugas pos lewat menu Review Negatif dan Komplain, lalu diputuskan Pengelola di Verifikasi. Yang menunggu belum berdampak. Nilai akhir bulanan = nilai pengantaran − jumlah potongan review negatif yang disetujui (tanpa batas per bulan, paling rendah 0); komplain yang disetujui menghapus nilai bulan itu.',
+  `<div class="card-body"><p><strong>Potongan bawaan review negatif:</strong> −${esc(String(d.petunjuk.pot_review))} poin per review. Pengelola bisa memakai angka lain (1–100) saat menyetujui.</p><p><strong>Komplain:</strong> baru bisa disetujui setelah klarifikasi guide dicatat.</p></div>`,manage?btn('Ubah potongan bawaan','report-settings','settings','outlined'):''):''}
+ ${reports?`<div class="visit-grid">${typeCard('komplain')}${typeCard('review')}</div>`:''}
  ${manage?card('Petugas penilai','Dipilih petugas sekali per shift di HP pos (berlaku 8 jam). Nama yang dinonaktifkan tidak muncul lagi di HP.',table(['Nama','Keterangan','Status',''],d.petugas.map(p=>`<tr class="${p.aktif?'':'visit-dim'}"><td><strong>${esc(p.nama)}</strong></td><td>${esc(p.keterangan||'—')}</td><td>${p.aktif?'Aktif':'Nonaktif'}</td><td>${btn('Ubah','assessor-edit','settings','text',`data-id="${esc(p.id)}"`)}</td></tr>`),'Belum ada petugas. Tanpa daftar ini, HP pos menyimpan penilaian tanpa nama petugas.'),btn('Tambah petugas','assessor-new','plus','outlined')):''}
  ${card('Petunjuk di formulir pos','Tampil di bawah tombol masing-masing, supaya Pos 1 dan Pos 3 memakai patokan yang sama. Patokan Etika berlaku untuk semua pos dan tidak diubah di sini.',`<div class="card-body"><p><strong>ID-Card:</strong> ${esc(d.petunjuk.petunjuk_id)}</p><p><strong>Seragam:</strong> ${esc(d.petunjuk.petunjuk_seragam)}</p><p><strong>Etika:</strong> ${esc(etikaPatokan)}</p></div>`,manage?btn('Ubah petunjuk','form-edit','settings','outlined'):'')}</div>
  <p class="muted visit-note">HP pos memperbarui daftar jenis, petugas, dan petunjuk bersama daftar guide (paling lama 10 menit, atau lewat Pengaturan → Tes Koneksi).</p>`;
@@ -643,6 +773,12 @@ function assessorDialog(p){
   <label class="check-field full"><input type="checkbox" name="aktif" ${!p||p.aktif?'checked':''}><span>Aktif — bisa dipilih di HP pos</span></label>`,
   async data=>{await post('visits/scoring/assessors',{...(p?{id:p.id,row_version:p.row_version}:{}),nama:data.nama,keterangan:data.keterangan,aktif:data.aktif===true});toast('Petugas disimpan.');refresh();});
 }
+function reportSettingsDialog(){
+ const f=M.scoring.petunjuk;
+ formDialog('Potongan bawaan review negatif',`<label class="field"><span>Potongan per review (poin)</span><input type="number" name="pot_review" min="1" max="100" step="1" required value="${esc(f.pot_review)}"></label>`,
+  async data=>{await post('visits/scoring/reports',{pot_review:Number(data.pot_review),row_version:f.row_version});toast('Potongan bawaan disimpan.');refresh();},
+  {note:'Dipakai sebagai isian awal saat menyetujui review negatif; Pengelola tetap bisa memakai angka lain. Keputusan yang sudah diambil tidak berubah.'});
+}
 function formSettingsDialog(){
  const f=M.scoring.petunjuk;
  formDialog('Petunjuk di formulir pos',`<label class="field full"><span>ID-Card</span><textarea name="petunjuk_id" rows="2" maxlength="300" required>${esc(f.petunjuk_id)}</textarea></label><label class="field full"><span>Seragam (daftar atribut wajib)</span><textarea name="petunjuk_seragam" rows="4" maxlength="500" required>${esc(f.petunjuk_seragam)}</textarea></label>`,
@@ -657,7 +793,7 @@ export async function loadVisitsPage(route){
   }
   if(route==='visits-guides'){M.guides=(await api('visits/guides')).items;return guidesPage();}
   if(route==='visits-records'){const [,scoring]=await Promise.all([loadRecords(),api('visits/scoring').catch(()=>null)]);M.scoring=scoring;return recordsPage();}
-  if(route==='visits-flags'){M.flags=await api(`visits/flags?${flagQuery()}`);return flagsPage();}
+  if(route==='visits-flags'){await loadVerification();return flagsPage();}
   if(route==='visits-scoring'){M.scoring=await api('visits/scoring');return scoringPage();}
   if(route==='visits-links'){const [links,sheet]=await Promise.all([api('visits/links'),api('visits/sheet').catch(()=>null)]);M.links=links;M.sheet=sheet;return linksPage();}
   if(route==='visits-reports'){
@@ -703,6 +839,8 @@ export function bindVisitsPage(route){
    if(action.startsWith('sheet-')){await sheetAction(action);return;}
    if(action.startsWith('link-')){await linkAction(action,Number(el.dataset.pos));return;}
    if(action.startsWith('flag-')){await flagAction(action,el.dataset.id);return;}
+   if(action.startsWith('guest-')){await guestAction(action,el.dataset.id);return;}
+   if(action==='report-settings'){reportSettingsDialog();return;}
    if(action==='rule-edit'){ruleDialog();return;}
    if(action==='rule-delete'){if(!await confirmDialog('Batalkan rencana aturan?',`Aturan ${esc(monthLabel(el.dataset.month))} kembali memakai aturan sebelumnya.`,'Batalkan rencana','danger'))return;await post('visits/scoring/rule-delete',{berlaku_mulai:el.dataset.month});toast('Rencana aturan dibatalkan.');refresh();return;}
    if(action==='type-new'){typeDialog(null,el.dataset.jenis);return;}

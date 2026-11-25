@@ -44,6 +44,8 @@
   </div>
   <button class="navitem" data-nav="home"><span class="ni">🏠</span> Beranda</button>
   <button class="navitem" data-nav="nilai"><span class="ni">📝</span> Penilaian Baru</button>
+  <button class="navitem" data-nav="review"><span class="ni">👎</span> Review Negatif</button>
+  <button class="navitem" data-nav="komplain"><span class="ni">📢</span> Komplain</button>
   <button class="navitem" data-nav="guides"><span class="ni">👥</span> Daftar Guide</button>
   <button class="navitem" data-nav="riwayat"><span class="ni">🗂️</span> Riwayat</button>
   <button class="navitem" data-nav="pengaturan"><span class="ni">⚙️</span> Pengaturan</button>
@@ -81,6 +83,20 @@
         <small>Nilai guide di pos ini</small>
       </span>
     </button>
+
+    <!-- Keluhan wisatawan tentang guide (2.4.0). Dicatat petugas pos; berlaku setelah
+         Pengelola Kunjungan menyetujuinya di portal. -->
+    <div class="duatombol">
+      <button type="button" class="bigbutton ghost" data-nav="review">
+        <span class="bb-icon">👎</span>
+        <span class="bb-text"><strong>Review Negatif</strong><small>Wisatawan kurang puas</small></span>
+      </button>
+      <button type="button" class="bigbutton ghost" data-nav="komplain">
+        <span class="bb-icon">📢</span>
+        <span class="bb-text"><strong>Komplain</strong><small>Dugaan pelanggaran</small></span>
+      </button>
+    </div>
+    <div id="laporanHariIni" class="help" hidden></div>
 
     <div class="stats">
       <div class="stat">
@@ -169,7 +185,7 @@
         <span class="lbl">3. Penilaian <small>— catat yang terlihat saja</small></span>
 
         <div class="criterion" data-crit="idCard">
-          <div class="crit-head"><span class="crit-icon">🪪</span><span class="crit-name">ID‑Card</span></div>
+          <div class="crit-head"><span class="crit-icon">🆔</span><span class="crit-name">ID‑Card</span></div>
           <div class="segmented" role="group" aria-label="ID-Card">
             <button type="button" class="seg yes" data-val="1">Terpasang</button>
             <button type="button" class="seg no"  data-val="0">Tidak</button>
@@ -227,6 +243,79 @@
     </form>
   </section>
 
+  <!-- ===================== REVIEW NEGATIF & KOMPLAIN ===================== -->
+  <!-- Dua menu berbagi satu formulir (03b-laporan.js). Keputusan pemilik 23 November 2026:
+       review negatif memotong nilai akhir guide bulan itu, komplain menghapus nilainya —
+       keduanya baru berlaku setelah disetujui Pengelola Kunjungan di portal. -->
+  <section id="view-laporan" class="view" hidden>
+    <div id="lapServer" class="notice" role="status" hidden></div>
+
+    <form id="formLaporan" autocomplete="off" novalidate>
+      <div class="field">
+        <span id="lapJudul" class="lbl">👎 Review negatif wisatawan</span>
+        <ul class="patokan" aria-label="Kapan memakai menu ini">
+          <li data-patokan-jenis="review"><strong>Review negatif</strong> — wisatawan kurang puas dengan pelayanan guide: kurang ramah, penjelasan kurang, terburu-buru, terlambat. Bila disetujui, nilai akhir guide bulan itu dipotong.</li>
+          <li data-patokan-jenis="komplain"><strong>Komplain</strong> — dugaan pelanggaran serius: meminta uang di luar tarif, memaksa belanja atau donasi, kasar atau mengancam, menelantarkan tamu. Bila disetujui, nilai guide bulan itu dihapus dan gugur dari reward.</li>
+        </ul>
+        <button type="button" id="lapGantiJenis" class="chip gantijenis" data-nav="komplain">Dugaan pelanggaran? Pindah ke Komplain</button>
+      </div>
+
+      <div class="field">
+        <span class="lbl">1. Pos &amp; Petugas</span>
+        <div id="lapPosLabel" class="posbadge">—</div>
+        <!-- Pilihan nama petugas sama dengan formulir penilaian (sekali per shift), di sini wajib. -->
+        <div id="lapPetugasBox" class="petugasbox" hidden></div>
+      </div>
+
+      <div class="field">
+        <span class="lbl">2. Guide yang dikeluhkan</span>
+        <div class="saran-wrap">
+          <input id="lapGuideInput" type="search" class="bigselect" placeholder="Ketik nama guide…"
+                 inputmode="search" autocomplete="off" role="combobox" aria-autocomplete="list"
+                 aria-expanded="false" aria-controls="lapGuideSaran" aria-describedby="lapGuideHelp">
+          <div id="lapGuideSaran" class="saran" role="listbox" aria-label="Saran nama guide" hidden></div>
+        </div>
+        <div id="lapGuideHelp" class="help" role="status">Ketik minimal 2 huruf nama guide, lalu pilih dari daftar.</div>
+        <div id="lapGuidePicked" class="picked hidden"></div>
+      </div>
+
+      <div class="field">
+        <label class="lbl" for="lapKode">3. Jenis keluhan</label>
+        <select id="lapKode" class="bigselect"><option value="">Pilih jenis keluhan…</option></select>
+        <label class="sublbl" for="lapTanggal">Tanggal kejadian</label>
+        <input id="lapTanggal" type="date" class="bigselect">
+        <div id="lapTanggalHelp" class="help">Bawaan hari ini.</div>
+      </div>
+
+      <div class="field">
+        <label class="lbl" for="lapKeterangan">4. Apa kata wisatawan <small>(wajib)</small></label>
+        <textarea id="lapKeterangan" class="bigtext" rows="3" maxlength="500" placeholder="Tulis singkat keluhannya, sebisa mungkin dengan kata-kata wisatawan"></textarea>
+        <div class="isian" data-hanya-komplain hidden>
+          <label class="sublbl" for="lapKronologi">Kronologi (wajib)</label>
+          <textarea id="lapKronologi" class="bigtext" rows="4" maxlength="1000" placeholder="Apa yang terjadi, di mana, jam berapa, siapa yang melihat"></textarea>
+        </div>
+      </div>
+
+      <div class="field" data-hanya-komplain hidden>
+        <span class="lbl">5. Data wisatawan <small>(boleh kosong)</small></span>
+        <label class="sublbl" for="lapWisNama">Nama</label>
+        <input id="lapWisNama" class="bigselect" maxlength="120" autocomplete="off">
+        <label class="sublbl" for="lapWisAsal">Asal atau negara</label>
+        <input id="lapWisAsal" class="bigselect" maxlength="120" autocomplete="off">
+        <label class="sublbl" for="lapWisKontak">Kontak (HP, WA, atau email)</label>
+        <input id="lapWisKontak" class="bigselect" maxlength="120" autocomplete="off">
+        <div class="help">Isi hanya bila wisatawan bersedia dihubungi. Hanya Pengelola Kunjungan yang bisa melihatnya di portal.</div>
+      </div>
+
+      <div class="help">Belum mengubah nilai guide: Pengelola Kunjungan memeriksa dan memutuskan dulu di portal.</div>
+
+      <button type="submit" id="btnSaveLaporan" class="bigbutton primary sticky">
+        <span class="bb-icon">💾</span>
+        <span class="bb-text"><strong id="lapSimpanLabel">SIMPAN REVIEW NEGATIF</strong><small>Tersimpan walau tanpa sinyal</small></span>
+      </button>
+    </form>
+  </section>
+
   <!-- ===================== DAFTAR GUIDE ===================== -->
   <section id="view-guides" class="view" hidden>
     <input id="guideSearch" class="bigselect" placeholder="🔍 Cari guide…" inputmode="search">
@@ -246,6 +335,7 @@
       <button class="chip" data-filter="pending">⏳ Tertunda</button>
       <button class="chip" data-filter="synced">✅ Terkirim</button>
       <button class="chip" data-filter="ditahan">🚫 Ditahan</button>
+      <button class="chip" data-filter="laporan">👎 Review &amp; komplain</button>
     </div>
     <div id="ditahanBar" class="notice" hidden></div>
     <div id="historyList" class="cards"></div>
@@ -364,7 +454,7 @@
   <div class="tut-card">
     <div class="tut-step" id="tutIcon">👋</div>
     <h2 id="tutTitle">Selamat Datang</h2>
-    <p id="tutBody">Aplikasi ini untuk menilai guide di pos pemeriksaan. Ikuti 4 langkah singkat berikut.</p>
+    <p id="tutBody">Aplikasi ini untuk menilai guide di pos pemeriksaan. Ikuti langkah singkat berikut.</p>
     <div class="tut-dots" id="tutDots"></div>
     <div class="tut-actions">
       <button id="tutSkip" class="linkbtn">Lewati</button>
@@ -382,6 +472,7 @@
 <script src="js/app/01-navigasi.js"></script>
 <script src="js/app/02-guide.js"></script>
 <script src="js/app/03-form.js"></script>
+<script src="js/app/03b-laporan.js"></script>
 <script src="js/app/04-riwayat.js"></script>
 <script src="js/app/05-export.js"></script>
 <script src="js/app/06-status.js"></script>

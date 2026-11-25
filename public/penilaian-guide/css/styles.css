@@ -226,6 +226,18 @@ select.bigselect{appearance:none;background-image:url("data:image/svg+xml;utf8,<
   background:var(--merah-muda);color:var(--merah)}
 .draft-note{font-size:14px;color:var(--hijau);text-align:center}
 
+/* Review Negatif & Komplain (2.4.0): dua tombol berdampingan di Beranda dan patokan
+   kapan memakai tiap menu — baris menu yang sedang dibuka disorot. */
+.duatombol{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.duatombol .bigbutton{flex-direction:column;justify-content:center;text-align:center;gap:4px;padding:12px 8px}
+.duatombol .bigbutton .bb-text{align-items:center}
+.duatombol .bigbutton .bb-text strong{font-size:17px}
+.duatombol .bigbutton .bb-text small{font-size:13px}
+.patokan li[data-patokan-jenis="review"].aktif{background:#FFF6E0;border-left-color:var(--emas)}
+.patokan li[data-patokan-jenis="komplain"].aktif{background:var(--merah-muda);border-left-color:var(--merah)}
+.chip.gantijenis{align-self:flex-start;white-space:normal;text-align:left;line-height:1.25;padding:8px 16px}
+.isian{display:flex;flex-direction:column;gap:8px}
+
 /* ------------------------- Cards / Riwayat ------------------------- */
 .cards{display:flex;flex-direction:column;gap:10px}
 .card{background:var(--putih);border:1px solid var(--garis);border-radius:var(--radius);

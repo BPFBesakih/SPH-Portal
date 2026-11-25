@@ -17,6 +17,9 @@
   const MAX_DELAY = 5 * 60_000;
   const AUTO_INTERVAL = 60_000; // cek berkala tiap 1 menit
   const BATCH = 20;             // batas kiriman portal per permintaan
+  // Gateway Pages menolak badan > 24 KB. Komplain bisa membawa ±2 KB teks, jadi kiriman juga
+  // dibagi menurut ukuran, bukan hanya jumlah (20 komplain panjang tidak muat sekaligus).
+  const BATCH_BYTES = 20000;
   const TIMEOUT_MS = 35_000;    // di atas batas Pages→Edge (32 detik)
   const GUIDE_REFRESH_MS = 10 * 60_000;
 
@@ -159,6 +162,53 @@
     return !!(k && k.etika && Number.isInteger(k.etika.min) && Number.isInteger(k.etika.max));
   };
 
+  /** true untuk catatan review negatif / komplain (menu HP 2.4.0). */
+  const pakaiLaporan = item => !!(item && item.laporan);
+
+  /**
+   * Server menerima review negatif & komplain bila bahan formulirnya membawa daftar `laporan`.
+   * guide-form versi sebelumnya tidak mengenal catatan ini, jadi catatan ditahan di HP (tidak
+   * hilang, tidak dihitung ditolak) sampai server diperbarui — sama seperti penilaian Etika.
+   */
+  const serverTerimaLaporan = () => {
+    const k = DB.getPenilaian();
+    return !!(k && k.laporan && Array.isArray(k.laporan.review) && Array.isArray(k.laporan.komplain));
+  };
+
+  const payloadLaporan = item => {
+    const l = item.laporan || {}, w = l.wisatawan || {};
+    const p = {
+      evaluationId: item.evaluationId,
+      jenis: l.jenis,
+      guideId: item.guideId,
+      guideName: item.guideName,
+      pos: Number(item.pos),
+      timestamp: item.timestamp,
+      tanggal: l.tanggal,
+      kode: l.kode,
+      keterangan: String(l.keterangan || '').slice(0, 500),
+      petugasId: String(item.petugasId || ''),
+    };
+    if (l.jenis === 'komplain') {
+      p.kronologi = String(l.kronologi || '').slice(0, 1000);
+      p.wisatawan = { nama: String(w.nama || '').slice(0, 120), asal: String(w.asal || '').slice(0, 120), kontak: String(w.kontak || '').slice(0, 120) };
+    }
+    return p;
+  };
+
+  /** Bagi antrean satu pos menjadi kiriman ≤ BATCH entri dan ≤ BATCH_BYTES. */
+  const bagiKiriman = items => {
+    const enc = new TextEncoder(), out = [];
+    let kini = [], ukuran = 200;
+    for (const it of items) {
+      const u = enc.encode(JSON.stringify(pakaiLaporan(it) ? payloadLaporan(it) : payloadDari(it))).length + 1;
+      if (kini.length && (kini.length >= BATCH || ukuran + u > BATCH_BYTES)) { out.push(kini); kini = []; ukuran = 200; }
+      kini.push(it); ukuran += u;
+    }
+    if (kini.length) out.push(kini);
+    return out;
+  };
+
   const payloadDari = item => {
     const c = item.criteria || {};
     // Formulir 2.3 mengirim Etika; penilaian 2.2 (teguran) dan cara lama yang masih
@@ -201,13 +251,18 @@
 
   async function kirimAntrean() {
     const semua = await DB.pending();
-    // Penilaian 2.3 menunggu sampai server menyimpan Etika (lihat serverSimpanEtika).
-    // Selama ada yang menunggu, bahan formulir diperiksa ulang (paling sering tiap 10 menit).
-    if (!serverSimpanEtika() && semua.some(pakaiEtika)) { try { await refreshGuides(); } catch {} }
-    const ditunda = serverSimpanEtika() ? [] : semua.filter(pakaiEtika);
-    const queue = ditunda.length ? semua.filter(item => !pakaiEtika(item)) : semua;
+    // Penilaian 2.3 menunggu sampai server menyimpan Etika (lihat serverSimpanEtika), dan review
+    // negatif / komplain menunggu server yang menerimanya (serverTerimaLaporan). Selama ada yang
+    // menunggu, bahan formulir diperiksa ulang (paling sering tiap 10 menit).
+    const tahanEtika = item => !pakaiLaporan(item) && pakaiEtika(item) && !serverSimpanEtika();
+    const tahanLaporan = item => pakaiLaporan(item) && !serverTerimaLaporan();
+    if (semua.some(item => tahanEtika(item) || tahanLaporan(item))) { try { await refreshGuides(); } catch {} }
+    const ditundaEtika = semua.filter(tahanEtika), ditundaLaporan = semua.filter(tahanLaporan);
+    const ditunda = [...ditundaEtika, ...ditundaLaporan];
+    const tunggu = { ditunda: ditundaEtika.length, laporan: ditundaLaporan.length };
+    const queue = ditunda.length ? semua.filter(item => !ditunda.includes(item)) : semua;
     if (!queue.length) {
-      if (ditunda.length) { emit('menungguServer', { ditunda: ditunda.length }); return { sent: 0, failed: 0, ditunda: ditunda.length }; }
+      if (ditunda.length) { emit('menungguServer', tunggu); return { sent: 0, failed: 0, ditunda: ditundaEtika.length, ditundaLaporan: ditundaLaporan.length }; }
       emit('idle', { pending: 0 }); return { sent: 0, failed: 0 };
     }
     emit('syncing', { pending: queue.length });
@@ -232,12 +287,18 @@
       // dihitung sebagai penolakan (ATR-FL-07).
       if (!link) { tanpaTautan.push(pos); continue; }
       let putus = false;
-      for (let i = 0; i < items.length && !putus; i += BATCH) {
-        const batch = items.slice(i, i + BATCH);
+      for (const batch of bagiKiriman(items)) {
+        if (putus) break;
         const t0 = Date.now();
+        // Penilaian dan catatan review/komplain berbagi kiriman; kunci yang kosong tidak dikirim
+        // (server lama mewajibkan `evaluations` berisi, dan memang tidak pernah menerima `laporan`).
+        const nilai = batch.filter(it => !pakaiLaporan(it)), catatan = batch.filter(pakaiLaporan);
+        const body = { token: link.token };
+        if (nilai.length) body.evaluations = nilai.map(payloadDari);
+        if (catatan.length) body.laporan = catatan.map(payloadLaporan);
         let res;
         try {
-          res = await post('submit', { token: link.token, evaluations: batch.map(payloadDari) });
+          res = await post('submit', body);
         } catch (err) {
           lastError = err.name === 'AbortError' ? 'Waktu habis menunggu server' : (err.message || String(err));
           for (const it of batch) await DB.markFailed(it.evaluationId, lastError);
@@ -306,8 +367,8 @@
       backoffStep = 0;
       emit('done', { sent });
     }
-    if (ditunda.length) emit('menungguServer', { ditunda: ditunda.length });
-    return { sent, failed, ditolak: ditolakJml, ditahan: ditahanJml, ditunda: ditunda.length, lastError: lastError || alasanTerakhir };
+    if (ditunda.length) emit('menungguServer', tunggu);
+    return { sent, failed, ditolak: ditolakJml, ditahan: ditahanJml, ditunda: ditundaEtika.length, ditundaLaporan: ditundaLaporan.length, lastError: lastError || alasanTerakhir };
   }
 
   // Koreksi yang ditolak permanen: penilaian lamanya kembali berlaku di HP,
@@ -334,7 +395,7 @@
   }
 
   global.Sync = {
-    Settings, tokenDari, bukaTautan, isOnline, syncNow, refreshGuides, ping, start,
+    Settings, tokenDari, bukaTautan, isOnline, syncNow, refreshGuides, ping, start, serverTerimaLaporan,
     onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     get isRunning() { return running; },
   };

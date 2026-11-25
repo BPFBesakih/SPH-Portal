@@ -29,6 +29,8 @@
    */
   const cocokFilterRiwayat = (e) => {
     if (App.state.historyFilter === 'all') return true;
+    // Review negatif & komplain (2.4.0); penyaring menerima record mentah di e.r.
+    if (App.state.historyFilter === 'laporan') return DB.bukanPenilaian(e.r);
     if (App.state.historyFilter === 'ditahan') return !!e.buntu;
     if (App.state.historyFilter === 'pending') return !e.synced && !e.buntu;
     return !!e.synced;
@@ -51,7 +53,7 @@
       bar.hidden = jmlDitahan === 0;
       if (jmlDitahan) {
         bar.innerHTML =
-          `<strong>🚫 ${jmlDitahan} penilaian ditahan</strong>` +
+          `<strong>🚫 ${jmlDitahan} data ditahan</strong>` +
           `<p>Server menolaknya ${DB.MAKS_TOLAKAN}&times; berturut-turut, jadi pengiriman otomatis dihentikan. ` +
           `Datanya tidak hilang. Setelah penyebabnya dibereskan (mis. guide-nya ditambahkan di tab Guides), ` +
           `tekan tombol di bawah.</p>` +
@@ -64,6 +66,7 @@
       return;
     }
     box.innerHTML = list.map(e => {
+      if (!e.corrupt && e.laporan) return kartuLaporan(e);
       const c = e.criteria || {};
       const b = (label, val) => `<span class="badge ${val ? '' : 'bad'}">${label} ${val ? '✓' : '✕'}</span>`;
       // Entri rusak TIDAK boleh digambar sebagai "ID ✕ Uniform ✕ Etika 0":
@@ -115,17 +118,51 @@
   }
 
   /**
+   * Kartu catatan review negatif / komplain. Tidak ada tombol Perbaiki: catatan yang keliru
+   * ditolak atau dipindah jenisnya oleh Pengelola Kunjungan di portal. Data wisatawan tidak
+   * ditampilkan di HP (yang memegang HP bergantian); cukup tanda bahwa datanya tercatat.
+   */
+  /** Tanggal kejadian (YYYY-MM-DD) untuk dibaca petugas, mis. "23 Nov 2026". */
+  const tglKejadian = t => {
+    const d = new Date(String(t || '') + 'T00:00:00');
+    return isNaN(d) ? (t || '—') : d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const kartuLaporan = e => {
+    const l = e.laporan || {}, komplain = l.jenis === 'komplain', w = l.wisatawan || {};
+    const ikon = e.buntu ? '🚫' : e.synced ? '✅' : '⏳';
+    const status = e.synced ? 'Terkirim — menunggu keputusan Pengelola'
+      : e.buntu ? 'Ditahan — tidak dikirim otomatis' : 'Menunggu sync';
+    const tombol = e.buntu ? `<button type="button" class="chip retrybtn" data-retry="${esc(e.evaluationId)}">🔄 Coba lagi</button>` : '';
+    return `<div class="card${e.buntu ? ' ditahan' : ''}">
+        <span class="cstat">${ikon}</span>
+        <span class="cbody">
+          <span class="cname">${esc(e.guideName)}</span>
+          <span class="cmeta">${esc(App.labelPos(e.pos))} · ${esc(fmtTime(e.timestamp))} · ${status}${e.petugasNama ? ` · 👤 ${esc(e.petugasNama)}` : ''}</span>
+          <span class="badges"><span class="badge bad">${komplain ? '📢 Komplain' : '👎 Review negatif'}: ${esc(App.labelLaporan ? App.labelLaporan(l.jenis, l.kode) : l.kode)}</span>` +
+          `<span class="badge">Kejadian ${esc(tglKejadian(l.tanggal))}</span></span>
+          ${l.keterangan ? `<span class="cmeta">💬 ${esc(l.keterangan)}</span>` : ''}
+          ${komplain && l.kronologi ? `<span class="cmeta">📝 ${esc(l.kronologi)}</span>` : ''}
+          ${komplain && (w.nama || w.asal || w.kontak) ? `<span class="cmeta">🧳 Data wisatawan tercatat (hanya terlihat Pengelola di portal)</span>` : ''}
+          ${e.lastError && !e.synced ? `<span class="cmeta">⚠️ ${esc(e.lastError)}</span>` : ''}
+          ${tombol}
+        </span>
+      </div>`;
+  };
+
+  /**
    * Hanya penilaian HARI INI yang boleh dibetulkan dari aplikasi.
    * Kunci "satu pos sekali sehari" di server memakai tanggal, jadi koreksi
    * untuk hari lain pasti ditolak — dan rekap hari-hari sebelumnya biasanya
    * sudah dilaporkan. Untuk hari yang sudah lewat, lewat pengelola kunjungan di portal.
    */
   const bolehDikoreksi = (e) =>
-    !e.corrupt && !e.diganti && DB.tanggalLokal(e.timestamp) === DB.tanggalLokal();
+    !e.corrupt && !e.diganti && !DB.bukanPenilaian(e) && DB.tanggalLokal(e.timestamp) === DB.tanggalLokal();
 
   App.mulaiKoreksi = async function mulaiKoreksi(id) {
     const asal = await DB.get(id);
     if (!asal) { App.toast('Penilaian tidak ditemukan', 'err', '❌'); return; }
+    if (DB.bukanPenilaian(asal)) { App.toast('Review negatif dan komplain dibetulkan Pengelola Kunjungan di portal', 'warn', 'ℹ️'); return; }
     if (!bolehDikoreksi(asal)) {
       App.toast('Hanya penilaian hari ini yang bisa dibetulkan dari aplikasi', 'warn', '⚠️');
       return;
@@ -192,7 +229,7 @@
       return;
     }
     if (!n) { App.toast('Tidak ada yang perlu dikirim ulang', 'warn', 'ℹ️'); return; }
-    App.toast(`${n} penilaian dikembalikan ke antrean`, 'ok', '🔄');
+    App.toast(`${n} data dikembalikan ke antrean`, 'ok', '🔄');
     await App.refreshStats();
     await App.renderHistory();
     if (Sync.isOnline()) Sync.syncNow({ force: true });

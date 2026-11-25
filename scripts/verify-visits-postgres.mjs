@@ -11,7 +11,9 @@
 // migrasi awal riwayat NilaiGuide lewat gateway yang ditambal, migrasi basis data
 // yang menolak berjalan bila ringkasan bulanan sudah terisi, dan penilaian
 // "100 − potongan" (dua bentuk kiriman, laporan berat/apresiasi, aturan per bulan,
-// kolom N–T spreadsheet, cacah temuan di rekap harian, pengisian awal migrasinya).
+// kolom N–T spreadsheet, cacah temuan di rekap harian, pengisian awal migrasinya), serta
+// review negatif & komplain dari menu HP 2.4 (kiriman bercampur, keputusan Pengelola, data
+// wisatawan hanya untuk Pengelola, potongan bawaan, nilai akhir, gugur, migrasi yang bisa diulang).
 // Google tidak pernah dihubungi: semua panggilan ke Google tiruan (scripts/fake-google-sheets.mjs).
 import assert from 'node:assert/strict';
 import {readFileSync,readdirSync} from 'node:fs';
@@ -34,7 +36,7 @@ const cronShim=`CREATE SCHEMA IF NOT EXISTS cron;CREATE TABLE IF NOT EXISTS cron
 CREATE OR REPLACE FUNCTION cron.schedule(job_name text,schedule text,command text) RETURNS bigint LANGUAGE sql AS $shim$ INSERT INTO cron.job(jobname,schedule,command) VALUES(job_name,schedule,command) ON CONFLICT(jobname) DO UPDATE SET schedule=EXCLUDED.schedule,command=EXCLUDED.command RETURNING jobid $shim$;`;
 const pgliteSql=sql=>sql.replace(/^\s*CREATE EXTENSION IF NOT EXISTS pg_cron\b[^;]*;\s*$/im,cronShim).replace(/^\s*COMMENT ON EXTENSION pg_cron\b[^;]*;\s*$/im,'');
 const visitTables=['guide_form_links','guide_form_rate_limits','guide_form_submissions','visit_guides','visit_evaluations','visit_monthly_totals','visit_sheet_files','visit_sheet_tabs','visit_sheet_state','visit_daily_totals','visit_history_import','visit_history_ids',
- 'visit_score_rules','visit_finding_types','visit_assessors','visit_flags','visit_form_settings'];
+ 'visit_score_rules','visit_finding_types','visit_assessors','visit_flags','visit_form_settings','visit_guest_reports'];
 const DAY=86400000,globalLock='734829610160009';
 const bootstrapSql=`CREATE ROLE anon NOLOGIN;CREATE ROLE authenticated NOLOGIN;CREATE ROLE service_role NOLOGIN BYPASSRLS;CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,email_confirmed_at timestamptz,encrypted_password text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid REFERENCES auth.users(id));CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;GRANT USAGE ON SCHEMA auth TO authenticated;`;
 try{
@@ -230,6 +232,81 @@ try{
     await route(manager,'visits/scoring/rule-delete','POST',{berlaku_mulai:rules.aturan.bulan_depan});
     const records=await route(leader,'visits/records','GET',{},q+'&guide=G-010');assert.deepEqual(records.items.map(x=>[x.versi,x.nilai,x.petugas]),[[2,69,'Petugas Uji']]);
     assert.equal((await one(db,"SELECT count(*)::int n FROM audit_events WHERE object_type IN('visit_flags','visit_score_rules','visit_assessors')")).n,4);
+  });
+  await check('review negatif & komplain on PostgreSQL: packaged form advertises the menus and takes them beside evaluations; gateway decisions, private tourist data, default deduction, nilai akhir and gugur',async()=>{
+    await route(manager,'visits/guides/import','POST',{rows:[{guideId:'G-030',guideName:'Guide Review',kategori:'Asing',regu:'A1',aktif:true},{guideId:'G-031',guideName:'Guide Komplain',kategori:'Domestik',regu:'D1',aktif:true}],apply:true});
+    const token=(await one(db,"SELECT share_token FROM guide_form_links WHERE pos=1 AND is_active=1")).share_token,petugas=await one(db,"SELECT id FROM visit_assessors WHERE nama='Petugas Uji'");
+    // `laporan` di bahan formulir menandai server yang menerima menu Review Negatif dan Komplain.
+    const ctx=await invoke('context',{token},'192.0.2.160');assert.equal(ctx.status,200,JSON.stringify(ctx.data));
+    const L=ctx.data.result.penilaian.laporan;
+    assert.deepEqual([L.review.map(t=>t.kode),L.komplain.map(t=>t.kode)],[['kurang-ramah','penjelasan-kurang','terburu-buru','terlambat','review-lain'],['komplain-pungutan','komplain-memaksa','komplain-kasar','komplain-menelantarkan','komplain-lain']]);
+    assert.deepEqual([L.keteranganMin,L.keteranganMaks,L.kronologiMin,L.kronologiMaks,L.wisatawanMaks,L.mundurHari],[3,500,3,1000,120,7]);
+    assert(!JSON.stringify(ctx.data.result).includes('pot_review'),'potongan bawaan tidak dikirim ke HP');
+    await Promise.all(background.splice(0));
+    const stamp=new Date(Date.now()-600000).toISOString(),day=witaDate(Date.parse(stamp));
+    const report=(extra={})=>({evaluationId:randomUUID(),jenis:'review',guideId:'G-030',guideName:'Nama dari HP',pos:1,timestamp:stamp,tanggal:day,kode:'kurang-ramah',keterangan:'Tamu bilang guide membentak.',petugasId:petugas.id,...extra});
+    const reviewA=report(),reviewB=report({kode:'terburu-buru',keterangan:'Tur dipercepat tanpa penjelasan.'});
+    const komplain=report({jenis:'komplain',guideId:'G-031',kode:'komplain-pungutan',keterangan:'Diminta uang parkir.',kronologi:'Di gerbang utama guide meminta Rp50.000 di luar tiket.',wisatawan:{nama:'Tamu Fiktif',asal:'Belanda',kontak:'+31 600 000 000'}});
+    const bad={kind:report({kode:'komplain-kasar'}),old:report({tanggal:shiftDate(day,-8)}),future:report({tanggal:shiftDate(day,1)}),guide:report({guideId:'G-999'}),petugas:report({petugasId:randomUUID()}),kronologi:report({jenis:'komplain',kode:'komplain-lain'})};
+    const evals=['G-030','G-031'].map(guideId=>evaluation({guideId,timestamp:stamp,criteria:{idCard:true,seragam:'lengkap',etika:0,berat:null,apresiasi:null},petugasId:petugas.id}));
+    // Satu kiriman HP bisa membawa penilaian dan catatan sekaligus.
+    let r=await invoke('submit',{token,evaluations:evals,laporan:[reviewA,reviewB,komplain,...Object.values(bad)]},'192.0.2.161');assert.equal(r.status,200,JSON.stringify(r.data));
+    assert.deepEqual(r.data.result.accepted.map(a=>a.evaluationId).sort(),[...evals,reviewA,reviewB,komplain].map(x=>x.evaluationId).sort());
+    const why=Object.fromEntries(r.data.result.rejected.map(x=>[x.evaluationId,x.errors.join(' ')]));
+    assert.match(why[bad.kind.evaluationId],/tidak dikenal portal/);assert.match(why[bad.old.evaluationId],/Tanggal kejadian harus antara/);assert.match(why[bad.future.evaluationId],/Tanggal kejadian harus antara/);
+    assert.match(why[bad.guide.evaluationId],/tidak terdaftar/);assert.match(why[bad.petugas.evaluationId],/Petugas pos tidak terdaftar/);assert.match(why[bad.kronologi.evaluationId],/kronologi komplain wajib/);
+    assert.equal(background.length,1,'penilaian baru memicu penyalinan');await Promise.all(background.splice(0));
+    // Kiriman ulang dan kiriman catatan saja: tanpa baris ganda dan tanpa penyalinan spreadsheet.
+    const reviewC=report({guideId:'G-031',kode:'terlambat',keterangan:'Tamu menunggu 30 menit.'});
+    r=await invoke('submit',{token,laporan:[reviewA,reviewC]},'192.0.2.162');assert.equal(r.status,200,JSON.stringify(r.data));
+    assert.deepEqual(r.data.result.accepted.map(a=>[a.evaluationId,a.duplicate]),[[reviewA.evaluationId,true],[reviewC.evaluationId,false]]);assert.equal(background.length,0,'catatan tidak memicu penyalinan');
+    // Pengaman rollback Pages: PWA 2.3 mengirim catatan yang masih di antrean sebagai penilaian
+    // formulir 2.2 berseragam "laporan" — ditolak, tidak pernah menjadi pengantaran bernilai.
+    const stray=evaluation({guideId:'G-030',timestamp:new Date(Date.now()-2*3600000).toISOString(),criteria:{idCard:false,seragam:'laporan',teguran:[],berat:null,apresiasi:null},catatan:''});
+    r=await invoke('submit',{token,evaluations:[stray]},'192.0.2.163');assert.equal(r.status,200,JSON.stringify(r.data));
+    assert.deepEqual(r.data.result.accepted,[]);assert.match(r.data.result.rejected[0].errors.join(' '),/criteria\.seragam harus lengkap/);
+    const row=await one(db,'SELECT * FROM visit_guest_reports WHERE id=?',komplain.evaluationId);
+    assert.deepEqual([row.status,row.jenis,row.kode,row.guide_name,row.wita_date,row.wisatawan_kontak,row.petugas_nama,row.potongan],['menunggu','komplain','komplain-pungutan','Guide Komplain',day,'+31 600 000 000','Petugas Uji',null]);
+    assert(!JSON.stringify(await all(db,'SELECT * FROM guide_form_submissions')).match(/membentak|Tamu Fiktif|\+31 600/),'log kiriman tanpa isi catatan');
+    // Ruang kerja: hanya Pengelola yang memutuskan dan melihat data wisatawan.
+    const q=`from=${day.slice(0,7)}-01&to=${day}`,item=async id=>(await route(manager,'visits/guest-reports','GET',{},q)).items.find(i=>i.id===id);
+    const seen=await route(leader,'visits/guest-reports','GET',{},q),list=await route(manager,'visits/guest-reports','GET',{},q);
+    assert.equal(seen.can_decide,false);assert(seen.items.length===4&&seen.items.every(i=>i.wisatawan===null),'pimpinan tidak melihat data wisatawan');
+    assert.deepEqual(list.items.find(i=>i.id===komplain.evaluationId).wisatawan,{nama:'Tamu Fiktif',asal:'Belanda',kontak:'+31 600 000 000'});
+    assert.deepEqual([list.can_decide,list.counts.menunggu,list.menunggu_jenis,list.pot_review],[true,4,{review:3,komplain:1},5]);
+    await assert.rejects(route(leader,'visits/guest-reports/decide','POST',{id:reviewA.evaluationId,row_version:1,action:'setujui',potongan:5}),e=>e instanceof api.AppError&&e.status===403);
+    let a=await item(reviewA.evaluationId);
+    await assert.rejects(route(manager,'visits/guest-reports/decide','POST',{id:a.id,row_version:a.row_version,action:'setujui',potongan:0}),e=>e instanceof api.AppError&&e.status===422);
+    a=await route(manager,'visits/guest-reports/decide','POST',{id:a.id,row_version:a.row_version,action:'setujui',potongan:30});assert.deepEqual([a.status,a.potongan,a.diputuskanOleh],['disetujui',30,'kunjungan']);
+    // Potongan review tidak dibatasi per bulan; nilai akhir berhenti di 0.
+    const b=await item(reviewB.evaluationId);await route(manager,'visits/guest-reports/decide','POST',{id:b.id,row_version:b.row_version,action:'setujui',potongan:100});
+    let k=await item(komplain.evaluationId);
+    await assert.rejects(route(manager,'visits/guest-reports/decide','POST',{id:k.id,row_version:k.row_version,action:'setujui'}),e=>e instanceof api.AppError&&e.status===422&&/klarifikasi/.test(e.message));
+    k=await route(manager,'visits/guest-reports/decide','POST',{id:k.id,row_version:k.row_version,action:'setujui',klarifikasi:'Guide mengakui meminta uang parkir.'});assert.equal(k.status,'disetujui');
+    let c=await item(reviewC.evaluationId);
+    c=await route(manager,'visits/guest-reports/decide','POST',{id:c.id,row_version:c.row_version,action:'pindah',kode:'komplain-menelantarkan'});assert.deepEqual([c.jenis,c.jenisAwal,c.kode,c.status],['komplain','review','komplain-menelantarkan','menunggu']);
+    await assert.rejects(route(manager,'visits/guest-reports/decide','POST',{id:c.id,row_version:c.row_version,action:'tolak'}),e=>e instanceof api.AppError&&e.status===422);
+    c=await route(manager,'visits/guest-reports/decide','POST',{id:c.id,row_version:c.row_version,action:'tolak',catatan:'Tamu salah orang.'});assert.equal(c.status,'ditolak');
+    await assert.rejects(route(manager,'visits/guest-reports/decide','POST',{id:c.id,row_version:c.row_version-1,action:'buka'}),e=>e instanceof api.AppError&&e.status===409);
+    assert.equal((await one(db,"SELECT count(*)::int n FROM audit_events WHERE object_type='visit_guest_reports' AND action='DECIDE'")).n,5);
+    // Nilai akhir bulan itu: 100 − 30 − 100 → 0 (bukan minus); komplain disetujui → nilai dihapus, gugur, tanpa peringkat.
+    const overview=await route(leader,'visits/overview','GET',{},q),g30=overview.perGuide.find(g=>g.guideId==='G-030'),g31=overview.perGuide.find(g=>g.guideId==='G-031');
+    assert.deepEqual([g30.nilai,g30.review,g30.potonganReview,g30.nilaiAkhir,g30.gugur],[100,2,130,0,false]);
+    assert.deepEqual([g31.nilai,g31.komplain,g31.nilaiAkhir,g31.gugur,g31.peringkat,g31.status,g31.sebab],[100,1,0,true,null,'gugur','komplain']);
+    assert.deepEqual(overview.ringkasan.laporan,{review:{disetujui:2,menunggu:0,potongan:130},komplain:{disetujui:1,menunggu:0}});
+    // Batasan basis data menjaga keputusan, juga lewat SQL langsung.
+    await assert.rejects(pg.query('UPDATE portal.visit_guest_reports SET potongan=NULL WHERE id=$1',[reviewA.evaluationId]),'review disetujui wajib berpotongan');
+    await assert.rejects(pg.query("UPDATE portal.visit_guest_reports SET klarifikasi='' WHERE id=$1",[komplain.evaluationId]),'komplain disetujui wajib berklarifikasi');
+    // Potongan bawaan saat menyetujui: hanya Pengelola, bilangan bulat 1–100, diaudit.
+    const settings=await one(db,'SELECT row_version FROM visit_form_settings WHERE id=1');
+    await assert.rejects(route(leader,'visits/scoring/reports','POST',{pot_review:12,row_version:settings.row_version}),e=>e instanceof api.AppError&&e.status===403);
+    await assert.rejects(route(manager,'visits/scoring/reports','POST',{pot_review:101,row_version:settings.row_version}),e=>e instanceof api.AppError&&e.status===422);
+    assert.equal((await route(manager,'visits/scoring/reports','POST',{pot_review:12,row_version:settings.row_version})).pot_review,12);
+    assert.equal((await route(manager,'visits/guest-reports','GET',{},q)).pot_review,12);
+    // Migrasi bisa dijalankan ulang di atas data yang sudah ada.
+    await pg.exec(pgliteSql(readFileSync(new URL('20261123100000_visit_guest_reports.sql',directory),'utf8')));
+    assert.equal((await one(db,"SELECT count(*)::int n FROM visit_finding_types WHERE jenis IN('review','komplain')")).n,10);
+    assert.deepEqual([(await one(db,'SELECT count(*)::int n FROM visit_guest_reports')).n,(await one(db,'SELECT pot_review FROM visit_form_settings WHERE id=1')).pot_review],[4,12]);
   });
   await check('patched gateway runs sheet sync and connection check outside the request transaction and without the global lock',async()=>{
     const identity={},storage={};

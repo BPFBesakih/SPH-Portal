@@ -25,9 +25,17 @@ function scoringContext(s){
   if(!Number.isInteger(s.etika?.min)||!Number.isInteger(s.etika.max)||s.etika.min>=0||s.etika.max<=0)throw new Error('Invalid Etika context');
   etika={min:s.etika.min,max:s.etika.max};
  }
+ // Daftar review negatif & komplain hanya dikirim guide-form yang menerima catatan itu. Tanpanya
+ // HP 2.4 menahan catatan di antrean sampai server diperbarui (sama seperti Etika).
+ let laporan;
+ if(s.laporan!==undefined){
+  const L=s.laporan,limits=['keteranganMin','keteranganMaks','kronologiMin','kronologiMaks','wisatawanMaks','mundurHari'];
+  if(!L||typeof L!=='object'||!Array.isArray(L.review)||!Array.isArray(L.komplain)||!limits.every(k=>Number.isInteger(L[k])&&L[k]>=0))throw new Error('Invalid report context');
+  laporan={review:L.review.map(finding),komplain:L.komplain.map(finding),...Object.fromEntries(limits.map(k=>[k,L[k]]))};
+ }
  return {versi:s.versi,teguranMaks:s.teguranMaks,catatanMin:s.catatanMin,...(etika?{etika}:{}),
   teguran:s.teguran.map(finding),berat:s.berat.map(finding),apresiasi:s.apresiasi.map(finding),petugas,
-  petunjuk:{idCard:s.petunjuk.idCard,seragam:s.petunjuk.seragam}};
+  petunjuk:{idCard:s.petunjuk.idCard,seragam:s.petunjuk.seragam},...(laporan?{laporan}:{})};
 }
 export async function handleGuideForm(request,env,fetchImpl=globalThis.fetch.bind(globalThis)){
  try{
