@@ -504,7 +504,7 @@ CREATE TABLE IF NOT EXISTS attendance_events (
  accuracy_m REAL NOT NULL CHECK(accuracy_m>=0 AND accuracy_m<=100000), location_captured_at TEXT,
  point_id TEXT REFERENCES attendance_points(id), point_name TEXT CHECK(point_name IS NULL OR length(point_name)<=80),
  distance_m INTEGER CHECK(distance_m IS NULL OR distance_m>=0), within_point INTEGER NOT NULL CHECK(within_point IN(0,1)),
- outside_reason TEXT CHECK(outside_reason IS NULL OR outside_reason IN('DINAS_LUAR','TUGAS_LAPANGAN','LAINNYA')), outside_note TEXT CHECK(outside_note IS NULL OR length(outside_note)<=300),
+ outside_reason TEXT CHECK(outside_reason IS NULL OR outside_reason IN('DINAS_LUAR','TUGAS_LAPANGAN','LAINNYA','IZIN_LUAR_AREA')), outside_note TEXT CHECK(outside_note IS NULL OR length(outside_note)<=300),
  photo_storage_key TEXT CHECK(photo_storage_key IS NULL OR length(photo_storage_key)<=200), photo_mime TEXT NOT NULL CHECK(photo_mime='image/jpeg'),
  photo_size INTEGER NOT NULL CHECK(photo_size BETWEEN 1 AND 307200), photo_checksum TEXT NOT NULL CHECK(length(photo_checksum)=64), photo_deleted_at TEXT,
  flags TEXT NOT NULL DEFAULT '[]' CHECK(length(flags)<=400), confirmed_order INTEGER NOT NULL DEFAULT 0 CHECK(confirmed_order IN(0,1)),
@@ -545,6 +545,70 @@ CREATE TABLE IF NOT EXISTS attendance_state (
  last_error TEXT CHECK(last_error IS NULL OR length(last_error)<=300), deleted_photos INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
  CHECK((lease_owner IS NULL)=(lease_until IS NULL)));
 INSERT OR IGNORE INTO attendance_state(id,updated_at) VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+-- Jadwal kerja tetap Absensi. Data produksi pilot dimuat melalui migrasi PostgreSQL.
+CREATE TABLE IF NOT EXISTS attendance_schedule_shifts (
+ code TEXT PRIMARY KEY CHECK(length(code) BETWEEN 1 AND 40),
+ name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 120),
+ start_time TEXT NOT NULL, end_time TEXT NOT NULL, late_time TEXT NOT NULL,
+ end_day_offset INTEGER NOT NULL CHECK(end_day_offset IN(0,1)),
+ CHECK(late_time>=start_time),
+ CHECK((end_day_offset=0 AND end_time>start_time AND late_time<end_time)
+    OR (end_day_offset=1 AND end_time<=start_time)));
+CREATE TABLE IF NOT EXISTS attendance_schedule_units (
+ org_unit_id TEXT PRIMARY KEY REFERENCES org_units(id), starts_on TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS attendance_schedule_weekdays (
+ org_unit_id TEXT NOT NULL REFERENCES attendance_schedule_units(org_unit_id),
+ weekday_no INTEGER NOT NULL CHECK(weekday_no BETWEEN 1 AND 7),
+ shift_code TEXT NOT NULL REFERENCES attendance_schedule_shifts(code),
+ PRIMARY KEY(org_unit_id,weekday_no));
+CREATE TABLE IF NOT EXISTS attendance_schedule_holidays (
+ work_date TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 120));
+
+-- Master 41 shift absensi dalam WITA, sesuai migrasi jadwal PostgreSQL.
+INSERT INTO attendance_schedule_shifts (code,name,start_time,end_time,late_time,end_day_offset) VALUES
+ ('10000','Sekretariat Senin-Jumat','08:00','16:00','08:16',0),
+ ('10001','Sekretariat Sabtu','08:00','13:00','08:16',0),
+ ('20001','Ops. Shuttle Shift 1','07:00','15:00','07:16',0),
+ ('20002','Ops. Shuttle Shift 2','10:00','18:00','10:16',0),
+ ('20003','Ops. Shuttle Shift 3','14:00','22:00','14:16',0),
+ ('20004','Ops. Shuttle half-shift','07:00','12:00','07:16',0),
+ ('21001','Ops. Parkir Shift 1','07:00','12:00','07:15',0),
+ ('21002','Ops. Parkir Shift 2','10:00','18:00','10:15',0),
+ ('21003','Ops. Parkir half-shift','07:00','12:00','07:15',0),
+ ('22001','Ops. Kunjungan Shift 1','07:00','15:00','07:16',0),
+ ('22002','Ops. Kunjungan Shift 2','10:00','18:00','10:15',0),
+ ('22003','Ops. Kunjungan half-shift 1','07:00','12:00','07:16',0),
+ ('22004','Ops. Kunjungan half-shift 2','13:00','18:00','13:15',0),
+ ('30001','Keamanan Shift 1','07:00','15:00','07:15',0),
+ ('30002','Keamanan Shift 2','15:00','22:00','15:15',0),
+ ('30003','Keamanan Shift 3','22:00','07:00','22:15',1),
+ ('40001','Bankamda Shift 1','07:00','15:00','07:15',0),
+ ('40002','Bankamda Shift 2','10:00','18:00','10:15',0),
+ ('50001','Sekretariat Umum Shift 1','07:00','15:00','07:15',0),
+ ('50002','Sekretariat Umum Shift 2','10:00','18:00','10:15',0),
+ ('60001','Kebersihan Lingkungan','07:00','15:00','07:16',0),
+ ('60002','Kebersihan Lingkungan 1/2 Shift','07:00','12:00','07:16',0),
+ ('61001','Kebersihan Pahryangan','08:00','16:00','08:16',0),
+ ('61002','Kebersihan Pahryangan 1/2 Shift','08:00','13:00','08:16',0),
+ ('62001','Pertamanan','08:00','16:00','08:16',0),
+ ('62002','Pertamanan 1/2 Shift','08:00','13:00','08:16',0),
+ ('63001','Kebersihan Gedung A','06:00','14:00','06:16',0),
+ ('63002','Kebersihan Gedung A 1/2 Shift','06:00','11:00','06:16',0),
+ ('63003','Kebersihan Gedung B','10:00','18:00','10:16',0),
+ ('63004','Kebersihan Gedung B 1/2 Shift','10:00','15:00','10:16',0),
+ ('63005','Kebersihan Gedung C','08:00','16:00','08:16',0),
+ ('63006','Kebersihan Gedung C 1/2 Shift','08:00','13:00','08:15',0),
+ ('70000','Keamanan Pagi 0','07:00','15:00','07:15',0),
+ ('70001','Keamanan Pagi 1','06:00','13:00','06:15',0),
+ ('70002','Keamanan Pagi 2','09:00','17:00','09:15',0),
+ ('70003','Keamanan Pagi 3','07:00','12:00','07:15',0),
+ ('71000','Keamanan Siang 0','11:00','18:00','11:15',0),
+ ('71002','Keamanan Siang 2','11:00','17:00','11:15',0),
+ ('71003','Keamanan Siang 3','10:00','18:00','10:15',0),
+ ('72001','Keamanan Sore 1','15:00','23:00','15:15',0),
+ ('73000','Keamanan Malam 0','22:00','06:00','22:15',1)
+ON CONFLICT(code) DO NOTHING;
 
 -- E-Arsip Humas (Tahap 1): arsip dokumen administrasi per bagian dengan pengawasan Humas.
 -- Padanan PostgreSQL: supabase/migrations/20261112100000_archive_module.sql.

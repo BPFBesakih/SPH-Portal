@@ -8,7 +8,8 @@
 // Snapshot aktif = portal-api yang sedang tayang (bandingkan dulu dengan versi di
 // dashboard Supabase). Hasil ditulis ke supabase/deploy/portal-api/index.ts.
 //
-// Tiga tambalan:
+// Pada gateway yang sudah memuat Absensi, bangkitkan ulang hanya lingkup modulnya.
+// Untuk pemasangan pertama, tiga tambalan:
 //  1. folder Drive `absensi` (SPH-Portal-Absensi) dikenali penyimpanan snapshot, supaya
 //     selfie yang diunggah Edge attendance-form bisa dibaca portal;
 //  2. modul Absensi (lib/attendance*.mjs) dibundel dalam satu lingkup (__attendance);
@@ -24,20 +25,30 @@ if(!sourcePath||!/^[a-f0-9]{64}$/.test(expectedHash||''))throw new Error('Pass a
 const source=readFileSync(resolve(sourcePath),'utf8');
 const sha=createHash('sha256').update(source).digest('hex');
 if(sha!==expectedHash)throw new Error('Active gateway snapshot hash mismatch.');
-if(source.includes('__attendance')||source.includes('p[0] === "attendance"'))throw new Error('Snapshot already contains the attendance module.');
+const attendanceMarker='// --- Modul Absensi, dibangkitkan dari lib/attendance*.mjs (build-attendance-deploy.mjs) ---';
+const errorMarker='// Galat dari modul Absensi memakai kelas AppError salinannya sendiri; diubah ke';
+const routeLine='  if (p[0] === "attendance") return __attendance.attendanceRoutes({ db, user, p, method, body, url }, { has, can, audit, readPhoto: (key) => db.storage.get(key) }).catch(adoptAttendanceError);';
+const refreshing=source.includes(attendanceMarker);
+if(!refreshing&&(source.includes('__attendance')||source.includes('p[0] === "attendance"')))throw new Error('Cannot safely locate the existing attendance bundle.');
 const once=(text,needle,label)=>{const at=text.indexOf(needle);if(at<0||text.indexOf(needle,at+1)>=0)throw new Error(`Gateway boundary not found exactly once: ${label}`);return at;};
 
 // 1. Folder Drive Absensi.
-const folders='  briefing: "SPH-Portal-Briefing"\n});';
-const foldersAt=once(source,folders,'drive module folders');
-if(foldersAt<once(source,'var driveModuleFolders = Object.freeze({','drive module folder map'))throw new Error('Drive folder map changed.');
-let patched=source.slice(0,foldersAt)+'  briefing: "SPH-Portal-Briefing",\n  absensi: "SPH-Portal-Absensi"\n});'+source.slice(foldersAt+folders.length);
+let patched=source;
+if(!refreshing){
+ const folders='  briefing: "SPH-Portal-Briefing"\n});';
+ const foldersAt=once(source,folders,'drive module folders');
+ if(foldersAt<once(source,'var driveModuleFolders = Object.freeze({','drive module folder map'))throw new Error('Drive folder map changed.');
+ patched=source.slice(0,foldersAt)+'  briefing: "SPH-Portal-Briefing",\n  absensi: "SPH-Portal-Absensi"\n});'+source.slice(foldersAt+folders.length);
 
-// 3. Rute di routeOperation, sesudah rute Kunjungan.
-const visitRoute='  if (p[0] === "visits") return __visits.visitRoutes({ db, user, p, method, body, url }, { has, audit }).catch(adoptVisitError);';
-const routeAt=once(patched,visitRoute,'visits route');
-if(routeAt<once(patched,'async function routeOperation(','routeOperation'))throw new Error('Visits route is outside routeOperation.');
-patched=patched.replace(visitRoute,()=>visitRoute+'\n  if (p[0] === "attendance") return __attendance.attendanceRoutes({ db, user, p, method, body, url }, { has, can, audit, readPhoto: (key) => db.storage.get(key) }).catch(adoptAttendanceError);');
+ // 3. Rute di routeOperation, sesudah rute Kunjungan.
+ const visitRoute='  if (p[0] === "visits") return __visits.visitRoutes({ db, user, p, method, body, url }, { has, audit }).catch(adoptVisitError);';
+ const routeAt=once(patched,visitRoute,'visits route');
+ if(routeAt<once(patched,'async function routeOperation(','routeOperation'))throw new Error('Visits route is outside routeOperation.');
+ patched=patched.replace(visitRoute,()=>visitRoute+'\n'+routeLine);
+} else {
+ once(source,'  absensi: "SPH-Portal-Absensi"','attendance Drive folder');
+ once(source,routeLine,'attendance route');
+}
 
 // 2. Modul Absensi dibundel terpisah lalu dibungkus satu lingkup, supaya nama di
 // snapshot (assert, has, can, audit, AppError, …) tidak diganti esbuild.
@@ -58,25 +69,36 @@ if(!exportMatch)throw new Error('Attendance bundle export block not found.');
 const exported=exportMatch[1].split(',').map(x=>x.trim()).filter(Boolean);
 if(!exported.some(e=>e==='attendanceRoutes'||e.endsWith(' as attendanceRoutes')))throw new Error('Attendance export missing: attendanceRoutes');
 const body=moduleText.slice(0,exportMatch.index);
-const namespace=`// --- Modul Absensi, dibangkitkan dari lib/attendance*.mjs (build-attendance-deploy.mjs) ---
+const namespace=`${attendanceMarker}
 const __attendance = (() => {
 ${aliases.join('\n')}
 ${body}
   return { ${exported.map(e=>{const [orig,as=orig]=e.split(/\s+as\s+/);return `${as}: ${orig}`;}).join(', ')} };
 })();
-// Galat dari modul Absensi memakai kelas AppError salinannya sendiri; diubah ke
+`;
+const adapter=`${errorMarker}
 // AppError snapshot supaya status 403/404/409/422 tidak berubah menjadi 503.
 function adoptAttendanceError(error) {
   if (!(error instanceof AppError) && error instanceof Error && Number.isInteger(error.status) && error.status >= 400 && error.status < 600) throw new AppError(error.status, error.message, error.details);
   throw error;
 }
 `;
-const anchor='async function routeOperation(';
-once(patched,anchor,'routeOperation anchor');
-patched=patched.replace(anchor,()=>namespace+anchor);
-patched=imports.join('\n')+'\n'+patched;
+if(refreshing){
+ const start=once(patched,attendanceMarker,'attendance module start');
+ const end=once(patched,errorMarker,'attendance module end');
+ if(end<=start)throw new Error('Attendance module end precedes its start.');
+ patched=patched.slice(0,start)+namespace+patched.slice(end);
+ const existingImports=/^(?:import \{[^\n}]*\b__attendance_[A-Za-z0-9_]+[^\n}]*\} from "node:[a-z_]+";\n)+/gm;
+ if([...patched.matchAll(existingImports)].length!==1)throw new Error('Attendance imports must form one contiguous block.');
+ patched=patched.replace(existingImports,()=>imports.join('\n')+'\n');
+} else {
+ const anchor='async function routeOperation(';
+ once(patched,anchor,'routeOperation anchor');
+ patched=patched.replace(anchor,()=>namespace+adapter+anchor);
+ patched=imports.join('\n')+'\n'+patched;
+}
 const {parse}=await import('./cloud-tools/node_modules/acorn/dist/acorn.mjs');
 parse(patched,{ecmaVersion:'latest',sourceType:'module'});
 const out=resolve('supabase/deploy/portal-api/index.ts');mkdirSync(dirname(out),{recursive:true});
 writeFileSync(out,patched);
-console.log(JSON.stringify({source_sha256:sha,output:out,output_sha256:createHash('sha256').update(readFileSync(out)).digest('hex'),patches:['absensi Drive folder','attendance module imports','attendance routes in routeOperation']}));
+console.log(JSON.stringify({source_sha256:sha,output:out,output_sha256:createHash('sha256').update(readFileSync(out)).digest('hex'),patches:refreshing?['attendance module and imports']:['absensi Drive folder','attendance module imports','attendance routes in routeOperation']}));

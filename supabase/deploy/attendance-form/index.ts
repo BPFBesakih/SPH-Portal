@@ -396,7 +396,8 @@ var attendanceFlags = Object.freeze({
 var outsideReasons = Object.freeze({
   DINAS_LUAR: "Dinas luar",
   TUGAS_LAPANGAN: "Tugas lapangan",
-  LAINNYA: "Lainnya"
+  LAINNYA: "Lainnya",
+  IZIN_LUAR_AREA: "Izin absen di luar area kantor"
 });
 var dayNoteKinds = Object.freeze({
   IZIN: "Izin",
@@ -509,7 +510,7 @@ async function verifySignature(publicKeyText, message, signature) {
 }
 
 // supabase/functions/_shared/portal/attendance-form.mjs
-var attendanceFormActions = Object.freeze(["registration", "register", "session", "session-register", "context", "search", "person", "submit"]);
+var attendanceFormActions = Object.freeze(["registration", "register", "session", "session-register", "context", "search", "person", "check-location", "submit"]);
 var attendanceFormLimits = Object.freeze({
   windowMinutes: 10,
   ip: {
@@ -520,18 +521,21 @@ var attendanceFormLimits = Object.freeze({
     context: 1500,
     search: 800,
     person: 2e3,
+    "check-location": 800,
     submit: 800
   },
   device: {
     context: 120,
     search: 120,
     person: 300,
+    "check-location": 120,
     submit: 60
   },
   sharedDevice: {
     context: 300,
     search: 300,
     person: 900,
+    "check-location": 300,
     submit: 150
   }
 });
@@ -868,47 +872,56 @@ async function personStatus(db, deviceId, employeeId, nowMs = Date.now()) {
   };
 }
 var numeric = (v, min, max) => typeof v === "number" && Number.isFinite(v) && v >= min && v <= max;
+function checkedAttendanceLocation(l) {
+  assert(l && typeof l === "object" && numeric(l.latitude, -90, 90) && numeric(l.longitude, -180, 180) && numeric(l.accuracy, 0, 1e5) && numeric(l.age_ms, -6e4, 36e5), "Lokasi HP belum didapat. Nyalakan Lokasi lalu coba lagi.", 422);
+  assert(l.age_ms <= attendanceRules.locationMaxAgeMinutes * 6e4, "Lokasi sudah lama diambil. Coba absen lagi.", 422);
+  return {
+    latitude: l.latitude,
+    longitude: l.longitude,
+    accuracy: l.accuracy,
+    age_ms: Math.max(0, l.age_ms)
+  };
+}
 function checkSubmission(payload) {
   const p = payload || {};
   assert(typeof p.client_key === "string" && uuid.test(p.client_key), "Kiriman tidak valid. Muat ulang halaman.", 400);
   assert(typeof p.employee_id === "string" && p.employee_id.length > 0 && p.employee_id.length <= 100, "Pilih nama terlebih dahulu.", 422);
   assert(["IN", "OUT"].includes(p.kind), "Pilih MASUK atau PULANG.", 422);
-  const l = p.location;
-  assert(l && typeof l === "object" && numeric(l.latitude, -90, 90) && numeric(l.longitude, -180, 180) && numeric(l.accuracy, 0, 1e5) && numeric(l.age_ms, -6e4, 36e5), "Lokasi HP belum didapat. Nyalakan Lokasi lalu coba lagi.", 422);
-  assert(l.age_ms <= attendanceRules.locationMaxAgeMinutes * 6e4, "Lokasi sudah lama diambil. Coba absen lagi.", 422);
+  const location = checkedAttendanceLocation(p.location);
   const photo = p.photo;
   assert(photo && typeof photo === "object" && photo.mime_type === "image/jpeg" && typeof photo.data === "string" && /^[A-Za-z0-9+/]+={0,2}$/.test(photo.data), "Selfie wajib diambil dari kamera.", 422);
   assert(numeric(photo.age_ms, -6e4, 36e5) && photo.age_ms <= attendanceRules.photoMaxAgeMinutes * 6e4, "Selfie sudah lama diambil. Ambil selfie lagi.", 422);
   const bytes = Buffer3.from(photo.data, "base64");
   assert(bytes.length > 0 && bytes.length <= attendanceRules.photoMaxBytes, "Ukuran selfie terlalu besar. Coba lagi.", 413);
   assert(bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255, "Selfie wajib diambil dari kamera.", 422);
-  let outside = null;
-  if (p.outside != null) {
-    assert(typeof p.outside === "object" && ["DINAS_LUAR", "TUGAS_LAPANGAN", "LAINNYA"].includes(p.outside.reason), "Pilih alasan absen di luar titik.", 422);
-    const note = typeof p.outside.note === "string" ? p.outside.note.trim().slice(0, 300) : "";
-    assert(p.outside.reason !== "LAINNYA" || note.length >= 3, "Tuliskan alasan absen di luar titik.", 422);
-    outside = {
-      reason: p.outside.reason,
-      note: note || null
-    };
-  }
   return {
     client_key: p.client_key.toLowerCase(),
     employee_id: p.employee_id,
     kind: p.kind,
     confirmed_order: p.confirmed_order === true,
-    location: {
-      latitude: l.latitude,
-      longitude: l.longitude,
-      accuracy: l.accuracy,
-      age_ms: Math.max(0, l.age_ms)
-    },
-    outside,
+    location,
     bytes,
     checksum: createHash3("sha256").update(bytes).digest("hex")
   };
 }
 var activePoints = async (db) => await all(db, "SELECT * FROM attendance_points WHERE is_active=1 ORDER BY name,id");
+var outsideOfficePolicyKey = "attendance_outside_office";
+async function outsideOfficePolicy(db, lock = false) {
+  const suffix = lock && typeof db.query === "function" ? " FOR SHARE" : "";
+  const raw = (await one(db, "SELECT value FROM app_settings WHERE key=?" + suffix, outsideOfficePolicyKey))?.value ?? null;
+  if (raw === null) return {
+    version: 0,
+    employee_ids: [],
+    raw
+  };
+  const policy = JSON.parse(raw);
+  assert(Number.isSafeInteger(policy?.version) && policy.version > 0 && Array.isArray(policy.employee_ids) && policy.employee_ids.every((id) => typeof id === "string"), "Pengaturan akses luar area belum bisa dibaca. Hubungi Pengelola Absensi.", 503);
+  return {
+    version: policy.version,
+    employee_ids: policy.employee_ids,
+    raw
+  };
+}
 async function receiptOf(db, e, duplicate = false) {
   const person = await one(db, "SELECT full_name FROM employees WHERE id=?", e.employee_id);
   return {
@@ -926,12 +939,35 @@ async function receiptOf(db, e, duplicate = false) {
     duplicate
   };
 }
-function outsideError(match) {
-  return new AppError(422, `Anda ${match.distance} m dari ${match.point.name}, di luar titik absen. Pilih alasan lalu kirim lagi.`, {
-    code: "OUTSIDE_POINT",
-    point_name: match.point.name,
-    distance_m: match.distance
+async function checkAttendanceArea(db, input, lock = false) {
+  const match = matchPoint(await activePoints(db), input.location.latitude, input.location.longitude);
+  if (match?.within) return match;
+  const details = {
+    point_name: match?.point.name ?? null,
+    distance_m: match?.distance ?? null
+  };
+  const location = match ? `Lokasi Anda ${match.distance} m dari ${match.point.name}, di luar radius absen.` : "Belum ada titik absen aktif.";
+  if (!(await outsideOfficePolicy(db, lock)).employee_ids.includes(input.employee_id)) {
+    const instruction = match ? "Silakan absen dari dalam area yang diizinkan." : "Hubungi Pengelola Absensi untuk mengaktifkan titik absen.";
+    throw new AppError(403, `${location} ${instruction}`, {
+      ...details,
+      code: match ? "OUTSIDE_FORBIDDEN" : "NO_ACTIVE_POINT"
+    });
+  }
+  return match;
+}
+async function checkCaptureLocation(db, deviceId, payload) {
+  await activeDevice(db, deviceId);
+  const employeeId = payload.employee_id;
+  assert(typeof employeeId === "string" && employeeId.length > 0 && employeeId.length <= 100, "Pilih nama terlebih dahulu.", 422);
+  assert((await attendancePeople(db, "e.id=?", employeeId)).length, "Nama tidak ditemukan atau pegawai tidak aktif.", 404);
+  await checkAttendanceArea(db, {
+    employee_id: employeeId,
+    location: checkedAttendanceLocation(payload.location)
   });
+  return {
+    allowed: true
+  };
 }
 async function prepareSubmission(db, deviceId, input, nowMs = Date.now()) {
   await activeDevice(db, deviceId);
@@ -944,8 +980,7 @@ async function prepareSubmission(db, deviceId, input, nowMs = Date.now()) {
     };
   }
   assert((await attendancePeople(db, "e.id=?", input.employee_id)).length, "Nama tidak ditemukan atau pegawai tidak aktif.", 404);
-  const match = matchPoint(await activePoints(db), input.location.latitude, input.location.longitude);
-  if (match && !match.within && !input.outside) throw outsideError(match);
+  await checkAttendanceArea(db, input);
   return {
     duplicate: false
   };
@@ -959,8 +994,7 @@ async function recordSubmission(db, deviceId, input, stored, nowMs = Date.now())
   }
   const person = (await attendancePeople(db, "e.id=?", input.employee_id))[0];
   assert(person, "Nama tidak ditemukan atau pegawai tidak aktif.", 404);
-  const points = await activePoints(db), match = matchPoint(points, input.location.latitude, input.location.longitude);
-  if (match && !match.within && !input.outside) throw outsideError(match);
+  const match = await checkAttendanceArea(db, input, true);
   const recordedAt = new Date(nowMs).toISOString(), open = await openIn(db, person.id, nowMs);
   const current = {
     recorded_at: recordedAt,
@@ -996,8 +1030,8 @@ async function recordSubmission(db, deviceId, input, stored, nowMs = Date.now())
     point_name: match?.point.name || null,
     distance_m: match ? match.distance : null,
     within_point: match?.within ? 1 : 0,
-    outside_reason: match && !match.within ? input.outside.reason : null,
-    outside_note: match && !match.within ? input.outside.note : null,
+    outside_reason: match?.within ? null : "IZIN_LUAR_AREA",
+    outside_note: null,
     photo_storage_key: stored.key,
     photo_mime: "image/jpeg",
     photo_size: input.bytes.length,
@@ -1036,6 +1070,7 @@ async function attendanceFormRequest({ action, body, clientIp, runTx, photos, no
   if (action === "context") return await runTx(async (db) => await deviceContext(db, auth.deviceId, nowMs));
   if (action === "search") return await runTx(async (db) => await searchPeople(db, auth.deviceId, auth.payload.query));
   if (action === "person") return await runTx(async (db) => await personStatus(db, auth.deviceId, auth.payload.employee_id, nowMs));
+  if (action === "check-location") return await runTx(async (db) => await checkCaptureLocation(db, auth.deviceId, auth.payload));
   const input = checkSubmission(auth.payload);
   const pre = await runTx(async (db) => await prepareSubmission(db, auth.deviceId, input, nowMs));
   if (pre.duplicate) return pre.receipt;

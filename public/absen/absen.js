@@ -10,7 +10,6 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const witaTime=ms=>new Intl.DateTimeFormat('id-ID',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Makassar'}).format(new Date(ms));
 const witaDay=ms=>new Intl.DateTimeFormat('id-ID',{weekday:'long',day:'numeric',month:'long',timeZone:'Asia/Makassar'}).format(new Date(ms));
 const kindLabel={IN:'MASUK',OUT:'PULANG'};
-const reasons=[['DINAS_LUAR','Dinas luar'],['TUGAS_LAPANGAN','Tugas lapangan'],['LAINNYA','Lainnya']];
 const isIos=/iPhone|iPad|iPod/.test(navigator.userAgent);
 const standalone=()=>matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
 function say(text){live.textContent='';setTimeout(()=>{live.textContent=text;},30);}
@@ -190,7 +189,7 @@ async function start(){
  await home();
 }
 async function home(){
- stopCapture();
+ stopCapture();S.attempt=null;
  if(!S.device?.device_id){unregistered();return;}
  show('<section class="screen center"><div class="spinner"></div><p class="lead">Memuat…</p></section>',false);
  try{S.context=await signedRequest(S.device,'context',{});}
@@ -220,7 +219,7 @@ async function personHome(){
   <div class="card person"><span class="muted small">Absen sebagai</span><span class="name">${esc(p.name)}</span><span class="role">${esc([p.position,p.unit].filter(Boolean).join(' · '))}</span>
    <button class="ghost" data-action="pick">${ownerHere?'Absen untuk orang lain':'Ganti nama'}</button></div>
   <div class="status ${open||today==='OPEN'?'ok':''}">${esc(statusText)}</div>
-  ${S.context.points_ready?'':'<div class="status warn">Titik absen belum diatur pengelola. Absen tetap tercatat.</div>'}
+  ${S.context.points_ready?'':'<div class="status warn">Belum ada titik absen aktif. Hubungi Pengelola Absensi jika Anda perlu absen dari kantor.</div>'}
   <div class="big-actions">
    <button class="${suggested==='IN'?'suggested':'other'}" data-action="kind" data-kind="IN">MASUK<small>${suggested==='IN'?'Disarankan':''}</small></button>
    <button class="${suggested==='OUT'?'suggested':'other'}" data-action="kind" data-kind="OUT">PULANG<small>${suggested==='OUT'?'Disarankan':''}</small></button>
@@ -292,60 +291,86 @@ function chooseKind(kind){
  capture(kind,false);
 }
 async function capture(kind,confirmed){
+ S.attempt={client_key:uuid(),kind,confirmed,employee:S.status.employee,photo:null};
+ await locateAttempt();
+}
+const locationPayload=fix=>({latitude:fix.latitude,longitude:fix.longitude,accuracy:fix.accuracy,age_ms:Math.max(0,Date.now()-fix.at)});
+const gpsLabel=fix=>`Lokasi didapat · akurasi ±${Math.round(fix.accuracy)} m`;
+async function locateAttempt(){
  stopCapture();
- S.attempt={client_key:uuid(),kind,confirmed,employee:S.status.employee,photo:null,outside:null};
+ const attempt=S.attempt;if(!attempt)return;
+ if(!navigator.geolocation){message('Lokasi tidak tersedia','HP ini tidak mendukung lokasi untuk absen.',{tone:'bad',actions:'<button class="primary wide" data-action="home">Kembali</button>'});return;}
+ show('<section class="screen center"><h1>Memeriksa lokasi</h1><div class="spinner"></div><p class="lead" data-location>Mencari lokasi HP.</p><button class="ghost" data-action="home">Batal</button></section>');
+ const camera={stream:null,watch:null,position:null,denied:false};S.camera=camera;
+ const deadline=Date.now()+20000;
+ camera.watch=navigator.geolocation.watchPosition(position=>{
+  if(S.camera!==camera)return;
+  const at=Number.isFinite(position.timestamp)?Math.min(position.timestamp,Date.now()):Date.now();
+  if(camera.position&&at<camera.position.at)return;
+  camera.position={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy,at};
+  const label=app.querySelector('[data-location]');if(label)label.textContent=gpsLabel(camera.position);
+ },error=>{if(error.code===1)camera.denied=true;},{enableHighAccuracy:true,maximumAge:0,timeout:20000});
+ while(S.camera===camera&&!camera.denied&&(!camera.position||camera.position.accuracy>100)&&Date.now()<deadline)await new Promise(r=>setTimeout(r,200));
+ if(S.camera!==camera)return;
+ if(camera.denied||!camera.position||Date.now()-camera.position.at>120000){
+  stopCapture();
+  message('Lokasi belum didapat',camera.denied?'Izinkan akses lokasi untuk halaman absen, lalu coba lagi.':'Nyalakan Lokasi (GPS) di HP, lalu coba lagi.',{tone:'bad',actions:'<button class="primary wide" data-action="retry-location">Coba lagi</button><button class="secondary wide" data-action="home">Batal</button>'});return;
+ }
+ // Kiriman ulang memakai selfie dan kunci kiriman yang sama agar balasan yang hilang bisa dipulihkan.
+ if(attempt.photo){await submit();return;}
+ try{
+  const result=await signedRequest(S.device,'check-location',{employee_id:attempt.employee.id,location:locationPayload(camera.position)});
+  if(S.camera!==camera)return;
+  if(result.allowed!==true)throw new FormError('Lokasi belum dapat dikonfirmasi. Coba lagi.',503);
+ }catch(error){if(S.camera===camera)captureFailure(error);return;}
+ await openSelfie(camera,attempt.kind);
+}
+function captureFailure(error){
+ stopCapture();
+ if(error.status===403&&['OUTSIDE_FORBIDDEN','NO_ACTIVE_POINT'].includes(error.details?.code)){
+  S.attempt=null;
+  message('Absen ditolak',error.message,{tone:'bad',actions:'<button class="primary wide" data-action="home">Kembali</button>'});return;
+ }
+ failure(error,error.status===0||error.status===503?locateAttempt:null);
+}
+async function openSelfie(camera,kind){
  show(`<section class="screen">
   <h1>Selfie untuk absen ${kindLabel[kind]}</h1>
-  <div class="camera"><video playsinline muted autoplay></video><p class="hint" data-location>Mencari lokasi…</p></div>
+  <div class="camera"><video playsinline muted autoplay></video><p class="hint" data-location>${gpsLabel(camera.position)}</p></div>
   <button class="capture" data-action="shoot" aria-label="Ambil foto" disabled></button>
   <p class="center muted small" data-camera>Menyalakan kamera depan…</p>
   <button class="ghost" data-action="home">Batal</button>
  </section>`);
- const camera={stream:null,watch:null,position:null,started:Date.now()};S.camera=camera;
- const locationText=app.querySelector('[data-location]'),cameraText=app.querySelector('[data-camera]');
- if(!navigator.geolocation){cameraText.textContent='HP ini tidak mendukung lokasi.';}
- else camera.watch=navigator.geolocation.watchPosition(position=>{
-  const fix={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy,at:Date.now()};
-  if(!camera.position||fix.accuracy<=camera.position.accuracy||Date.now()-camera.position.at>30000)camera.position=fix;
-  if(locationText)locationText.textContent=`Lokasi didapat · akurasi ±${Math.round(camera.position.accuracy)} m`;
- },error=>{
-  if(locationText)locationText.textContent=error.code===1?'Izin lokasi ditolak. Izinkan lokasi untuk absen.':'Lokasi belum didapat. Pastikan Lokasi (GPS) menyala.';
- },{enableHighAccuracy:true,maximumAge:0,timeout:20000});
+ const cameraText=app.querySelector('[data-camera]');
  try{
   if(!navigator.mediaDevices?.getUserMedia)throw new Error('Kamera tidak tersedia di browser ini.');
   camera.stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:960},height:{ideal:1280}},audio:false});
   if(S.camera!==camera){camera.stream.getTracks().forEach(t=>t.stop());return;}
   const video=app.querySelector('video');video.srcObject=camera.stream;await video.play().catch(()=>{});
+  if(S.camera!==camera)return;
   cameraText.textContent='Lihat ke kamera, lalu tekan tombol bulat.';
   app.querySelector('[data-action=shoot]').disabled=false;
  }catch(error){
+  if(S.camera!==camera)return;
   stopCapture();
   message('Kamera belum bisa dipakai',error?.name==='NotAllowedError'?'Izin kamera ditolak. Buka pengaturan browser, izinkan Kamera untuk halaman ini, lalu coba lagi.':'Kamera depan tidak dapat dinyalakan. Tutup aplikasi lain yang memakai kamera, lalu coba lagi.',
    {tone:'bad',actions:'<button class="primary wide" data-action="home">Kembali</button>'});
  }
 }
 async function shoot(){
+ const camera=S.camera,attempt=S.attempt;
  const video=app.querySelector('video');if(!video?.videoWidth)return;
  const scale=Math.min(1,640/Math.max(video.videoWidth,video.videoHeight)),canvas=document.createElement('canvas');
  canvas.width=Math.round(video.videoWidth*scale);canvas.height=Math.round(video.videoHeight*scale);
  canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
  let blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.7));
  if(blob&&blob.size>290*1024)blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.5));
- if(!blob){failure(new FormError('Foto belum bisa diambil. Coba lagi.'),()=>capture(S.attempt.kind,S.attempt.confirmed));return;}
+ if(S.camera!==camera||S.attempt!==attempt)return;
+ if(!blob){failure(new FormError('Foto belum bisa diambil. Coba lagi.'),()=>capture(attempt.kind,attempt.confirmed));return;}
  const data=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]);r.onerror=()=>reject(r.error);r.readAsDataURL(blob);});
- S.camera.stream?.getTracks().forEach(t=>t.stop());
- S.attempt.photo={data,at:Date.now(),preview:URL.createObjectURL(blob)};
- await waitForLocation();
-}
-async function waitForLocation(){
- show(`<section class="screen center"><div class="spinner"></div><p class="lead" data-wait>Mengambil lokasi…</p></section>`,false);
- const camera=S.camera,deadline=(camera?.started||Date.now())+20000;
- while(camera&&S.camera===camera&&(!camera.position||camera.position.accuracy>100)&&Date.now()<deadline)await new Promise(r=>setTimeout(r,500));
- if(!camera||S.camera!==camera)return;
- if(!camera.position){
-  message('Lokasi belum didapat','Nyalakan Lokasi (GPS) di HP dan izinkan lokasi untuk halaman ini, lalu coba lagi.',{tone:'bad',actions:'<button class="primary wide" data-action="retry-location">Coba lagi</button><button class="secondary wide" data-action="home">Batal</button>'});
-  return;
- }
+ if(S.camera!==camera||S.attempt!==attempt)return;
+ camera.stream?.getTracks().forEach(t=>t.stop());
+ attempt.photo={data,at:Date.now()};
  await submit();
 }
 async function submit(){
@@ -353,42 +378,18 @@ async function submit(){
  if(!a?.photo)return;
  if(Date.now()-a.photo.at>4.5*60000){message('Selfie sudah lama','Ambil selfie lagi supaya absen bisa dikirim.',{tone:'warn',actions:'<button class="primary wide" data-action="retake">Ambil selfie lagi</button>'});return;}
  const fix=camera?.position;
- if(!fix){await waitForLocation();return;}
+ if(!fix||camera.denied||Date.now()-fix.at>120000){await locateAttempt();return;}
  show(`<section class="screen center"><div class="spinner"></div><p class="lead">Mengirim absen ${kindLabel[a.kind]}…</p></section>`,false);
  const payload={client_key:a.client_key,employee_id:a.employee.id,kind:a.kind,confirmed_order:a.confirmed,
-  location:{latitude:fix.latitude,longitude:fix.longitude,accuracy:fix.accuracy,age_ms:Date.now()-fix.at},
-  photo:{mime_type:'image/jpeg',data:a.photo.data,age_ms:Date.now()-a.photo.at},...(a.outside?{outside:a.outside}:{})};
+  location:locationPayload(fix),
+  photo:{mime_type:'image/jpeg',data:a.photo.data,age_ms:Date.now()-a.photo.at}};
  try{
   const receipt=await signedRequest(S.device,'submit',payload);
   stopCapture();success(receipt);
- }catch(error){
-  if(error.status===422&&error.details?.code==='OUTSIDE_POINT'){outside(error);return;}
-  stopCapture();
-  failure(error,error.status===0||error.status===503?()=>{retrySubmit();}:null);
- }
-}
-// Kiriman ulang memakai kunci kiriman yang sama, jadi tidak pernah tercatat dua kali.
-async function retrySubmit(){
- if(!S.attempt?.photo){home();return;}
- if(!navigator.geolocation){message('Lokasi tidak tersedia','HP ini tidak mendukung lokasi.',{tone:'bad',actions:'<button class="primary wide" data-action="home">Kembali</button>'});return;}
- const camera={stream:null,watch:null,position:null,started:Date.now()};S.camera=camera;
- camera.watch=navigator.geolocation.watchPosition(p=>{camera.position={latitude:p.coords.latitude,longitude:p.coords.longitude,accuracy:p.coords.accuracy,at:Date.now()};},()=>{},{enableHighAccuracy:true,maximumAge:0,timeout:20000});
- await waitForLocation();
-}
-function outside(error){
- const d=error.details||{};
- show(`<section class="screen">
-  <h1>Di luar titik absen</h1>
-  <div class="status warn">Anda ${esc(d.distance_m)} m dari ${esc(d.point_name||'titik absen')}, di luar titik absen.</div>
-  <p class="lead">Pilih alasan, lalu kirim. Absen tetap tercatat dan akan dicek atasan.</p>
-  <div class="screen">${reasons.map(([code,label])=>`<button class="secondary wide" data-action="reason" data-reason="${code}">${label}</button>`).join('')}</div>
-  <label class="field" data-note hidden>Tuliskan alasannya<textarea name="note" rows="3" maxlength="300"></textarea></label>
-  <button class="primary wide" data-action="send-outside" hidden>Kirim absen</button>
-  <button class="ghost" data-action="home">Batal</button>
- </section>`);
+ }catch(error){captureFailure(error);}
 }
 function success(receipt){
- const a=S.attempt;if(a?.photo?.preview)URL.revokeObjectURL(a.photo.preview);S.attempt=null;
+ S.attempt=null;
  const where=receipt.point_name?(receipt.within_point?`${receipt.point_name} (${receipt.distance_m} m)`:`Di luar titik · ${receipt.distance_m} m dari ${receipt.point_name}`):'';
  navigator.vibrate?.([120,60,120]);
  say(`${kindLabel[receipt.kind]} tercatat pukul ${witaTime(Date.parse(receipt.recorded_at))}`);
@@ -432,19 +433,7 @@ app.addEventListener('click',async event=>{
   if(action==='kind-confirmed'){await capture(el.dataset.kind,true);return;}
   if(action==='shoot'){el.disabled=true;await shoot();return;}
   if(action==='retake'){await capture(S.attempt.kind,S.attempt.confirmed);return;}
-  if(action==='retry-location'){await retrySubmit();return;}
-  if(action==='reason'){
-   app.querySelectorAll('[data-action=reason]').forEach(b=>{b.className=b===el?'primary wide':'secondary wide';});
-   S.attempt.outside={reason:el.dataset.reason,note:''};
-   app.querySelector('[data-note]').hidden=el.dataset.reason!=='LAINNYA';
-   app.querySelector('[data-action=send-outside]').hidden=false;return;
-  }
-  if(action==='send-outside'){
-   const note=app.querySelector('[data-note] textarea').value.trim();
-   if(S.attempt.outside.reason==='LAINNYA'&&note.length<3){app.querySelector('[data-note] textarea').focus();return;}
-   S.attempt.outside.note=note;el.disabled=true;
-   if(!S.camera)await retrySubmit();else await submit();return;
-  }
+  if(action==='retry-location'){await locateAttempt();return;}
   if(action==='done'){done();return;}
  }catch(error){failure(error,null);}
 });

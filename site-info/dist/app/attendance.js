@@ -9,11 +9,11 @@ import {employeePickerField,setupEmployeePicker} from './employee-picker.js';
 // sesuai cakupan role. Selfie dibuka satu per satu lewat antrean API.
 export const attendanceTitle='Absensi';
 const A={owner:null,overview:null,tab:null,unit:'',query:'',from:null,to:null,today:null,recap:null,reviewFrom:null,reviewTo:null,reviewStatus:'open',review:null,
- devices:null,points:null,mine:null,sessionTokens:new Map(),poll:null,map:null};
+ devices:null,points:null,mine:null,schedule:null,scheduleDate:null,shiftPositions:[],referencePosition:'',sessionTokens:new Map(),poll:null,map:null};
 const statusLabel={HADIR:'Hadir',BELUM_PULANG:'Masuk, belum pulang',TANPA_PULANG:'Tanpa absen pulang',TANPA_MASUK:'Tanpa absen masuk',CUTI:'Cuti',IZIN:'Izin',SAKIT:'Sakit',DINAS_LUAR:'Dinas luar',TIDAK_ADA_CATATAN:'Tidak ada catatan'};
 const statusTone={HADIR:'positive',BELUM_PULANG:'warm',TANPA_PULANG:'negative',TANPA_MASUK:'negative',CUTI:'neutral',IZIN:'neutral',SAKIT:'neutral',DINAS_LUAR:'neutral',TIDAK_ADA_CATATAN:'neutral'};
 const flagLabel={DI_LUAR_TITIK:'Di luar titik',GPS_KURANG_AKURAT:'GPS kurang akurat',LOKASI_MELOMPAT:'Lokasi melompat',HP_PRIBADI_RAMAI:'Banyak orang di 1 HP pribadi',TANPA_FOTO_ACUAN:'Belum ada foto acuan',TANPA_MASUK:'Tanpa absen masuk',TANPA_PULANG:'Tanpa absen pulang',SAAT_CUTI:'Absen saat cuti',TITIK_BELUM_ADA:'Titik belum diatur'};
-const reasonLabel={DINAS_LUAR:'Dinas luar',TUGAS_LAPANGAN:'Tugas lapangan',LAINNYA:'Lainnya'};
+const reasonLabel={DINAS_LUAR:'Dinas luar',TUGAS_LAPANGAN:'Tugas lapangan',LAINNYA:'Lainnya',IZIN_LUAR_AREA:'Izin absen di luar area kantor'};
 const noteLabel={IZIN:'Izin',SAKIT:'Sakit',DINAS_LUAR:'Dinas luar'};
 const deviceStatus={PENDING:'Menunggu',ACTIVE:'Aktif',REVOKED:'Nonaktif',REJECTED:'Ditolak'};
 const kindLabel={IN:'Masuk',OUT:'Pulang'};
@@ -42,6 +42,8 @@ function tabs(){
  if(o.devices)list.push(['devices','HP Absen']);
  if(o.settings||o.devices)list.push(['points','Titik Absen']);
  if(o.self)list.push(['mine','Absen saya']);
+ if(o.schedule)list.push(['schedule','Jadwal Kerja']);
+ if(o.shift_references)list.push(['shift-options','Acuan Shift']);
  return list;
 }
 function stopPolling(){if(A.poll){clearInterval(A.poll);A.poll=null;}}
@@ -50,13 +52,14 @@ function dispose(map){if(!map)return;try{map.stop();map.remove();}catch{}}
 
 /* ---------- Muat halaman ---------- */
 export async function loadAttendancePage(){
- if(A.owner!==state.me){Object.assign(A,{owner:state.me,tab:null,unit:'',query:'',from:null,to:null,reviewFrom:null,reviewTo:null,sessionTokens:new Map()});}
+ if(A.owner!==state.me){Object.assign(A,{owner:state.me,tab:null,unit:'',query:'',from:null,to:null,reviewFrom:null,reviewTo:null,schedule:null,scheduleDate:null,shiftPositions:[],referencePosition:'',sessionTokens:new Map()});}
  stopPolling();dispose(A.map);A.map=null;
  A.overview=await api('attendance/overview');
  const list=tabs(),requested=new URLSearchParams(location.hash.split('?')[1]||'').get('tab');
  if(requested&&list.some(([key])=>key===requested))A.tab=requested;
  if(!list.some(([key])=>key===A.tab))A.tab=list[0]?.[0]||null;
  A.from=A.from||monthStart();A.to=A.to||localToday();
+ A.scheduleDate=A.scheduleDate||A.overview.today;
  A.reviewFrom=A.reviewFrom||shift(localToday(),-13);A.reviewTo=A.reviewTo||localToday();
  return render(await loadTab());
 }
@@ -64,6 +67,8 @@ async function loadTab(){
  const unit=A.unit?`&unit=${encodeURIComponent(A.unit)}`:'';
  if(A.tab==='today')A.today=await api(`attendance/today${A.unit?`?unit=${encodeURIComponent(A.unit)}`:''}`);
  if(A.tab==='recap')A.recap=await api(`attendance/recap?from=${A.from}&to=${A.to}${unit}`);
+ if(A.tab==='schedule')A.schedule=await api(`attendance/schedule?date=${encodeURIComponent(A.scheduleDate)}`);
+ if(A.tab==='shift-options')A.shiftPositions=(await api('attendance/shift-options')).positions;
  if(A.tab==='review')A.review=await api(`attendance/review?from=${A.reviewFrom}&to=${A.reviewTo}&status=${A.reviewStatus}`);
  if(A.tab==='devices')A.devices=await api('attendance/devices');
  if(A.tab==='points')A.points=await api('attendance/points');
@@ -73,8 +78,8 @@ async function loadTab(){
 function render(){
  const list=tabs();
  if(!list.length)return `${head('Absensi','Absen harian pegawai dengan selfie dan lokasi.')}<div class="notice">${icon('people')}<div><strong>Belum ada data absensi untuk akun ini</strong><p>Akun ini belum terhubung dengan profil pegawai dan tidak memegang izin Absensi. Hubungi SDM bila perlu.</p></div></div>`;
- const body={today:todayTab,recap:recapTab,review:reviewTab,devices:devicesTab,points:pointsTab,mine:mineTab}[A.tab]();
- return `${head('Absensi','Absen harian lewat HP terdaftar: GPS + selfie. Status terlambat menyusul setelah jam kerja dan shift diimpor.',headerActions())}
+ const body={today:todayTab,recap:recapTab,schedule:scheduleTab,'shift-options':shiftOptionsTab,review:reviewTab,devices:devicesTab,points:pointsTab,mine:mineTab}[A.tab]();
+ return `${head('Absensi','Absen harian lewat HP terdaftar dengan GPS dan selfie.',headerActions())}
  <div class="leave-tabs" role="tablist" aria-label="Bagian absensi">${list.map(([key,label])=>`<button role="tab" aria-selected="${A.tab===key}" class="chip ${A.tab===key?'active':''}" data-att="tab" data-tab="${key}">${esc(label)}</button>`).join('')}</div>
  <div id="attendance-content">${body}</div>
  <footer class="page-footer"><span>SPH Portal · Absensi</span><span>Waktu operasional WITA</span></footer>`;
@@ -100,12 +105,42 @@ function todayTab(){
  ${card(`Absen ${day(A.today.date)}`,'Status dihitung dari absen hari ini, koreksi, keterangan, dan cuti yang disetujui.',table(['Pegawai','Status','Masuk','Pulang','Titik terakhir','Tanda',''],rows.map(r=>`<tr><td>${person(r.employee)}</td><td>${pill(statusLabel[r.status],statusTone[r.status])}${r.note?`<br><span class="muted text-small">${esc(noteLabel[r.note.kind])}</span>`:''}</td><td>${time(r.in_at)}</td><td>${time(r.out_at)}</td><td>${where(r.last_event)}${r.last_event?`<br><span class="muted text-small">lewat ${esc(r.last_event.device.label)}${r.last_event.device.borrowed?' (menumpang)':''}</span>`:''}</td><td>${flags(r.flags)}</td><td><button type="button" class="button text" data-att="detail" data-id="${esc(r.employee.id)}">Rincian</button></td></tr>`),'Tidak ada pegawai pada saringan ini.'))}`;
 }
 
+/* ---------- Jadwal kerja ---------- */
+function scheduleTab(){
+ const labels={WORK:'Hari kerja',NATIONAL_HOLIDAY:'Libur nasional',WEEKLY_OFF:'Libur mingguan',CALENDAR_PENDING:'Kalender libur belum tersedia'};
+ const rows=A.schedule.rows.map(row=>{
+  const shift=row.shift;
+  const name=shift?`<strong>${esc(shift.name)}</strong><br><span class="muted text-small">${esc(shift.code)}</span>`:'—';
+  const exit=shift?esc(shift.end_time)+(shift.end_day_offset?' <span class="muted text-small">esok hari</span>':''):'—';
+  const status=pill(labels[row.day_type],row.day_type==='WORK'?'positive':'neutral');
+  return `<tr><td>${person(row.employee)}</td><td>${status}${row.holiday_name?`<br><span class="muted text-small">${esc(row.holiday_name)}</span>`:''}</td><td>${name}</td><td>${esc(shift?.start_time||'—')}</td><td>${exit}</td><td>${esc(shift?.late_time||'—')}</td></tr>`;
+ });
+ return `<form class="toolbar" data-att-schedule-form>
+  <label class="field"><span>Tanggal jadwal</span><input type="date" data-att-field="scheduleDate" value="${esc(A.scheduleDate)}" required></label>
+  <button class="button outlined" type="submit">${icon('filter')}<span>Terapkan</span></button>
+ </form>
+ ${card(`Jadwal ${day(A.schedule.date)}`,`${number(rows.length)} pegawai · WITA`,
+  table(['Pegawai','Status','Shift','Masuk','Pulang','Mulai terlambat'],rows,'Belum ada jadwal untuk tanggal ini.'))}`;
+}
+
+/* ---------- Acuan shift per posisi ---------- */
+function shiftOptionsTab(){
+ const positions=A.shiftPositions;
+ if(!positions.length)return card('Acuan shift per posisi','','<p class="muted">Belum ada acuan shift untuk posisi dalam cakupan akun ini.</p>');
+ const selected=positions.find(position=>position.code===A.referencePosition)||positions[0];
+ const selector=positions.length>1?`<div class="toolbar"><label class="field"><span id="attendance-position-label">Posisi</span><select aria-labelledby="attendance-position-label" data-att-field="referencePosition">${positions.map(position=>
+  `<option value="${esc(position.code)}" ${position.code===selected.code?'selected':''}>${esc(position.name)}</option>`).join('')}</select></label></div>`:'';
+ const rows=selected.shifts.map(shift=>`<tr><td>${esc(shift.code)}</td><td>${esc(shift.name)}</td><td>${esc(shift.start_time)}</td><td>${esc(shift.end_time)}${shift.end_day_offset?' (esok hari)':''}</td><td>${esc(shift.late_time)}</td></tr>`);
+ return selector+card(selected.name,'Pilihan shift dalam WITA. Penugasan pegawai per tanggal mengikuti jadwal harian.',
+  table(['Kode','Shift','Masuk','Pulang','Mulai terlambat'],rows));
+}
+
 /* ---------- Rekap ---------- */
 function rangeBar(extra=''){return `<div class="toolbar"><label class="field"><span>Dari tanggal</span><input type="date" data-att-field="from" value="${esc(A.from)}" max="${localToday()}"></label><label class="field"><span>Sampai tanggal</span><input type="date" data-att-field="to" value="${esc(A.to)}" max="${localToday()}"></label>${extra}${btn('Terapkan','apply','filter','outlined')}</div>`;}
 function recapTab(){
  const rows=A.recap.employees.map(r=>{const s=r.summary;return `<tr><td><button type="button" class="link-button" data-att="detail" data-id="${esc(r.employee.id)}">${person(r.employee)}</button></td><td>${number(s.hadir)}</td><td>${number(s.tanpa_pulang)}</td><td>${number(s.tanpa_masuk)}</td><td>${number(s.cuti)}</td><td>${number(s.izin)}</td><td>${number(s.sakit)}</td><td>${number(s.dinas_luar)}</td><td>${number(s.tanpa_catatan)}</td><td>${number(s.ditandai)}</td><td>${hours(s.menit)}</td></tr>`;});
  return `${rangeBar(`<label class="field"><span>Unit</span><select data-att-field="unit">${unitOptions(A.unit)}</select></label>`)}
- <div class="notice">${icon('help')}<div><strong>Belum ada jadwal kerja</strong><p>"Tidak ada catatan" belum berarti alpa: sistem belum tahu hari kerja tiap pegawai. Status terlambat dan tidak hadir menyusul setelah jam kerja unit dan shift diimpor.</p></div></div>
+ <div class="notice">${icon('help')}<div><strong>Dasar rekap</strong><p>Rekap memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Hari tanpa catatan tampil sebagai “Tidak ada catatan”.</p></div></div>
  ${card(`Rekap ${formatDate(A.recap.from)} – ${formatDate(A.recap.to)}`,'Klik nama untuk melihat rincian harian, selfie, keterangan, dan koreksi.',table(['Pegawai','Hadir','Tanpa pulang','Tanpa masuk','Cuti','Izin','Sakit','Dinas luar','Tidak ada catatan','Ditandai','Jam kerja'],rows,'Belum ada pegawai dalam cakupan ini.'))}`;
 }
 async function exportRecap(){
@@ -299,10 +334,32 @@ function sessionOpen(){
 function pointsTab(){
  const p=A.points;
  const rows=p.points.map(x=>`<tr><td><strong>${esc(x.name)}</strong></td><td>${x.latitude.toFixed(6)}, ${x.longitude.toFixed(6)}</td><td>${number(x.radius_m)} m</td><td>${pill(x.is_active?'Aktif':'Nonaktif',x.is_active?'positive':'negative')}</td><td><a class="button text" href="https://www.google.com/maps?q=${x.latitude},${x.longitude}" target="_blank" rel="noopener">Lihat di Google Maps</a>${p.can_manage?`<button type="button" class="button text" data-att="point-edit" data-id="${esc(x.id)}">Ubah</button>`:''}</td></tr>`);
- return `${p.points.some(x=>x.is_active)?'':`<div class="notice warning">${icon('location')}<div><strong>Belum ada titik absen aktif</strong><p>Absen tetap tercatat dan ditandai "Titik belum diatur" sampai titik ditambahkan.</p></div></div>`}
+ return `${p.points.some(x=>x.is_active)?'':`<div class="notice warning">${icon('location')}<div><strong>Belum ada titik absen aktif</strong><p>Aktifkan titik agar pegawai dapat absen dari area kantor.</p></div></div>`}
  ${card('Peta titik absen','Lingkaran menunjukkan radius toleransi tiap titik.',`<div id="attendance-map" class="attendance-map" aria-label="Peta titik absen"></div>`)}
- ${card('Daftar titik','Absen di luar semua radius tetap tercatat, wajib diberi alasan, dan masuk Perlu dicek.',table(['Nama','Koordinat','Radius','Status',''],rows,'Belum ada titik absen.'))}
+ ${card('Daftar titik','Radius setiap titik aktif berlaku untuk absen masuk dan pulang.',table(['Nama','Koordinat','Radius','Status',''],rows,'Belum ada titik absen.'))}
+ ${p.outside_access?outsideAccessCard(p.outside_access):''}
  ${retentionCard()}`;
+}
+function outsideAccessCard(access){
+ const rows=access.people.filter(p=>p.allowed).map(p=>`<tr><td>${person(p)}</td><td>${esc(p.employee_no)}</td><td>${btn('Cabut akses','outside-revoke','close','text',`data-id="${esc(p.id)}"`)}</td></tr>`);
+ const add=access.people.some(p=>p.active&&!p.allowed)?btn('Beri akses','outside-grant'):'';
+ return card('Absen di luar area kantor','Pegawai dalam daftar ini boleh absen masuk dan pulang di luar radius dengan selfie dan lokasi GPS.',table(['Pegawai','Nomor pegawai',''],rows,'Belum ada pegawai yang diberi akses.'),add);
+}
+async function changeOutsideAccess(id,allowed,version){
+ try{await patch(`attendance/outside-access/${encodeURIComponent(id)}`,{allowed,version});}
+ catch(error){
+  if(error.status!==409)throw error;
+  await rerender();toast('Daftar akses sudah berubah. Periksa daftar terbaru sebelum mencoba lagi.',true);return;
+ }
+ await rerender();
+ toast(allowed?'Akses luar area diberikan.':'Akses luar area dicabut.');
+}
+function grantOutsideAccess(){
+ const {people,version}=A.points.outside_access;
+ const eligible=people.filter(p=>p.active&&!p.allowed);
+ const el=formDialog('Beri akses absen di luar area kantor',employeePickerField({label:'Pegawai',required:true,placeholder:'Ketik nama atau nomor pegawai.'}),
+  async b=>{await changeOutsideAccess(b.employee_id,true,version);},{submit:'Beri akses'});
+ setupEmployeePicker(el,eligible.map(p=>({id:p.id,full_name:p.name,employee_no:p.employee_no,position_name:[p.position,p.unit].filter(Boolean).join(' · ')})),{required:true});
 }
 // Status penghapusan selfie lama (hanya untuk pemegang pengaturan absensi).
 function retentionCard(){
@@ -406,10 +463,26 @@ function mineTab(){
 export function bindAttendancePage(){
  const root=document.querySelector('#main');if(!root||root.dataset.attendanceBound)return;root.dataset.attendanceBound='1';
  afterRender();
- root.addEventListener('change',event=>{const key=event.target.dataset?.attField;if(key)A[key]=event.target.value;});
+ root.addEventListener('change',event=>{
+  const key=event.target.dataset?.attField;if(!key)return;
+  A[key]=event.target.value;
+  if(key==='referencePosition'&&A.tab==='shift-options'){
+   const box=root.querySelector('#attendance-content');
+   box.innerHTML=shiftOptionsTab();
+   box.querySelector('[data-att-field=referencePosition]').focus();
+  }
+ });
  root.addEventListener('input',event=>{
   const key=event.target.dataset?.attField;if(!key)return;A[key]=event.target.value;
   if(key==='query'&&A.tab==='today'){const box=document.querySelector('#attendance-content');const focus=event.target.selectionStart;box.innerHTML=todayTab();const input=box.querySelector('[data-att-field=query]');input.focus();input.setSelectionRange(focus,focus);}
+ });
+ root.addEventListener('submit',async event=>{
+  if(!event.target.matches('[data-att-schedule-form]')||state.route!=='attendance'||A.tab!=='schedule')return;
+  event.preventDefault();
+  const submit=event.submitter;
+  if(submit)submit.disabled=true;
+  try{await rerender();}catch(error){toast(error.message,true);}
+  finally{if(submit)submit.disabled=false;}
  });
  root.addEventListener('click',async event=>{
   const el=event.target.closest('[data-att]');if(!el||state.route!=='attendance'||el.closest('dialog'))return;
@@ -436,6 +509,12 @@ export function bindAttendancePage(){
    }
    if(action==='point-new'){await pointForm(null);return;}
    if(action==='point-edit'){await pointForm(A.points.points.find(p=>p.id===el.dataset.id));return;}
+   if(action==='outside-grant'){grantOutsideAccess();return;}
+   if(action==='outside-revoke'){
+    const {people,version}=A.points.outside_access,p=people.find(p=>p.id===el.dataset.id&&p.allowed);
+    if(p&&confirm(`Cabut akses absen di luar area kantor untuk ${p.name}?`))await changeOutsideAccess(p.id,false,version);
+    return;
+   }
   }catch(error){toast(error.message,true);}
   finally{el.disabled=false;}
  });

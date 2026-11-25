@@ -25,13 +25,18 @@ const check=async(name,work)=>{await work();console.log('PASS '+name);checks++;}
 const cronShim=`CREATE SCHEMA IF NOT EXISTS cron;CREATE TABLE IF NOT EXISTS cron.job(jobid bigserial PRIMARY KEY,jobname text UNIQUE,schedule text NOT NULL,command text NOT NULL);
 CREATE OR REPLACE FUNCTION cron.schedule(job_name text,schedule text,command text) RETURNS bigint LANGUAGE sql AS $shim$ INSERT INTO cron.job(jobname,schedule,command) VALUES(job_name,schedule,command) ON CONFLICT(jobname) DO UPDATE SET schedule=EXCLUDED.schedule,command=EXCLUDED.command RETURNING jobid $shim$;`;
 const pgliteSql=sql=>sql.replace(/^\s*CREATE EXTENSION IF NOT EXISTS pg_cron\b[^;]*;\s*$/im,cronShim).replace(/^\s*COMMENT ON EXTENSION pg_cron\b[^;]*;\s*$/im,'');
-const tables=['attendance_points','attendance_registration_sessions','attendance_devices','attendance_events','attendance_corrections','attendance_day_notes','attendance_reviews','attendance_reference_photos','attendance_rate_limits','attendance_state'];
+const tables=['attendance_points','attendance_registration_sessions','attendance_devices','attendance_events','attendance_corrections','attendance_day_notes','attendance_reviews','attendance_reference_photos','attendance_rate_limits','attendance_state','attendance_schedule_shifts','attendance_schedule_units','attendance_schedule_weekdays','attendance_schedule_holidays'];
 const DAY=86400000,globalLock='734829610160009',POINT={latitude:-8.3741,longitude:115.4512};
 const jpeg=Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.alloc(2048,9)]);
 try{
   await pg.exec(`CREATE ROLE anon NOLOGIN;CREATE ROLE authenticated NOLOGIN;CREATE ROLE service_role NOLOGIN BYPASSRLS;CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,email_confirmed_at timestamptz,encrypted_password text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid REFERENCES auth.users(id));CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;GRANT USAGE ON SCHEMA auth TO authenticated;`);
   const directory=new URL('../supabase/migrations/',import.meta.url);
-  for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')).sort())await pg.exec(pgliteSql(readFileSync(new URL(name,directory),'utf8')));
+  for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')).sort()){
+    if(name.endsWith('_attendance_fixed_schedules.sql')){
+      await pg.exec("INSERT INTO portal.org_units (id,code,name,is_active,created_at,updated_at,row_version) VALUES ('abs-fixture-sekretariat','BPB_S','Sekretariat',1,now()::text,now()::text,1)");
+    }
+    await pg.exec(pgliteSql(readFileSync(new URL(name,directory),'utf8')));
+  }
   await pg.exec('SET search_path=portal,pg_catalog');
   // Pencatat transaksi: Drive tidak boleh dipanggil saat transaksi basis data terbuka.
   let inTx=false;const statements=[];
@@ -138,7 +143,7 @@ try{
     assert.equal(driveCalls.filter(c=>c.startsWith('POST /upload')).length,1);assert.equal(background.length,1);background.splice(0);
     driveCalls.length=0;
     const far=await invoke('submit',await sign(device,'submit',submission(people.boss,'IN',{location:{latitude:-8.3700,longitude:115.4512,accuracy:10,age_ms:1000}})));
-    assert.equal(far.status,422);assert.deepEqual(Object.keys(far.data.details).sort(),['code','distance_m','point_name']);assert.equal(far.data.details.code,'OUTSIDE_POINT');
+    assert.equal(far.status,403);assert.deepEqual(Object.keys(far.data.details).sort(),['code','distance_m','point_name']);assert.equal(far.data.details.code,'OUTSIDE_FORBIDDEN');
     assert.equal(driveCalls.length,0,'absen yang pasti ditolak tidak mengunggah selfie');
   });
   await check('a failure after upload deletes the Drive file again',async()=>{
@@ -181,6 +186,141 @@ try{
     const today=await portal(boss,'attendance/today');assert.deepEqual(today.rows.map(r=>[r.employee.name,r.status]),[['Atasan Fiktif','TIDAK_ADA_CATATAN'],['Pekerja Harian Fiktif','BELUM_PULANG'],['Petugas Fiktif','BELUM_PULANG']]);
     const mine=await portal(guardUser,'attendance/recap');assert.deepEqual(mine.employees.map(r=>r.employee.name),['Petugas Fiktif']);
     await assert.rejects(portal(guardUser,`attendance/recap/${people.thl.id}`),e=>e instanceof api.AppError&&e.status===403);
+  });
+  await check('Sekretariat schedule uses the confirmed master shifts, weekly days, and national holidays',async()=>{
+    const unit=await one(db,"SELECT id FROM org_units WHERE code='BPB_S'");
+    const plan=await one(db,'SELECT CAST(starts_on AS TEXT) AS starts_on FROM attendance_schedule_units WHERE org_unit_id=?',unit.id);
+    assert.equal(plan.starts_on,witaDate(Date.now()));
+    assert.equal((await one(db,'SELECT count(*)::int AS n FROM attendance_schedule_shifts')).n,41);
+    assert.deepEqual((await all(db,'SELECT code,end_day_offset FROM attendance_schedule_shifts WHERE end_day_offset=1 ORDER BY code')).map(row=>row.code),['30003','73000']);
+    const holidays=await all(db,'SELECT EXTRACT(YEAR FROM work_date)::int AS year, count(*)::int AS n FROM attendance_schedule_holidays GROUP BY 1 ORDER BY 1');
+    assert.deepEqual(holidays.map(row=>[row.year,row.n]),[[2026,17],[2027,18]]);
+
+    const position=await insert(db,'positions',{org_unit_id:unit.id,code:'ABS-PILOT',name:'Sekretariat Uji'});
+    const employees=[];
+    for(let index=1;index<=42;index++){
+      const employee=await insert(db,'employees',{employee_no:'ABS-PILOT-'+index,full_name:'Staf Sekretariat Uji '+String(index).padStart(2,'0'),employment_status:'Tetap',is_active:1,joined_on:'2020-01-01'});
+      await insert(db,'employee_placements',{employee_id:employee.id,position_id:position.id,supervisor_employee_id:people.boss.id,valid_from:'2020-01-01',is_primary:1});
+      employees.push(employee);
+    }
+    const self=await account('sekretariat-absen',employees[0].id);
+    await run(db,"UPDATE attendance_schedule_units SET starts_on='2026-11-24' WHERE org_unit_id=?",unit.id);
+    const schedule=(actor,day)=>portal(actor,'attendance/schedule','GET',{},'date='+day);
+    const friday=await schedule(manager,'2026-11-27');
+    assert.equal(friday.rows.length,42);
+    assert(friday.rows.every(row=>row.employee.unit_id===unit.id&&row.day_type==='WORK'));
+    assert.deepEqual(friday.rows[0].shift,{code:'10000',name:'Sekretariat Senin-Jumat',start_time:'08:00',end_time:'16:00',late_time:'08:16',end_day_offset:0});
+    const saturday=await schedule(manager,'2026-11-28');
+    assert.equal(saturday.rows.length,42);
+    assert(saturday.rows.every(row=>row.shift?.code==='10001'&&row.shift?.end_time==='13:00'&&row.shift?.late_time==='08:16'));
+    assert((await schedule(manager,'2026-11-29')).rows.every(row=>row.day_type==='WEEKLY_OFF'&&row.shift===null));
+    for(const day of ['2026-12-25','2027-02-06']){
+      const {rows}=await schedule(manager,day);
+      assert.equal(rows.length,42);
+      assert(rows.every(row=>row.day_type==='NATIONAL_HOLIDAY'&&row.holiday_name&&row.shift===null));
+    }
+    assert((await schedule(manager,'2026-12-24')).rows.every(row=>row.day_type==='WORK'),'cuti bersama memerlukan aturan sendiri');
+    assert((await schedule(manager,'2028-01-03')).rows.every(row=>row.day_type==='CALENDAR_PENDING'&&row.shift===null));
+    assert.deepEqual((await schedule(manager,'2026-11-23')).rows,[]);
+    assert.deepEqual((await schedule(guardUser,'2026-11-27')).rows,[]);
+    assert.deepEqual((await schedule(self,'2026-11-27')).rows.map(row=>row.employee.id),[employees[0].id]);
+    assert.equal((await schedule(boss,'2026-11-27')).rows.length,42);
+    assert.equal((await portal(self,'attendance/overview')).schedule,witaDate(Date.now())>='2026-11-24');
+    assert.equal((await portal(guardUser,'attendance/overview')).schedule,false);
+    await assert.rejects(schedule(self,'2026-02-30'),error=>error.status===422);
+
+    const last=employees.at(-1);
+    await run(db,"UPDATE employee_placements SET valid_to='2026-11-27' WHERE employee_id=?",last.id);
+    const differentPosition=await one(db,'SELECT id FROM positions WHERE org_unit_id=? LIMIT 1',field.id);
+    await insert(db,'employee_placements',{employee_id:last.id,position_id:differentPosition.id,supervisor_employee_id:people.boss.id,valid_from:'2026-11-28',is_primary:1});
+    assert.equal((await schedule(manager,'2026-11-27')).rows.length,42);
+    assert.equal((await schedule(manager,'2026-11-28')).rows.length,41);
+  });
+  await check('position shift references work without personal rosters and respect attendance scope',async()=>{
+    const unit=await insert(db,'org_units',{code:'ABS-LING',name:'Lingkungan Uji'});
+    const positionGroups=[
+      [['BPB_PLK_P052','BPB_PLK_P080_STAF','BPB_PLK_P080_THL'],['60001','60002']],
+      [['BPB_PLK_PAR_KOORD'],['61001','61002']],
+      [['BPB_PLK_P054','BPB_PLK_P082_STAF','BPB_PLK_P082_THL'],['62001','62002']],
+      [['BPB_PLK_P053','BPB_PLK_P081_STAF','BPB_PLK_P081_THL'],['63001','63002','63003','63004','63005','63006']],
+    ];
+    const positions=new Map();
+    for(const code of [...positionGroups.flatMap(([codes])=>codes),'BPB_PLK_P023']){
+      positions.set(code,await insert(db,'positions',{org_unit_id:unit.id,code,name:'Posisi uji '+code}));
+    }
+    const options=async actor=>(await portal(actor,'attendance/shift-options')).positions;
+    const scoped=await account('pengelola-lingkungan',null,'ABSENSI_PENGELOLA','ASSIGNED_UNITS',[unit.id]);
+    const outside=await account('pengelola-unit-lain',null,'ABSENSI_PENGELOLA','ASSIGNED_UNITS',[field.id]);
+    const vacant=await options(scoped);
+    assert.equal(vacant.length,10);
+    for(const [codes,shifts] of positionGroups)for(const code of codes){
+      assert.deepEqual(vacant.find(position=>position.code===code)?.shifts.map(shift=>shift.code),shifts);
+    }
+    assert.deepEqual(await options(manager),vacant);
+    assert.deepEqual(await options(outside),[]);
+    assert.deepEqual(await options(guardUser),[]);
+    assert.equal((await portal(guardUser,'attendance/overview')).shift_references,false);
+
+    const crew=await insert(db,'employees',{employee_no:'ABS-KEB',full_name:'Petugas Gedung Uji',employment_status:'THL',is_active:1,joined_on:'2020-01-01'});
+    const building='BPB_PLK_P081_THL';
+    for(const [code,primary] of [[building,1],['BPB_PLK_P082_THL',0]]){
+      await insert(db,'employee_placements',{employee_id:crew.id,position_id:positions.get(code).id,supervisor_employee_id:people.boss.id,valid_from:'2020-01-01',is_primary:primary});
+    }
+    const self=await account('petugas-gedung',crew.id);
+    const mine=await options(self);
+    assert.deepEqual(mine.map(position=>position.code),[building]);
+    assert.deepEqual(await options(boss),mine);
+    assert.deepEqual(mine[0].shifts.map(s=>[s.code,s.start_time,s.end_time,s.late_time]),[
+      ['63001','06:00','14:00','06:16'],['63002','06:00','11:00','06:16'],
+      ['63003','10:00','18:00','10:16'],['63004','10:00','15:00','10:16'],
+      ['63005','08:00','16:00','08:16'],['63006','08:00','13:00','08:15'],
+    ]);
+    const overview=await portal(self,'attendance/overview');
+    assert.equal(overview.shift_references,true);
+    assert.equal(overview.schedule,false);
+    for(const day of ['2026-11-27','2026-11-29','2026-12-25']){
+      assert.deepEqual((await portal(self,'attendance/schedule','GET',{},'date='+day)).rows,[]);
+    }
+    const daily=await portal(self,'attendance/today');
+    assert.deepEqual(daily.rows.map(row=>row.status),['TIDAK_ADA_CATATAN']);
+    await run(db,'UPDATE positions SET is_active=0 WHERE id=?',positions.get(building).id);
+    assert.deepEqual(await options(self),[]);
+  });
+  await check('operations, regional security and Bankamda have distinct reference shifts without a daily assignment',async()=>{
+    const ops=await insert(db,'org_units',{code:'ABS-OPS',name:'Operasional Uji'});
+    const security=await insert(db,'org_units',{code:'ABS-SEC',name:'Keamanan Uji'});
+    const groups=[
+      [ops,['BPB_OP_P044','BPB_OP_P069'],['20001','20002','20003','20004']],
+      [ops,['BPB_OP_P045','BPB_OP_P070'],['21001','21002','21003']],
+      [ops,['BPB_OP_P041','BPB_OP_P042','BPB_OP_P043','BPB_OP_P066','BPB_OP_P067','BPB_OP_P068'],['22001','22002','22003','22004']],
+      [security,['BPB_PLK_P048','BPB_PLK_P049','BPB_PLK_P074','BPB_PLK_P075','BPB_PLK_P076','BPB_PLK_P077'],
+       ['30001','30002','30003','70000','70001','70002','70003','71000','71002','71003','72001','73000']],
+      [security,['BPB_PLK_P051','BPB_PLK_P079'],['40001','40002']],
+    ];
+    for(const [unit,codes] of groups)for(const code of codes){
+      await insert(db,'positions',{org_unit_id:unit.id,code,name:'Posisi uji '+code});
+    }
+    for(const [unit,codes] of [[ops,['BPB_OP_P018','BPB_OP_P071']],[security,['BPB_PLK_P078','BPB_PLK_P083_STAF']]]){
+      for(const code of codes)await insert(db,'positions',{org_unit_id:unit.id,code,name:'Posisi tanpa acuan '+code});
+    }
+    for(const unit of [ops,security]){
+      const actor=await account('pengelola-'+unit.code.toLowerCase(),null,'ABSENSI_PENGELOLA','ASSIGNED_UNITS',[unit.id]);
+      const {positions}=await portal(actor,'attendance/shift-options');
+      const expected=new Map(groups.filter(([groupUnit])=>groupUnit.id===unit.id)
+        .flatMap(([,codes,shifts])=>codes.map(code=>[code,shifts])));
+      assert.equal(positions.length,expected.size);
+      for(const position of positions)assert.deepEqual(position.shifts.map(shift=>shift.code),expected.get(position.code),position.code);
+    }
+    const position=await one(db,"SELECT id FROM positions WHERE code='BPB_PLK_P075'");
+    const employee=await insert(db,'employees',{employee_no:'ABS-JAGA',full_name:'Petugas Wilayah Uji',employment_status:'Tetap',is_active:1,joined_on:'2020-01-01'});
+    await insert(db,'employee_placements',{employee_id:employee.id,position_id:position.id,valid_from:'2020-01-01',is_primary:1});
+    const self=await account('petugas-wilayah-uji',employee.id);
+    const {positions}=await portal(self,'attendance/shift-options');
+    assert.deepEqual(positions.map(p=>p.code),['BPB_PLK_P075']);
+    assert.deepEqual(positions[0].shifts.filter(s=>s.end_day_offset===1).map(s=>[s.code,s.end_time]),[['30003','07:00'],['73000','06:00']]);
+    const overview=await portal(self,'attendance/overview');
+    assert.deepEqual([overview.shift_references,overview.schedule],[true,false]);
+    assert.deepEqual((await portal(self,'attendance/schedule','GET',{},'date=2026-12-25')).rows,[]);
   });
   await check('patched gateway reads selfies from the absensi Drive folder and audits each view',async()=>{
     statements.length=0;driveCalls.length=0;portalRead=true;
@@ -227,6 +367,32 @@ try{
     const after=(await one(db,'SELECT last_retention_at,lease_owner FROM attendance_state WHERE id=1'));
     assert(Math.abs(Date.parse(after.last_retention_at)-Date.now())<60000&&after.lease_owner===null,JSON.stringify(after));
     assert(!statements.some(s=>s.includes(globalLock)));
+  });
+  await check('gateway grants and revokes employee access used by the Edge for outside attendance',async()=>{
+    const path='attendance/outside-access/'+people.boss.id;
+    const body=submission(people.boss,'OUT',{location:{latitude:-8.3700,longitude:115.4512,accuracy:10,age_ms:1000}});
+    const outside={reason:'DINAS_LUAR'};
+    const send=async payload=>invoke('submit',await sign(device,'submit',payload));
+    const checkLocation=async()=>invoke('check-location',await sign(device,'check-location',{employee_id:people.boss.id,location:body.location}));
+    assert.equal((await portal(manager,'attendance/points')).outside_access.version,0);
+    assert.equal((await portal(coordinator,'attendance/points')).outside_access,undefined);
+    await assert.rejects(portal(coordinator,path,'PATCH',{allowed:true,version:0}),e=>e instanceof api.AppError&&e.status===403);
+    driveCalls.length=0;
+    const denied=await checkLocation();
+    assert.deepEqual([denied.status,denied.data.details.code,driveCalls.length],[403,'OUTSIDE_FORBIDDEN',0]);
+    assert.deepEqual(await portal(manager,path,'PATCH',{allowed:true,version:0}),{allowed:true,version:1});
+    const permitted=await checkLocation();
+    assert.deepEqual([permitted.status,permitted.data.result.allowed,driveCalls.length],[200,true,0]);
+    const receipt=await send(body);
+    assert.equal(receipt.status,200,JSON.stringify(receipt.data));
+    assert.equal(receipt.data.result.within_point,false);
+    assert.deepEqual(await one(db,'SELECT outside_reason,outside_note FROM attendance_events WHERE id=?',receipt.data.result.event_id),{outside_reason:'IZIN_LUAR_AREA',outside_note:null});
+    assert(statements.some(s=>s.includes('SELECT value FROM app_settings')&&s.includes('FOR SHARE')));
+    await Promise.all(background.splice(0));
+    assert.deepEqual(await portal(manager,path,'PATCH',{allowed:false,version:1}),{allowed:false,version:2});
+    driveCalls.length=0;
+    const blocked=await send({...body,client_key:randomUUID(),outside});
+    assert.deepEqual([blocked.status,blocked.data.details.code,driveCalls.length],[403,'OUTSIDE_FORBIDDEN',0]);
   });
   console.log(`${checks} attendance PostgreSQL checks passed.`);
 }finally{globalThis.fetch=realFetch;globalThis.Deno=priorDeno;globalThis.EdgeRuntime=priorRuntime;delete globalThis.__attendanceFixture;await pg.close();}

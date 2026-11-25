@@ -5,7 +5,7 @@ import {randomBytes} from 'node:crypto';
 import {all, one, run, insert, update, tx, audit as localAudit, assert, date, instant, now, today} from './db.mjs';
 import {digest, has as localHas, can as localCan} from './auth.mjs';
 import {attendanceRules, witaDate, shiftDay, parseFlags, buildRecap, dayStatus} from './attendance-rules.mjs';
-import {deviceView, unitTree} from './attendance-form.mjs';
+import {deviceView, unitTree, outsideOfficePolicy, outsideOfficePolicyKey} from './attendance-form.mjs';
 const localDeps = {
   has: localHas,
   can: localCan,
@@ -13,12 +13,12 @@ const localDeps = {
   readPhoto: null
 };
 const DAY = 86400000;
-const peopleSql = `SELECT e.id,e.employee_no,e.full_name,e.is_active,e.employment_status,ep.supervisor_employee_id,p.org_unit_id,p.name position_name,u.name unit_name
+const peopleSql = `SELECT e.id,e.employee_no,e.full_name,e.is_active,e.employment_status,ep.supervisor_employee_id,p.id position_id,p.org_unit_id,p.name position_name,u.name unit_name
  FROM employees e
  LEFT JOIN employee_placements ep ON ep.employee_id=e.id AND ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)
  LEFT JOIN positions p ON p.id=ep.position_id LEFT JOIN org_units u ON u.id=p.org_unit_id`;
-async function directory(db, employeeId = null) {
-  const day = today(), map = new Map();
+async function directory(db, employeeId = null, day = today()) {
+  const map = new Map();
   const rows = employeeId ? await all(db, `${peopleSql} WHERE e.id=?`, day, day, employeeId) : await all(db, `${peopleSql} ORDER BY e.full_name,e.id`, day, day);
   for (const r of rows) {
     const list = map.get(r.id) || [];
@@ -335,6 +335,111 @@ async function reviewItems(db, scope, from, to, nowMs) {
     missing_reference: missing
   };
 }
+async function scheduleTablesReady(db) {
+  if (typeof db.query === 'function') {
+    return Boolean((await one(db, "SELECT to_regclass('portal.attendance_schedule_units') IS NOT NULL AS ready"))?.ready);
+  }
+  return Boolean(await one(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='attendance_schedule_units'"));
+}
+const shiftFields = `s.code, s.name,
+  substr(CAST(s.start_time AS TEXT),1,5) AS start_time,
+  substr(CAST(s.end_time AS TEXT),1,5) AS end_time,
+  substr(CAST(s.late_time AS TEXT),1,5) AS late_time, s.end_day_offset`;
+const positionShiftGroups = [{
+  positions: ['BPB_OP_P044', 'BPB_OP_P069'],
+  shifts: ['20001', '20002', '20003', '20004']
+}, {
+  positions: ['BPB_OP_P045', 'BPB_OP_P070'],
+  shifts: ['21001', '21002', '21003']
+}, {
+  positions: ['BPB_OP_P041', 'BPB_OP_P042', 'BPB_OP_P043', 'BPB_OP_P066', 'BPB_OP_P067', 'BPB_OP_P068'],
+  shifts: ['22001', '22002', '22003', '22004']
+}, {
+  positions: ['BPB_PLK_P048', 'BPB_PLK_P049', 'BPB_PLK_P074', 'BPB_PLK_P075', 'BPB_PLK_P076', 'BPB_PLK_P077'],
+  shifts: ['30001', '30002', '30003', '70000', '70001', '70002', '70003', '71000', '71002', '71003', '72001', '73000']
+}, {
+  positions: ['BPB_PLK_P051', 'BPB_PLK_P079'],
+  shifts: ['40001', '40002']
+}, {
+  positions: ['BPB_PLK_P052', 'BPB_PLK_P080_STAF', 'BPB_PLK_P080_THL'],
+  shifts: ['60001', '60002']
+}, {
+  positions: ['BPB_PLK_PAR_KOORD'],
+  shifts: ['61001', '61002']
+}, {
+  positions: ['BPB_PLK_P054', 'BPB_PLK_P082_STAF', 'BPB_PLK_P082_THL'],
+  shifts: ['62001', '62002']
+}, {
+  positions: ['BPB_PLK_P053', 'BPB_PLK_P081_STAF', 'BPB_PLK_P081_THL'],
+  shifts: ['63001', '63002', '63003', '63004', '63005', '63006']
+}];
+const positionShiftPairs = positionShiftGroups.flatMap(({positions, shifts}) => positions.flatMap(position => shifts.map(shift => [position, shift])));
+const shiftReferenceSql = `WITH options(position_code,shift_code) AS (VALUES ${positionShiftPairs.map(() => '(?,?)').join(',')})
+ SELECT p.id AS position_id, p.code AS position_code, p.name AS position_name, p.org_unit_id, ${shiftFields}
+ FROM options o JOIN positions p ON p.code=o.position_code JOIN org_units u ON u.id=p.org_unit_id
+ JOIN attendance_schedule_shifts s ON s.code=o.shift_code
+ WHERE p.is_active=1 AND u.is_active=1 ORDER BY p.name, p.code, s.code`;
+const shiftReferenceParams = positionShiftPairs.flat();
+async function positionShiftReferences(db, scope, user, {can}) {
+  const rows = await all(db, shiftReferenceSql, ...shiftReferenceParams);
+  const visiblePositions = new Set(scope.people.filter(person => person.is_active && !person.ambiguous && scope.readable.has(person.id)).map(person => person.position_id));
+  const visibleUnits = new Set();
+  for (const org_unit_id of new Set(rows.map(row => row.org_unit_id))) {
+    const context = {
+      org_unit_id
+    };
+    if (scope.hasRead && await can(db, user, 'hr.attendance.read', context) || scope.hasManage && await can(db, user, 'hr.attendance.manage', context)) visibleUnits.add(org_unit_id);
+  }
+  const positions = new Map();
+  for (const {position_id, position_code, position_name, org_unit_id, ...shift} of rows) {
+    if (!visiblePositions.has(position_id) && !visibleUnits.has(org_unit_id)) continue;
+    if (!positions.has(position_id)) positions.set(position_id, {
+      code: position_code,
+      name: position_name,
+      shifts: []
+    });
+    positions.get(position_id).shifts.push(shift);
+  }
+  return [...positions.values()];
+}
+async function activeScheduleUnits(db, day) {
+  return new Set((await all(db, `SELECT s.org_unit_id FROM attendance_schedule_units s
+  JOIN org_units u ON u.id=s.org_unit_id WHERE u.is_active=1 AND s.starts_on<=?`, day)).map(row => row.org_unit_id));
+}
+function scheduledPeople(scope, units, people = scope.people) {
+  return people.filter(person => person.is_active && !person.ambiguous && scope.readable.has(person.id) && units.has(person.org_unit_id));
+}
+async function scheduleForDate(db, scope, day, todayDate) {
+  const units = await activeScheduleUnits(db, day);
+  const people = scheduledPeople(scope, units, day === todayDate ? scope.people : await directory(db, null, day));
+  if (!people.length) return {
+    date: day,
+    rows: []
+  };
+  const weekday = new Date(day + 'T00:00:00Z').getUTCDay() || 7;
+  const shifts = await all(db, `SELECT w.org_unit_id, ${shiftFields}
+  FROM attendance_schedule_weekdays w JOIN attendance_schedule_shifts s ON s.code=w.shift_code
+  WHERE w.weekday_no=?`, weekday);
+  const shiftByUnit = new Map(shifts.map(({org_unit_id, ...shift}) => [org_unit_id, shift]));
+  const holiday = await one(db, 'SELECT name FROM attendance_schedule_holidays WHERE work_date=?', day);
+  const knownYear = holiday || await one(db, `SELECT 1 AS present FROM attendance_schedule_holidays
+  WHERE work_date>=? AND work_date<=? LIMIT 1`, day.slice(0, 4) + '-01-01', day.slice(0, 4) + '-12-31');
+  const rows = people.map(person => {
+    const shift = shiftByUnit.get(person.org_unit_id);
+    const dayType = holiday ? 'NATIONAL_HOLIDAY' : !shift ? 'WEEKLY_OFF' : knownYear ? 'WORK' : 'CALENDAR_PENDING';
+    return {
+      employee: view(person),
+      day_type: dayType,
+      holiday_name: holiday?.name || null,
+      shift: dayType === 'WORK' ? shift : null
+    };
+  });
+  rows.sort((a, b) => a.employee.name.localeCompare(b.employee.name, 'id'));
+  return {
+    date: day,
+    rows
+  };
+}
 export async function attendanceRoutes({db, user, p, method, body: b = {}, url}, deps = localDeps) {
   if (p[0] !== 'attendance') return undefined;
   const {has, can, audit} = deps;
@@ -346,11 +451,17 @@ export async function attendanceRoutes({db, user, p, method, body: b = {}, url},
     const state = await one(db, 'SELECT last_retention_at,last_error,deleted_photos FROM attendance_state WHERE id=1');
     const due = canSettings ? Number((await one(db, `SELECT count(*) n FROM attendance_events e WHERE e.photo_storage_key IS NOT NULL AND e.recorded_at<?
    AND NOT EXISTS(SELECT 1 FROM attendance_reference_photos r WHERE r.event_id=e.id)`, new Date(nowMs - attendanceRules.photoRetentionDays * DAY).toISOString()))?.n || 0) : 0;
+    const todayDate = today();
+    const hasScheduleTables = await scheduleTablesReady(db);
+    const schedule = hasScheduleTables && scheduledPeople(scope, await activeScheduleUnits(db, todayDate)).length > 0;
+    const shiftReferences = hasScheduleTables && (await positionShiftReferences(db, scope, user, deps)).length > 0;
     return {
-      today: today(),
+      today: todayDate,
       self: Boolean(user.employee_id && scope.byId.has(user.employee_id)),
       employee_id: user.employee_id || null,
       subordinates: scope.subordinates.size,
+      schedule,
+      shift_references: shiftReferences,
       readable: scope.readable.size,
       read_scope: scope.hasRead,
       manage: scope.hasManage || scope.direct.size > 0,
@@ -364,6 +475,17 @@ export async function attendanceRoutes({db, user, p, method, body: b = {}, url},
         deleted_photos: Number(state?.deleted_photos || 0),
         due_photos: due
       } : null
+    };
+  }
+  if (p[1] === 'schedule' && p.length === 2 && method === 'GET') {
+    assert(await scheduleTablesReady(db), 'Jadwal kerja belum tersedia.', 404);
+    const todayDate = today(), day = workDate(url?.searchParams.get('date') || todayDate);
+    return await scheduleForDate(db, await scopeOf(db, user, deps), day, todayDate);
+  }
+  if (p[1] === 'shift-options' && p.length === 2 && method === 'GET') {
+    assert(await scheduleTablesReady(db), 'Acuan shift belum tersedia.', 404);
+    return {
+      positions: await positionShiftReferences(db, await scopeOf(db, user, deps), user, deps)
     };
   }
   if (p[1] === 'today' && p.length === 2 && method === 'GET') {
@@ -686,14 +808,56 @@ export async function attendanceRoutes({db, user, p, method, body: b = {}, url},
       };
     });
   }
+  if (p[1] === 'outside-access' && p.length === 3 && method === 'PATCH') {
+    assert(await can(db, user, 'hr.attendance.settings', {}), 'Hanya Pengelola Absensi dengan cakupan seluruh organisasi yang dapat mengubah akses luar area.', 403);
+    assert(typeof b.allowed === 'boolean', 'Pilih status akses luar area.');
+    const changedMessage = 'Daftar akses sudah berubah. Muat ulang sebelum menyimpan.';
+    return await tx(db, async () => {
+      const employee = await one(db, 'SELECT id,is_active FROM employees WHERE id=?', p[2]);
+      assert(employee, 'Pegawai tidak ditemukan.', 404);
+      assert(!b.allowed || Number(employee.is_active) === 1, 'Akses hanya dapat diberikan kepada pegawai aktif.');
+      const current = await outsideOfficePolicy(db);
+      assert(b.version === current.version, changedMessage, 409);
+      const ids = new Set(current.employee_ids);
+      if (ids.has(employee.id) === b.allowed) return {
+        version: current.version,
+        allowed: b.allowed
+      };
+      if (b.allowed) ids.add(employee.id); else ids.delete(employee.id);
+      const version = current.version + 1, value = JSON.stringify({
+        version,
+        employee_ids: [...ids].sort()
+      });
+      const result = current.raw === null ? await run(db, 'INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING', outsideOfficePolicyKey, value) : await run(db, 'UPDATE app_settings SET value=? WHERE key=? AND value=?', value, outsideOfficePolicyKey, current.raw);
+      assert(result.changes === 1, changedMessage, 409);
+      await audit(db, user, b.allowed ? 'GRANT_OUTSIDE_OFFICE' : 'REVOKE_OUTSIDE_OFFICE', 'employees', employee.id, {
+        allowed: b.allowed
+      });
+      return {
+        version,
+        allowed: b.allowed
+      };
+    });
+  }
   if (p[1] === 'points') {
     const manage = await can(db, user, 'hr.attendance.settings', {});
     if (p.length === 2 && method === 'GET') {
       assert(manage || await has(db, user, 'hr.attendance.devices') || await has(db, user, 'hr.attendance.read') || await has(db, user, 'hr.attendance.manage'), 'Akses titik absen ditolak.', 403);
-      return {
+      const result = {
         points: (await all(db, 'SELECT * FROM attendance_points ORDER BY is_active DESC,name,id')).map(pointView),
         can_manage: manage
       };
+      if (manage) {
+        const policy = await outsideOfficePolicy(db), grants = new Set(policy.employee_ids);
+        result.outside_access = {
+          version: policy.version,
+          people: (await directory(db)).filter(e => e.is_active || grants.has(e.id)).map(e => ({
+            ...view(e),
+            allowed: grants.has(e.id)
+          }))
+        };
+      }
+      return result;
     }
     assert(manage, 'Hanya Pengelola Absensi (cakupan seluruh organisasi) yang dapat mengubah titik absen.', 403);
     if (p.length === 2 && method === 'POST') return await tx(db, async () => {
