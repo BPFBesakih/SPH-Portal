@@ -214,11 +214,15 @@ test('basis data lokal lama ditingkatkan: stok lama jadi display, riwayat lama D
   const dir=mkdtempSync(resolve(tmpdir(),'sph-bisnis-')),path=resolve(dir,'portal.sqlite');let db;
   t.after(()=>{db?.close();rmSync(dir,{recursive:true,force:true});});
   const schema=readFileSync(new URL('../schema.sql',import.meta.url),'utf8');
-  const oldSchema=schema.replace(",\n warehouse_qty INTEGER CHECK(warehouse_qty IS NULL OR warehouse_qty>=0)","")
+  // Skema sebelum 20 November (juga tanpa kolom barang UMKM 25 November).
+  const oldSchema=schema.replace(",\n warehouse_qty INTEGER CHECK(warehouse_qty IS NULL OR warehouse_qty>=0), umkm_partner_id TEXT REFERENCES merchandise_umkm_partners(id)","")
+    .replace("\n umkm_partner_id TEXT REFERENCES merchandise_umkm_partners(id), umkm_partner_name TEXT, umkm_markup_pct INTEGER CHECK(umkm_markup_pct IS NULL OR umkm_markup_pct BETWEEN 0 AND 100),","")
     .replace("payment_method IN('TUNAI','QRIS','TRANSFER','CARD','LAINNYA')","payment_method IN('TUNAI','QRIS','TRANSFER','LAINNYA')")
-    .replace("kind IN('INITIAL','IN','ADJUST','SALE','VOID','TRANSFER')","kind IN('INITIAL','IN','ADJUST','SALE','VOID')")
-    .replace(",\n location TEXT NOT NULL DEFAULT 'DISPLAY' CHECK(location IN('DISPLAY','GUDANG'))","");
-  assert(!oldSchema.includes('warehouse_qty INTEGER')&&!oldSchema.includes("'CARD'")&&!oldSchema.includes("'VOID','TRANSFER'")&&!oldSchema.includes('location TEXT NOT NULL'),'skema lama tiruan');
+    .replace("kind IN('INITIAL','IN','ADJUST','SALE','VOID','TRANSFER','TAKEOUT')","kind IN('INITIAL','IN','ADJUST','SALE','VOID')")
+    .replace(",\n location TEXT NOT NULL DEFAULT 'DISPLAY' CHECK(location IN('DISPLAY','GUDANG')),\n umkm_doc_id TEXT REFERENCES merchandise_umkm_docs(id), unit_cost INTEGER CHECK(unit_cost IS NULL OR unit_cost>=0),\n umkm_loss_borne_by TEXT CHECK(umkm_loss_borne_by IS NULL OR umkm_loss_borne_by IN('BP','UMKM'))","")
+    .replace(",\n product_stock_version INTEGER","")
+    .replace(/CREATE TABLE IF NOT EXISTS merchandise_umkm_(partners|docs|doc_items) \([\s\S]*?;\n/g,'').replace(/CREATE INDEX IF NOT EXISTS \w+ ON merchandise_umkm_\w+\([^;]+;\n/g,'');
+  assert(!oldSchema.includes('warehouse_qty INTEGER')&&!oldSchema.includes("'CARD'")&&!oldSchema.includes("'VOID','TRANSFER'")&&!oldSchema.includes('location TEXT NOT NULL')&&!/umkm_partner_id TEXT|umkm_doc_id/.test(oldSchema),'skema lama tiruan');
   db=new DatabaseSync(path);db.exec(oldSchema);db.exec('PRAGMA foreign_keys=ON');
   const user=insert(db,'users',{username:'lama',password_hash:'x',status:'ACTIVE',must_change_password:0,failed_login_count:0,password_changed_at:now()});
   const product=insert(db,'merchandise_products',{sku:'MER-001',name:'Barang Lama',buy_price:1,sell_price:2,stock_qty:7,is_active:1,created_by:user.id});

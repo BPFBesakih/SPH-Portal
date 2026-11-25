@@ -243,9 +243,21 @@ button.mm-stat-link:focus-visible { outline: 3px solid var(--md-sys-color-primar
 .mm-section { margin-bottom: 24px; }
 .mm-section .card-header { padding-bottom: 14px; }
 .mm-stock-now { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+/* Barang titipan UMKM: label pemilik, baris terima/takeout, dan lembar cetak. */
+.mm-umkm-tag { display: inline-block; margin-top: 4px; }
+.mm-umkm-mark { font-size: var(--md-sys-typescale-body-small-size); font-weight: 600; color: var(--md-sys-color-primary); }
+.mm-umkm-line { padding-top: 14px; border-top: 1px solid var(--md-sys-color-outline-variant); margin-top: 14px; }
+.mm-umkm-line:first-child { padding-top: 0; border-top: 0; margin-top: 0; }
+.mm-umkm-new { padding: 12px; border-radius: var(--md-sys-shape-corner-small); background: var(--md-sys-color-surface-container-low); }
+.mm-umkm-new .form-note { margin: 0; }
+.mm-umkm-line-actions { display: flex; justify-content: flex-end; }
+.mm-umkm-sheet .pg-print-table td:nth-child(n+4) { text-align: right; white-space: nowrap; }
+/* Aturan global tr:last-child td menghapus garis bawah baris jumlah; tabel cetak tetap tertutup. */
+.mm-umkm-sheet .pg-print-table tr:last-child td { border-bottom: 1px solid #444; }
 /* Catat Penjualan: pilihan barang (dengan stok display · gudang) lebih lebar dari jumlah. */
 @media (min-width: 600px) {
   .mm-sale-line { grid-template-columns: minmax(0, 3fr) minmax(96px, 1fr); }
+  .mm-umkm-line { grid-template-columns: minmax(0, 3fr) minmax(96px, 1fr) minmax(120px, 1fr); }
   .mm-refill-item { grid-template-columns: minmax(0, 1fr) 128px 96px auto; }
 }
 @media (max-width: 599px) {

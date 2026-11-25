@@ -4,25 +4,94 @@ import {all, one, get, insert, update, tx, audit, assert, text, integer, enumVal
 import {has, requireAccess} from './auth.mjs';
 const price = value => integer(value, 'Harga (rupiah)', 0, 1000000000);
 const qty = value => integer(value, 'Jumlah barang', 0, 1000000);
-const productFields = 'id,sku,name,buy_price,sell_price,stock_qty,warehouse_qty,is_active,row_version';
+const productFields = 'p.id,p.sku,p.name,p.buy_price,p.sell_price,p.stock_qty,p.warehouse_qty,p.is_active,p.row_version,p.created_at,p.umkm_partner_id,mp.code umkm_partner_code,mp.name umkm_partner_name';
 const LOCATIONS = ['DISPLAY', 'GUDANG'];
 const stockColumn = location => location === 'GUDANG' ? 'warehouse_qty' : 'stock_qty';
 const PAYMENT_METHODS = ['TUNAI', 'QRIS', 'TRANSFER', 'CARD', 'LAINNYA'];
 const LOW_STOCK = 5, STOCK_EXPORT_LIMIT = 10000;
+const UMKM_MARKUP_PCT = 20;
+const UMKM_TAKEOUT_REASONS = ['DIAMBIL_UMKM', 'RUSAK', 'TIDAK_LAKU', 'BERHENTI', 'LAINNYA'];
+const umkmPrice = value => integer(value, 'Harga UMKM (rupiah)', 100, 100000000);
+function umkmSellPrice(cost) {
+  const scaled = cost * (100 + UMKM_MARKUP_PCT);
+  const step = scaled < 5000 * 100 ? 100 : 500;
+  return Math.ceil(scaled / (step * 100)) * step;
+}
 const isActive = row => row.is_active === 1 || row.is_active === true;
 const visibleProduct = (row, costs) => costs ? row : (({buy_price, ...rest}) => rest)(row);
+const withoutCost = (row, costs) => costs ? row : (({unit_cost, ...rest}) => rest)(row);
+const optionalText = (value, label, max) => value === undefined || value === null || typeof value === 'string' && !value.trim() ? null : text(value, label, max);
+const monthOf = day => String(day).slice(0, 7);
+const witaMidnight = day => new Date(`${day}T00:00:00+08:00`).toISOString();
 const saleItems = async (db, id) => await all(db, 'SELECT * FROM merchandise_sale_items WHERE sale_id=? ORDER BY created_at,id', id);
 const canCosts = async (db, user) => await has(db, user, 'merchandise.catalog.costs');
-const stockHistory = 'SELECT m.*,p.sku,p.name product_name,u.username actor_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id JOIN users u ON u.id=m.created_by';
+const stockHistory = 'SELECT m.*,p.sku,p.name product_name,p.umkm_partner_id,mp.name umkm_partner_name,u.username actor_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id LEFT JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id JOIN users u ON u.id=m.created_by';
 async function movementsSince(db, from) {
-  const midnight = new Date(`${from}T00:00:00+08:00`).toISOString();
-  return await all(db, `${stockHistory} WHERE m.created_at>=? ORDER BY m.created_at DESC,m.id DESC LIMIT ${STOCK_EXPORT_LIMIT}`, midnight);
+  return await all(db, `${stockHistory} WHERE m.created_at>=? ORDER BY m.created_at DESC,m.id DESC LIMIT ${STOCK_EXPORT_LIMIT}`, witaMidnight(from));
+}
+async function receiptStockMayHaveBeenUsed(db, productId, docId) {
+  const received = await one(db, `SELECT created_at,product_stock_version FROM merchandise_stock_movements
+    WHERE product_id=? AND umkm_doc_id=? AND kind='IN' AND quantity_delta>0
+    ORDER BY created_at,id LIMIT 1`, productId, docId);
+  if (!received) return true;
+  return Boolean(await one(db, `SELECT m.id FROM merchandise_stock_movements m
+    LEFT JOIN merchandise_sales s ON s.id=m.sale_id
+    LEFT JOIN merchandise_umkm_docs d ON d.id=m.umkm_doc_id
+    WHERE m.product_id=? AND m.quantity_delta<0
+      AND (m.kind='ADJUST' OR (m.kind='SALE' AND COALESCE(s.status,'COMPLETED')='COMPLETED')
+        OR (m.kind='TAKEOUT' AND COALESCE(d.status,'ACTIVE')='ACTIVE'))
+      AND (CASE WHEN m.product_stock_version IS NOT NULL AND CAST(? AS INTEGER) IS NOT NULL
+        THEN m.product_stock_version>? ELSE m.created_at>=? END)
+    LIMIT 1`, productId, received.product_stock_version, received.product_stock_version, received.created_at));
+}
+async function umkmLossesForReport(db, from, to, costs) {
+  const movements = await all(db, `SELECT m.id,m.product_id,m.location,m.quantity_delta,m.unit_cost,m.created_at,m.reason,
+      p.sku,p.name product_name,p.umkm_partner_id,mp.name umkm_partner_name
+    FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id
+    JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id
+    WHERE m.kind='ADJUST' AND m.umkm_loss_borne_by='BP' AND m.quantity_delta<>0
+      AND m.created_at>=? AND m.created_at<?
+    ORDER BY m.created_at,COALESCE(m.product_stock_version,0),m.id`, from, to);
+  const outstanding = new Map(), entries = [];
+  for (const movement of movements) {
+    const day = new Date(Date.parse(movement.created_at) + 8 * 3600000).toISOString().slice(0, 10);
+    const key = [monthOf(day), movement.product_id, movement.location].join('/');
+    if (!outstanding.has(key)) outstanding.set(key, {
+      losses: [],
+      first: 0
+    });
+    const pending = outstanding.get(key);
+    const delta = Number(movement.quantity_delta);
+    if (delta < 0) {
+      pending.losses.push({
+        movement,
+        remaining: -delta
+      });
+      entries.push(movement);
+      continue;
+    }
+    let recovered = delta;
+    while (recovered > 0 && pending.first < pending.losses.length) {
+      const loss = pending.losses[pending.first];
+      const matched = Math.min(recovered, loss.remaining);
+      entries.push({
+        ...movement,
+        id: movement.id + ':' + loss.movement.id,
+        quantity_delta: matched,
+        unit_cost: loss.movement.unit_cost
+      });
+      loss.remaining -= matched;
+      recovered -= matched;
+      if (!loss.remaining) pending.first++;
+    }
+  }
+  return entries.map(movement => withoutCost(movement, costs));
 }
 function reportedPayment(sale) {
   const legacy = sale.sold_on >= '2026-11-01' && sale.sold_on <= '2026-11-07' && sale.payment_method === 'LAINNYA';
   return legacy && (/(?:^|;)\s*pembayaran CARD \(kategori lainnya\)(?=\s*(?:[.;]|$))/i).test(sale.note || '') ? 'CARD' : sale.payment_method;
 }
-async function applyStock(db, user, product, kind, changes, reason, saleId = null) {
+async function applyStock(db, user, product, kind, changes, reason, saleId = null, extra = {}) {
   const balance = {
     DISPLAY: product.stock_qty,
     GUDANG: product.warehouse_qty
@@ -52,13 +121,15 @@ async function applyStock(db, user, product, kind, changes, reason, saleId = nul
     balance_before: row.before,
     balance_after: row.after,
     reason,
-    created_by: user.id
+    created_by: user.id,
+    product_stock_version: product.umkm_partner_id ? product.row_version + 1 : null,
+    ...extra
   }));
   return saved;
 }
 async function productList(db, user) {
   const costs = await canCosts(db, user);
-  return (await all(db, `SELECT ${productFields} FROM merchandise_products ORDER BY sku`)).map(p => visibleProduct(p, costs));
+  return (await all(db, `SELECT ${productFields} FROM merchandise_products p LEFT JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id ORDER BY p.sku`)).map(p => visibleProduct(p, costs));
 }
 async function saleList(db, user, from, to) {
   const costs = await canCosts(db, user);
@@ -91,10 +162,339 @@ function totals(sales) {
     cost: active.reduce((n, s) => n + Number(s.cost_total || 0), 0)
   };
 }
+function partnerValues(b) {
+  const phone = optionalText(b.phone, 'Nomor WhatsApp', 20);
+  assert(phone === null || (/^\+?[0-9][0-9 -]{5,18}$/).test(phone), 'Nomor WhatsApp hanya berisi angka, spasi, tanda hubung, atau + di depan.');
+  return {
+    name: text(b.name, 'Nama usaha', 160),
+    owner_name: optionalText(b.owner_name, 'Nama pemilik', 160),
+    phone,
+    address: optionalText(b.address, 'Alamat', 300),
+    notes: optionalText(b.notes, 'Catatan', 500)
+  };
+}
+async function umkmPartners(db) {
+  return await all(db, `SELECT u.*,CAST((SELECT count(*) FROM merchandise_products p WHERE p.umkm_partner_id=u.id) AS INTEGER) product_count,
+    CAST((SELECT coalesce(sum(coalesce(p.stock_qty,0)+coalesce(p.warehouse_qty,0)),0) FROM merchandise_products p WHERE p.umkm_partner_id=u.id) AS INTEGER) stock_total
+    FROM merchandise_umkm_partners u ORDER BY u.name,u.code`);
+}
+async function umkmDocs(db, user, where, args) {
+  const costs = await canCosts(db, user);
+  const docs = await all(db, `SELECT d.*,p.code partner_code,p.name partner_name,u.username actor_name,v.username voided_by_name FROM merchandise_umkm_docs d
+    JOIN merchandise_umkm_partners p ON p.id=d.partner_id JOIN users u ON u.id=d.created_by LEFT JOIN users v ON v.id=d.voided_by
+    WHERE ${where} ORDER BY d.created_at DESC,d.id DESC`, ...args);
+  return await asyncMap(docs, async d => ({
+    ...d,
+    items: (await all(db, 'SELECT * FROM merchandise_umkm_doc_items WHERE doc_id=? ORDER BY line_no', d.id)).map(i => withoutCost(i, costs))
+  }));
+}
+async function nextUmkmSku(db, partner) {
+  const prefix = `UMKM-${partner.code}-`;
+  const used = new Set((await all(db, 'SELECT sku FROM merchandise_products WHERE sku LIKE ?', prefix + '%')).map(r => r.sku));
+  for (let n = 1; n < 10000; n++) {
+    const sku = prefix + String(n).padStart(2, '0');
+    if (!used.has(sku)) return sku;
+  }
+  assert(false, 'Nomor SKU barang UMKM untuk mitra ini sudah habis.', 409);
+}
+const docLines = (items, label, allowNew) => {
+  assert(Array.isArray(items) && items.length > 0 && items.length <= 50, `Isi 1–50 barang dalam satu ${label}.`);
+  return items.map(i => {
+    assert(allowNew || i?.product_id, 'Takeout hanya untuk barang UMKM yang sudah terdaftar.');
+    return {
+      product_id: i.product_id ? text(i.product_id, 'ID barang', 64) : null,
+      location: i.location === undefined || i.location === null || i.location === '' ? 'DISPLAY' : enumValue(i.location, LOCATIONS, 'Lokasi stok'),
+      quantity: integer(i.quantity, 'Jumlah barang', 1, 1000000),
+      name: i.product_id ? null : text(i.name, 'Nama barang', 160),
+      cost: i.product_id ? null : umkmPrice(i.umkm_price)
+    };
+  });
+};
+const docNumber = prefix => `${prefix}-${today().replaceAll('-', '')}-${uid().slice(0, 8).toUpperCase()}`;
+const locationName = location => location === 'GUDANG' ? 'gudang' : 'display';
+async function umkmRoutes(c) {
+  const {db, user, p, method, body: b = {}, url} = c;
+  const section = p[2], key = p[3], verb = p[4];
+  if (section === 'partners' && method === 'GET' && !key) {
+    await requireAccess(db, user, 'merchandise.umkm.read');
+    return {
+      items: await umkmPartners(db)
+    };
+  }
+  if (section === 'partners' && method === 'POST' && !key) {
+    await requireAccess(db, user, 'merchandise.umkm.receive');
+    const code = text(b.code, 'Kode mitra', 8).toUpperCase(), values = partnerValues(b);
+    assert((/^[A-Z0-9]{2,8}$/).test(code), 'Kode mitra 2–8 huruf atau angka, tanpa spasi.');
+    return await tx(db, async () => {
+      assert(!await one(db, 'SELECT id FROM merchandise_umkm_partners WHERE code=?', code), 'Kode mitra sudah dipakai.', 409);
+      const saved = await insert(db, 'merchandise_umkm_partners', {
+        code,
+        ...values,
+        is_active: 1,
+        created_by: user.id
+      });
+      await audit(db, user, 'CREATE', 'merchandise_umkm_partners', saved.id, {
+        code
+      });
+      return saved;
+    });
+  }
+  if (section === 'partners' && method === 'PATCH' && key && !verb) {
+    await requireAccess(db, user, 'merchandise.umkm.receive');
+    const values = partnerValues(b);
+    if (b.is_active !== undefined) {
+      assert(typeof b.is_active === 'boolean', 'Status mitra tidak valid.');
+      values.is_active = Number(b.is_active);
+    }
+    return await tx(db, async () => {
+      const saved = await update(db, 'merchandise_umkm_partners', key, b.row_version, values);
+      await audit(db, user, 'UPDATE', 'merchandise_umkm_partners', key, {
+        fields: Object.keys(values)
+      });
+      return saved;
+    });
+  }
+  if (section === 'docs' && method === 'GET' && !verb) {
+    await requireAccess(db, user, 'merchandise.umkm.read');
+    if (key) {
+      const [doc] = await umkmDocs(db, user, 'd.id=?', [key]);
+      assert(doc, 'Data tidak ditemukan.', 404);
+      return {
+        ...doc,
+        partner: await get(db, 'merchandise_umkm_partners', doc.partner_id)
+      };
+    }
+    const {from, to} = dateRange(url);
+    return {
+      from,
+      to,
+      items: await umkmDocs(db, user, 'd.doc_date>=? AND d.doc_date<=?', [from, to])
+    };
+  }
+  if (section === 'receipts' && method === 'POST' && !key) {
+    await requireAccess(db, user, 'merchandise.umkm.receive');
+    const partnerId = text(b.partner_id, 'Mitra UMKM', 64), counterpart = text(b.counterpart_name, 'Nama perwakilan UMKM', 120);
+    const note = optionalText(b.note, 'Catatan', 300), lines = docLines(b.items, 'tanda terima', true);
+    return await tx(db, async () => {
+      const partner = await get(db, 'merchandise_umkm_partners', partnerId);
+      assert(isActive(partner), 'Mitra UMKM nonaktif tidak dapat menitipkan barang.', 409);
+      const docNo = docNumber('TU');
+      const doc = await insert(db, 'merchandise_umkm_docs', {
+        doc_no: docNo,
+        kind: 'TERIMA',
+        partner_id: partner.id,
+        doc_date: today(),
+        counterpart_name: counterpart,
+        reason: null,
+        note,
+        status: 'ACTIVE',
+        created_by: user.id
+      });
+      const grouped = new Map(), names = new Set(), order = [];
+      for (const line of lines) {
+        let product;
+        if (line.product_id) {
+          product = await get(db, 'merchandise_products', line.product_id);
+          assert(product.umkm_partner_id === partner.id, `${product.name} bukan barang titipan ${partner.name}.`, 409);
+          assert(isActive(product), `${product.name} nonaktif. Aktifkan dulu di Daftar Barang.`, 409);
+        } else {
+          const lower = line.name.toLowerCase();
+          assert(!names.has(lower) && !await one(db, 'SELECT id FROM merchandise_products WHERE umkm_partner_id=? AND lower(name)=?', partner.id, lower), `${line.name} sudah terdaftar untuk ${partner.name}. Pilih dari daftar barang.`, 409);
+          names.add(lower);
+          product = await insert(db, 'merchandise_products', {
+            sku: await nextUmkmSku(db, partner),
+            name: line.name,
+            buy_price: line.cost,
+            sell_price: umkmSellPrice(line.cost),
+            stock_qty: 0,
+            warehouse_qty: 0,
+            is_active: 1,
+            umkm_partner_id: partner.id,
+            created_by: user.id
+          });
+          await audit(db, user, 'CREATE', 'merchandise_products', product.id, {
+            sku: product.sku,
+            umkm_partner: partner.code
+          });
+        }
+        if (!grouped.has(product.id)) grouped.set(product.id, {
+          product,
+          changes: []
+        });
+        const entry = grouped.get(product.id);
+        assert(!entry.changes.some(change => change.location === line.location), `${product.name} di ${locationName(line.location)} tercatat dua kali.`);
+        entry.changes.push({
+          location: line.location,
+          delta: line.quantity
+        });
+        order.push({
+          product,
+          location: line.location,
+          quantity: line.quantity
+        });
+      }
+      for (let i = 0; i < order.length; i++) {
+        const {product, location, quantity} = order[i];
+        await insert(db, 'merchandise_umkm_doc_items', {
+          doc_id: doc.id,
+          line_no: i + 1,
+          product_id: product.id,
+          sku: product.sku,
+          product_name: product.name,
+          location,
+          quantity,
+          unit_cost: Number(product.buy_price),
+          sell_price: Number(product.sell_price)
+        });
+      }
+      for (const {product, changes} of grouped.values()) {
+        await applyStock(db, user, product, 'IN', changes, `Terima barang UMKM ${docNo}`, null, {
+          umkm_doc_id: doc.id,
+          unit_cost: Number(product.buy_price)
+        });
+      }
+      await audit(db, user, 'UMKM_RECEIVE', 'merchandise_umkm_docs', doc.id, {
+        doc_no: docNo,
+        partner: partner.code,
+        lines: lines.length
+      });
+      return {
+        id: doc.id,
+        doc_no: docNo
+      };
+    });
+  }
+  if (section === 'takeouts' && method === 'POST' && !key) {
+    await requireAccess(db, user, 'merchandise.umkm.receive');
+    const partnerId = text(b.partner_id, 'Mitra UMKM', 64), counterpart = text(b.counterpart_name, 'Nama pengambil', 120);
+    const reason = enumValue(b.reason, UMKM_TAKEOUT_REASONS, 'Alasan takeout');
+    const note = reason === 'LAINNYA' ? text(b.note, 'Keterangan alasan takeout', 300) : optionalText(b.note, 'Catatan', 300);
+    const lines = docLines(b.items, 'takeout', false);
+    return await tx(db, async () => {
+      const partner = await get(db, 'merchandise_umkm_partners', partnerId);
+      const docNo = docNumber('TO');
+      const doc = await insert(db, 'merchandise_umkm_docs', {
+        doc_no: docNo,
+        kind: 'TAKEOUT',
+        partner_id: partner.id,
+        doc_date: today(),
+        counterpart_name: counterpart,
+        reason,
+        note,
+        status: 'ACTIVE',
+        created_by: user.id
+      });
+      const grouped = new Map(), order = [];
+      for (const line of lines) {
+        if (!grouped.has(line.product_id)) {
+          const product = await get(db, 'merchandise_products', line.product_id);
+          assert(product.umkm_partner_id === partner.id, `${product.name} bukan barang titipan ${partner.name}.`, 409);
+          grouped.set(line.product_id, {
+            product,
+            changes: []
+          });
+        }
+        const entry = grouped.get(line.product_id), available = Number(entry.product[stockColumn(line.location)] ?? 0);
+        assert(!entry.changes.some(change => change.location === line.location), `${entry.product.name} di ${locationName(line.location)} tercatat dua kali.`);
+        assert(available >= line.quantity, `Stok ${locationName(line.location)} ${entry.product.name} hanya ${available}.`, 409);
+        entry.changes.push({
+          location: line.location,
+          delta: -line.quantity
+        });
+        order.push({
+          product: entry.product,
+          location: line.location,
+          quantity: line.quantity
+        });
+      }
+      for (let i = 0; i < order.length; i++) {
+        const {product, location, quantity} = order[i];
+        await insert(db, 'merchandise_umkm_doc_items', {
+          doc_id: doc.id,
+          line_no: i + 1,
+          product_id: product.id,
+          sku: product.sku,
+          product_name: product.name,
+          location,
+          quantity,
+          unit_cost: Number(product.buy_price),
+          sell_price: Number(product.sell_price)
+        });
+      }
+      for (const {product, changes} of grouped.values()) {
+        await applyStock(db, user, product, 'TAKEOUT', changes, `Takeout barang UMKM ${docNo}`, null, {
+          umkm_doc_id: doc.id,
+          unit_cost: Number(product.buy_price)
+        });
+      }
+      await audit(db, user, 'UMKM_TAKEOUT', 'merchandise_umkm_docs', doc.id, {
+        doc_no: docNo,
+        partner: partner.code,
+        reason,
+        lines: lines.length
+      });
+      return {
+        id: doc.id,
+        doc_no: docNo
+      };
+    });
+  }
+  if (section === 'docs' && key && verb === 'void' && method === 'POST') {
+    await requireAccess(db, user, 'merchandise.sales.void');
+    const reason = text(b.reason, 'Alasan pembatalan', 300);
+    return await tx(db, async () => {
+      const doc = await get(db, 'merchandise_umkm_docs', key);
+      assert(doc.status === 'ACTIVE', 'Dokumen sudah dibatalkan.', 409);
+      assert(doc.row_version === b.row_version, 'Dokumen berubah. Muat ulang.', 409);
+      assert(monthOf(doc.doc_date) === monthOf(today()), 'Dokumen bulan sebelumnya tidak dapat dibatalkan. Catat takeout atau koreksi stok di bulan ini.', 409);
+      const grouped = new Map();
+      for (const item of await all(db, 'SELECT * FROM merchandise_umkm_doc_items WHERE doc_id=? ORDER BY line_no', doc.id)) {
+        if (!grouped.has(item.product_id)) {
+          const product = await get(db, 'merchandise_products', item.product_id);
+          if (doc.kind === 'TERIMA') assert(!await receiptStockMayHaveBeenUsed(db, product.id, doc.id), product.name + ': stok mungkin sudah terjual atau di-takeout, atau pernah dikoreksi turun setelah tanda terima ini. Gunakan takeout atau koreksi stok.', 409);
+          grouped.set(product.id, {
+            product,
+            changes: []
+          });
+        }
+        const entry = grouped.get(item.product_id), amount = Number(item.quantity);
+        if (doc.kind === 'TERIMA') {
+          const available = Number(entry.product[stockColumn(item.location)] ?? 0);
+          assert(available >= amount, `Stok ${locationName(item.location)} ${entry.product.name} tinggal ${available}; sebagian barang dari tanda terima ini sudah terjual atau di-takeout. Gunakan takeout atau koreksi stok.`, 409);
+        }
+        entry.changes.push({
+          location: item.location,
+          delta: doc.kind === 'TERIMA' ? -amount : amount
+        });
+      }
+      const kind = doc.kind === 'TERIMA' ? 'IN' : 'TAKEOUT';
+      for (const {product, changes} of grouped.values()) await applyStock(db, user, product, kind, changes, `Pembatalan ${doc.doc_no}: ${reason}`, null, {
+        umkm_doc_id: doc.id,
+        unit_cost: Number(product.buy_price)
+      });
+      const updated = await update(db, 'merchandise_umkm_docs', doc.id, b.row_version, {
+        status: 'VOID',
+        void_reason: reason,
+        voided_at: now(),
+        voided_by: user.id
+      });
+      await audit(db, user, 'UMKM_VOID', 'merchandise_umkm_docs', doc.id, {
+        doc_no: doc.doc_no,
+        reason
+      });
+      return {
+        ok: true,
+        status: updated.status
+      };
+    });
+  }
+  return undefined;
+}
 export async function merchandiseRoutes(c) {
   const {db, user, p, method, body: b = {}, url} = c;
   if (p[0] !== 'merchandise') return undefined;
   const part = p[1], id = p[2], action = p[3];
+  if (part === 'umkm') return await umkmRoutes(c);
   if (method === 'GET' && (!part || part === 'overview')) {
     await requireAccess(db, user, 'merchandise.catalog.read');
     const products = await productList(db, user), {from, to} = dateRange(url), sales = await has(db, user, 'merchandise.reports.read') ? await saleList(db, user, from, to) : [];
@@ -117,7 +517,9 @@ export async function merchandiseRoutes(c) {
         sales_create: await has(db, user, 'merchandise.sales.create'),
         sales_void: await has(db, user, 'merchandise.sales.void'),
         reports: await has(db, user, 'merchandise.reports.read'),
-        export: await has(db, user, 'merchandise.reports.export')
+        export: await has(db, user, 'merchandise.reports.export'),
+        umkm_read: await has(db, user, 'merchandise.umkm.read'),
+        umkm_receive: await has(db, user, 'merchandise.umkm.receive')
       }
     };
   }
@@ -131,6 +533,7 @@ export async function merchandiseRoutes(c) {
     await requireAccess(db, user, 'merchandise.catalog.manage');
     const sku = text(b.sku, 'SKU', 40).toUpperCase(), name = text(b.name, 'Nama barang', 160);
     assert((/^[A-Z0-9-]+$/).test(sku), 'SKU hanya boleh huruf, angka, dan tanda hubung.');
+    assert(!sku.startsWith('UMKM-'), 'Awalan UMKM- khusus barang titipan UMKM, yang ditambahkan lewat Barang UMKM → Terima barang.');
     return await tx(db, async () => {
       assert(!await one(db, 'SELECT id FROM merchandise_products WHERE sku=?', sku), 'Kode barang sudah dipakai.', 409);
       const saved = await insert(db, 'merchandise_products', {
@@ -155,8 +558,17 @@ export async function merchandiseRoutes(c) {
       const old = await get(db, 'merchandise_products', id);
       const values = {};
       if (b.name !== undefined) values.name = text(b.name, 'Nama barang', 160);
-      if (b.sell_price !== undefined) values.sell_price = price(b.sell_price);
-      if (b.buy_price !== undefined) values.buy_price = price(b.buy_price);
+      if (old.umkm_partner_id) {
+        assert(b.sell_price === undefined, 'Harga jual barang UMKM dihitung otomatis dari harga UMKM. Ubah harga UMKM-nya.');
+        if (b.buy_price !== undefined) {
+          const cost = umkmPrice(b.buy_price);
+          values.buy_price = cost;
+          values.sell_price = umkmSellPrice(cost);
+        }
+      } else {
+        if (b.sell_price !== undefined) values.sell_price = price(b.sell_price);
+        if (b.buy_price !== undefined) values.buy_price = price(b.buy_price);
+      }
       if (b.is_active !== undefined) {
         assert(typeof b.is_active === 'boolean', 'Status barang tidak valid.');
         values.is_active = Number(b.is_active);
@@ -179,6 +591,8 @@ export async function merchandiseRoutes(c) {
     return await tx(db, async () => {
       const product = await get(db, 'merchandise_products', id);
       assert(product.row_version === b.row_version, 'Stok berubah. Muat ulang daftar barang.', 409);
+      const umkm = Boolean(product.umkm_partner_id);
+      assert(!umkm || kind === 'TRANSFER' || kind === 'ADJUST', 'Stok barang UMKM bertambah lewat Barang UMKM → Terima barang dan berkurang lewat Takeout.', 409);
       const current = product[stockColumn(location)], source = location === 'GUDANG' ? 'DISPLAY' : 'GUDANG';
       let changes;
       if (kind === 'INITIAL') {
@@ -218,7 +632,17 @@ export async function merchandiseRoutes(c) {
           target: amount
         }];
       }
-      const moved = await applyStock(db, user, product, kind, changes, reason);
+      let extra = {};
+      if (umkm && kind === 'ADJUST') {
+        const delta = amount - Number(current);
+        const borne = b.loss_borne_by === undefined || b.loss_borne_by === null || b.loss_borne_by === '' ? null : enumValue(b.loss_borne_by, ['BP', 'UMKM'], 'Tanggungan selisih');
+        assert(delta === 0 || borne, 'Pilih apakah selisih koreksi barang UMKM ditanggung BP.');
+        extra = {
+          unit_cost: Number(product.buy_price),
+          umkm_loss_borne_by: delta === 0 ? null : borne
+        };
+      }
+      const moved = await applyStock(db, user, product, kind, changes, reason, null, extra);
       await audit(db, user, 'STOCK_' + kind, 'merchandise_products', id, {
         changes: moved.map(m => ({
           location: m.location,
@@ -238,15 +662,15 @@ export async function merchandiseRoutes(c) {
   }
   if (part === 'stock' && method === 'GET') {
     await requireAccess(db, user, 'merchandise.stock.read');
-    const since = url.searchParams.get('from');
+    const since = url.searchParams.get('from'), costs = await canCosts(db, user);
     if (!since) return {
-      items: await all(db, `${stockHistory} ORDER BY m.created_at DESC,m.id DESC LIMIT 2000`)
+      items: (await all(db, `${stockHistory} ORDER BY m.created_at DESC,m.id DESC LIMIT 2000`)).map(m => withoutCost(m, costs))
     };
     const from = date(since);
     return {
       from,
       limit: STOCK_EXPORT_LIMIT,
-      items: await movementsSince(db, from)
+      items: (await movementsSince(db, from)).map(m => withoutCost(m, costs))
     };
   }
   if (part === 'stock-export' && !id && method === 'GET') {
@@ -254,12 +678,13 @@ export async function merchandiseRoutes(c) {
     await requireAccess(db, user, 'merchandise.reports.export');
     await requireAccess(db, user, 'merchandise.stock.read');
     const {from, to} = dateRange(url);
+    const costs = await canCosts(db, user);
     return await tx(db, async () => ({
       from,
       to,
       stock: await productList(db, user),
       sales: await saleList(db, user, from, to),
-      movements: await movementsSince(db, from)
+      movements: (await movementsSince(db, from)).map(m => withoutCost(m, costs))
     }));
   }
   if (part === 'sales' && method === 'GET' && !id) {
@@ -287,9 +712,11 @@ export async function merchandiseRoutes(c) {
         assert(product.is_active === 1, 'Barang tidak aktif.', 409);
         assert(product.stock_qty !== null, 'Stok awal barang belum diisi.', 409);
         assert(product.stock_qty >= item.quantity, product.warehouse_qty > 0 ? `Stok display ${product.name} tidak mencukupi (tersisa ${product.stock_qty}). Gudang masih ${product.warehouse_qty}: catat "Pindah ke display" dulu.` : `Stok ${product.name} tidak mencukupi.`, 409);
+        const partner = product.umkm_partner_id ? await get(db, 'merchandise_umkm_partners', product.umkm_partner_id) : null;
         return {
           ...item,
           product,
+          partner,
           subtotal: item.quantity * product.sell_price,
           cost_total: item.quantity * product.buy_price
         };
@@ -317,7 +744,10 @@ export async function merchandiseRoutes(c) {
           quantity: item.quantity,
           unit_price: item.product.sell_price,
           unit_cost: item.product.buy_price,
-          subtotal: item.subtotal
+          subtotal: item.subtotal,
+          umkm_partner_id: item.partner?.id ?? null,
+          umkm_partner_name: item.partner?.name ?? null,
+          umkm_markup_pct: item.partner ? UMKM_MARKUP_PCT : null
         });
         await applyStock(db, user, item.product, 'SALE', [{
           location: 'DISPLAY',
@@ -344,7 +774,9 @@ export async function merchandiseRoutes(c) {
       const sale = await get(db, 'merchandise_sales', id);
       assert(sale.status === 'COMPLETED', 'Transaksi sudah dibatalkan.', 409);
       assert(sale.row_version === b.row_version, 'Transaksi berubah. Muat ulang.', 409);
-      for (const item of await saleItems(db, id)) {
+      const items = await saleItems(db, id);
+      assert(!items.some(item => item.umkm_partner_id) || monthOf(sale.sold_on) === monthOf(today()), 'Transaksi bulan sebelumnya yang berisi barang UMKM tidak dapat dibatalkan, karena laporan bulanannya menjadi dasar pembayaran Keuangan kepada UMKM.', 409);
+      for (const item of items) {
         const product = await get(db, 'merchandise_products', item.product_id);
         await applyStock(db, user, product, 'VOID', [{
           location: 'DISPLAY',
@@ -371,13 +803,21 @@ export async function merchandiseRoutes(c) {
     await requireAccess(db, user, 'merchandise.reports.read');
     const {from, to} = dateRange(url), sales = await saleList(db, user, from, to);
     const summary = totals(sales), costs = await canCosts(db, user);
+    const next = new Date(Date.parse(`${to}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    const start = witaMidnight(from), end = witaMidnight(next);
     return {
       from,
       to,
       summary: costs ? summary : (({cost, ...rest}) => rest)(summary),
       sales,
       stock: await productList(db, user),
-      movements: await has(db, user, 'merchandise.stock.read') ? await all(db, 'SELECT m.*,p.sku,p.name product_name FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id WHERE substr(m.created_at,1,10)>=? AND substr(m.created_at,1,10)<=? ORDER BY m.created_at DESC', from, to) : []
+      movements: await has(db, user, 'merchandise.stock.read') ? (await all(db, `SELECT m.*,p.sku,p.name product_name,p.umkm_partner_id,mp.name umkm_partner_name
+          FROM merchandise_stock_movements m JOIN merchandise_products p ON p.id=m.product_id
+          LEFT JOIN merchandise_umkm_partners mp ON mp.id=p.umkm_partner_id
+          WHERE (p.umkm_partner_id IS NULL AND substr(m.created_at,1,10) BETWEEN ? AND ?)
+            OR (p.umkm_partner_id IS NOT NULL AND m.created_at>=? AND m.created_at<?)
+          ORDER BY m.created_at DESC`, from, to, start, end)).map(m => withoutCost(m, costs)) : [],
+      umkm_losses: await umkmLossesForReport(db, start, end, costs)
     };
   }
   if (part === 'reports' && p[2] === 'export' && method === 'POST') {
