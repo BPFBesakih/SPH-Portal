@@ -105,7 +105,8 @@ test('hanya sekali: impor kedua ditolak, batalkan mengembalikan angka, lalu bole
 test('masa uji coba: bentrok 15 menit dengan penilaian portal dilewati, ID portal ditolak, ID kembar di berkas dilewati',t=>{
   const f=fixture(t);
   const link=f.route(f.users.manager,'links','POST',{action:'create',pos:1}).link;
-  const portalAt=Date.now()-2*DAY,portalId=crypto.randomUUID();
+  const portalDay=witaDate(Date.now()-2*DAY);
+  const portalAt=Date.parse(wita(portalDay,'12:00')),portalId=crypto.randomUUID();
   tx(f.db,()=>ingestGuideEvaluations(f.db,{id:link.id,pos:1},[{evaluationId:portalId,guideId:'G-001',guideName:'x',pos:1,timestamp:new Date(portalAt).toISOString(),criteria:{uniform:1,idCard:true,etika:1},catatan:''}],portalAt+60000));
   const twin=crypto.randomUUID();
   const rows=[

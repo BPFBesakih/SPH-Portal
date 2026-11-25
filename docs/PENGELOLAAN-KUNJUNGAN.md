@@ -309,14 +309,14 @@ Paket `portal-api` dapat dibangun ulang dengan hash yang sama; `guide-form` tida
 
 ### Rilis review negatif & komplain (branch `claude/kunjungan-review-komplain`)
 
-Dibangun di atas master `2fcaa8c` (PR #43). Urutan penting: `guide-form` baru butuh tabel baru, dan PWA 2.4.0 baru mengirim catatan setelah `guide-form` baru aktif.
+Diuji di atas master `43ce351` (PR #45, Barang Titipan UMKM). Urutan penting: `guide-form` baru butuh tabel baru, dan PWA 2.4.0 baru mengirim catatan setelah `guide-form` baru aktif.
 
 1. SQL Editor: `20261123100000_visit_guest_reports.sql`. Aditif (tabel `visit_guest_reports`, 10 jenis keluhan contoh, kolom `pot_review` bawaan 5) dan aman dijalankan ulang; `guide-form` dan `portal-api` yang aktif tetap berjalan.
 2. Edge Function `guide-form`: simpan dulu versi aktif (`5dab0844…`) sebagai titik kembali, lalu deploy `supabase/deploy/guide-form/index.ts` (SHA-256 `a69677b73cfa1bd0bf510761043a3bee51e5a3a19ce971c0eb581a0fe49746c1`).
 3. Edge Function `portal-api`: unduh versi aktif, simpan salinannya, hitung SHA-256-nya.
-   - Bila sama dengan `650d36a28dccff137e2b2db17fca2cbe4ceea8a6df88b88df350794b507b1437` (paket master `2fcaa8c`, PR #43), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `d127d211cc53b0ce9441acc94f0f99d1a9a8881bbb1af30b79855e7894e1227f`).
+   - Bila sama dengan `fca1c65b1d727606edab921c1b0b7131b696aaa086498cbc368fc5cc3b2c16b5` (paket master `43ce351`, PR #45), deploy `supabase/deploy/portal-api/index.ts` (SHA-256 `94eaa33e088d10fdeeeac168739fecfcb2d3591e0285f07ce123fe7a8b35acae`).
    - Bila berbeda, jalankan `node scripts/build-visits-update.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya (hanya lingkup `__visits` yang diganti).
-4. Merge ke `master`: Pages menayangkan PWA 2.4.0 dan ruang kerja (bundel `portal-161a18eea267.js` + `portal-53ac5d8c142e.css`). HP pos memperbarui diri saat dibuka dalam keadaan online. Bila Pages sempat tayang sebelum langkah 2, catatan menunggu di HP dan terkirim sendiri setelahnya.
+4. Merge ke `master`: Pages menayangkan PWA 2.4.0 dan ruang kerja (bundel `portal-d69728d23f8f.js` + `portal-3e51e0376750.css`). HP pos memperbarui diri saat dibuka dalam keadaan online. Bila Pages sempat tayang sebelum langkah 2, catatan menunggu di HP dan terkirim sendiri setelahnya.
 5. Persiapan (Pengelola Kunjungan): pastikan **daftar petugas** di Aturan Nilai terisi (nama petugas wajib untuk catatan), periksa daftar jenis review negatif/komplain dan potongan bawaan. Di HP pos: Pengaturan → Tes Koneksi, catat satu review negatif uji, lalu tolak di Verifikasi.
 
 Rollback:

@@ -70,7 +70,16 @@ const section=(title,movements,describe)=>({
 });
 const atLocation=m=>locationLabel(m.location)+': '+(m.reason||m.kind);
 const transferText=m=>(m.location==='DISPLAY'?'Gudang → Display':'Display → Gudang')+': '+(m.reason||m.kind);
-const reportSheet=(title,period,rows,warehouse,movements)=>{
+// Barang titipan UMKM bukan aset BP: tidak masuk tabel stok resmi (I–VII) maupun nilai stok,
+// tetapi punya bagian VIII per mitra (stok awal, diterima, terjual, takeout, koreksi, akhir).
+const UMKM_TITLE='VIII. STOK BARANG UMKM (TITIPAN, BUKAN MILIK BP)';
+const emptyUmkm=()=>({received:0,sold:0,takeout:0,adjustment:0,returned:0,borneBp:0});
+const umkmSection=(groups,begin,end,activity)=>groups.length?{title:UMKM_TITLE,groups:groups.map(group=>({name:group.name,rows:group.products.map((p,i)=>{
+  const q=activity?.get(p.sku)||emptyUmkm();
+  const note=[q.returned?'Ada pembatalan penjualan +'+q.returned:'',q.borneBp?'Selisih ditanggung BP '+(q.borneBp>0?'−':'+')+Math.abs(q.borneBp):''].filter(Boolean).join('; ');
+  return {no:i+1,name:p.name,opening:begin.get(p.sku),received:q.received,sold:q.sold,takeout:q.takeout,adjustment:q.adjustment,closing:end.get(p.sku),note};
+})}))}:null;
+const reportSheet=(title,period,rows,warehouse,movements,umkm=null)=>{
   // Hitungan pertama gudang adalah stok awal gudang (tabel III), bukan barang masuk.
   const arrivals=movements.filter(m=>m.kind==='IN'||(m.kind==='INITIAL'&&m.location==='DISPLAY'));
   const transfers=movements.filter(m=>m.kind==='TRANSFER'&&n(m.quantity_delta)>0);
@@ -83,7 +92,8 @@ const reportSheet=(title,period,rows,warehouse,movements)=>{
     summary:summary(rows),columns,rows,total:stockTotals(rows),
     warehouse:{title:'III. STOK GUDANG',rows:warehouse,total:warehouseTotals(warehouse),canCost:rows[0]?.unitCost!==null&&rows[0]?.unitCost!==undefined},
     sections:[section('IV. BARANG MASUK',arrivals,atLocation),section('V. PINDAH STOK',transfers,transferText),
-      section('VI. BARANG KELUAR',exits,atLocation),section('VII. PEMBATALAN / KOREKSI POSITIF',returns,atLocation)]
+      section('VI. BARANG KELUAR',exits,atLocation),section('VII. PEMBATALAN / KOREKSI POSITIF',returns,atLocation)],
+    ...(umkm?{umkm}:{})
   };
 };
 const emptyDisplay=()=>({sold:0,received:0,returned:0,adjustment:0,moved:0});
@@ -98,7 +108,9 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
   if(!stock.length)throw new Error('Katalog barang belum tersedia.');
   if(movements.length>=MOVEMENT_LIMIT)throw new Error('Jumlah mutasi mencapai batas API ('+MOVEMENT_LIMIT.toLocaleString('id-ID')+'). Ekspor ditunda agar laporan tidak terpotong.');
   const dates=dayList(from,to),dateSet=new Set(dates);
-  const products=[...stock].sort((a,b)=>String(a.sku).localeCompare(String(b.sku),'id'));
+  const umkmStock=stock.filter(p=>p.umkm_partner_id);
+  const products=stock.filter(p=>!p.umkm_partner_id).sort((a,b)=>String(a.sku).localeCompare(String(b.sku),'id'));
+  if(!products.length)throw new Error('Katalog barang belum tersedia.');
   if(products.some(p=>p.stock_qty===null||!Number.isSafeInteger(Number(p.stock_qty))))
     throw new Error('Masih ada barang yang belum memiliki saldo stok valid.');
   if(products.some(p=>counted(p.warehouse_qty)&&!Number.isSafeInteger(Number(p.warehouse_qty))))
@@ -108,8 +120,26 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
   const afterFrom=new Map(products.map(p=>[p.sku,0])),warehouseAfterFrom=new Map(products.map(p=>[p.sku,0]));
   const warehouseStart=new Map(),detailed=[];
   const bucket=(map,day,sku,empty)=>{if(!map.has(day))map.set(day,new Map());const days=map.get(day);if(!days.has(sku))days.set(sku,empty());return days.get(sku);};
+  // Barang UMKM: total display + gudang. Pindah stok saling meniadakan; pembatalan penjualan
+  // mengurangi jumlah terjual; pembatalan tanda terima/takeout tercatat dengan jenis yang sama.
+  const umkmBySku=new Map(umkmStock.map(p=>[p.sku,p])),umkmAfterFrom=new Map(umkmStock.map(p=>[p.sku,0])),umkmByDay=new Map(),sheetMovements=[];
   for(const raw of movements){
     const m={...raw,witaDay:witaDay(raw.created_at),location:location(raw)};
+    if(umkmBySku.has(m.sku)){
+      const delta=Number(m.quantity_delta);
+      if(!Number.isSafeInteger(delta))throw new Error('Jumlah mutasi tidak valid: '+m.sku);
+      if(m.witaDay>=from)umkmAfterFrom.set(m.sku,umkmAfterFrom.get(m.sku)+delta);
+      if(!dateSet.has(m.witaDay))continue;
+      sheetMovements.push(m);
+      const item=bucket(umkmByDay,m.witaDay,m.sku,emptyUmkm);
+      if(m.kind==='IN'||m.kind==='INITIAL')item.received+=delta;
+      else if(m.kind==='SALE')item.sold-=delta;
+      else if(m.kind==='VOID'){item.sold-=delta;item.returned+=delta;}
+      else if(m.kind==='TAKEOUT')item.takeout-=delta;
+      else if(m.kind==='ADJUST'){item.adjustment+=delta;if(m.umkm_loss_borne_by==='BP')item.borneBp-=delta;}
+      else if(m.kind!=='TRANSFER')throw new Error('Jenis mutasi barang UMKM belum didukung pada ekspor: '+m.kind);
+      continue;
+    }
     if(!bySku.has(m.sku))throw new Error('Mutasi untuk SKU tidak ditemukan: '+m.sku);
     const delta=Number(m.quantity_delta);
     if(!Number.isSafeInteger(delta))throw new Error('Jumlah mutasi tidak valid: '+m.sku);
@@ -121,7 +151,7 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
       }else if(m.witaDay>=from)warehouseAfterFrom.set(m.sku,warehouseAfterFrom.get(m.sku)+delta);
     }else if(m.witaDay>=from)afterFrom.set(m.sku,afterFrom.get(m.sku)+delta);
     if(!dateSet.has(m.witaDay))continue;
-    detailed.push(m);
+    detailed.push(m);sheetMovements.push(m);
     if(m.location==='GUDANG'){
       if(m.kind==='INITIAL')continue;
       const item=bucket(warehouseByDay,m.witaDay,m.sku,emptyWarehouse);
@@ -140,11 +170,12 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
     else throw new Error('Jenis mutasi belum didukung pada ekspor: '+m.kind);
   }
   const revenueByDay=new Map();
-  const paid=sales.filter(s=>s.status==='COMPLETED');
+  const paid=sales.filter(s=>s.status==='COMPLETED'&&dateSet.has(s.sold_on));
   for(const sale of paid){
     if(!dateSet.has(sale.sold_on))continue;
     if(!revenueByDay.has(sale.sold_on))revenueByDay.set(sale.sold_on,new Map());
     for(const item of sale.items||[]){
+      if(item.umkm_partner_id||umkmBySku.has(item.sku))continue;
       const revenue=revenueByDay.get(sale.sold_on);
       revenue.set(item.sku,n(revenue.get(item.sku))+n(item.subtotal));
     }
@@ -195,6 +226,38 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
       received:known?q.received:null,moved:known?-q.moved:null,adjustment:known?q.adjustment:null,
       closing:known?close:null,closingValue:known&&canCost?close*unitCost:null,unitCost,note:notes.join('; ')};
   });
+  const umkmOpening=new Map(umkmStock.map(p=>{
+    const balance=n(p.stock_qty)+n(p.warehouse_qty)-umkmAfterFrom.get(p.sku);
+    if(balance<0)throw new Error('Saldo historis barang UMKM negatif untuk '+p.sku+'; data mutasi perlu direkonsiliasi.');
+    return [p.sku,balance];
+  }));
+  const umkmActivity=new Set(sheetMovements.map(m=>m.sku));
+  for(const sale of paid)for(const item of sale.items||[])if(umkmBySku.has(item.sku))umkmActivity.add(item.sku);
+  const umkmInPeriod=umkmStock.filter(p=>umkmOpening.get(p.sku)>0||umkmActivity.has(p.sku));
+  const withUmkm=umkmInPeriod.length>0;
+  const umkmGroups=[];
+  for(const p of umkmInPeriod.sort((a,b)=>String(a.umkm_partner_name).localeCompare(String(b.umkm_partner_name),'id')||String(a.sku).localeCompare(String(b.sku),'id',{numeric:true}))){
+    let group=umkmGroups.find(g=>g.id===p.umkm_partner_id);
+    if(!group)umkmGroups.push(group={id:p.umkm_partner_id,name:p.umkm_partner_name||'',products:[]});
+    group.products.push(p);
+  }
+  const umkmTotals=new Map(umkmStock.map(p=>[p.sku,emptyUmkm()]));let umkmRunning=new Map(umkmOpening);
+  const umkmDaily=new Map();
+  for(const day of dates){
+    const begin=new Map(umkmRunning),changes=umkmByDay.get(day)||new Map();
+    for(const p of umkmStock){
+      const q=changes.get(p.sku)||emptyUmkm(),balance=umkmRunning.get(p.sku)+q.received-q.sold-q.takeout+q.adjustment;
+      if(balance<0)throw new Error('Saldo barang UMKM negatif pada '+day+' untuk '+p.sku+'.');
+      umkmRunning.set(p.sku,balance);
+      const acc=umkmTotals.get(p.sku);for(const key of Object.keys(acc))acc[key]+=q[key];
+    }
+    umkmDaily.set(day,umkmSection(umkmGroups,begin,new Map(umkmRunning),changes));
+  }
+  const umkmLater=m=>witaDay(m.created_at)>to;
+  for(const p of umkmStock){
+    const want=n(p.stock_qty)+n(p.warehouse_qty)-movements.filter(m=>m.sku===p.sku&&umkmLater(m)).reduce((s,m)=>s+n(m.quantity_delta),0);
+    if(want!==umkmRunning.get(p.sku))throw new Error('Stok barang UMKM periode tidak sesuai mutasi ('+p.sku+'); ekspor dibatalkan.');
+  }
   const empty=()=>new Map();
   const baseline=makeRows(opening,opening,empty(),empty());
   const warehouseBaseline=warehouseRows(warehouseOpening,warehouseOpening,empty(),'','');
@@ -226,7 +289,7 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
     }
     const rows=makeRows(begin,running,changes,revenue);
     const wrows=warehouseRows(warehouseBegin,warehouseRunning,warehouseChanges,day,day);
-    dailySheets.push(reportSheet(String(Number(day.slice(8))),dateLabel(day),rows,wrows,detailed.filter(m=>m.witaDay===day)));
+    dailySheets.push(reportSheet(String(Number(day.slice(8))),dateLabel(day),rows,wrows,detailed.filter(m=>m.witaDay===day),umkmDaily.get(day)));
   }
   const summaryRows=makeRows(opening,running,totalsBySku,revenues);
   const warehouseSummary=warehouseRows(warehouseOpening,warehouseRunning,warehouseTotalsBySku,from,to);
@@ -240,32 +303,34 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
       n(p.warehouse_qty)-movements.filter(m=>m.sku===p.sku&&location(m)==='GUDANG'&&m.kind!=='INITIAL'&&later(m)).reduce((s,m)=>s+n(m.quantity_delta),0);
     if((counted(want)?want:null)!==(counted(end)?end:null))throw new Error('Stok gudang periode tidak sesuai mutasi ('+p.sku+'); ekspor dibatalkan.');
   }
+  // Kolom PEMILIK hanya bila ada barang UMKM, supaya lembar tanpa barang UMKM tetap sama.
+  const owner=item=>item.umkm_partner_id||umkmBySku.has(item.sku)?'UMKM '+(item.umkm_partner_name||umkmBySku.get(item.sku)?.umkm_partner_name||''):'BP';
   const salesRows=paid.flatMap(s=>(s.items||[]).map(i=>({
-    date:s.sold_on,no:s.sale_no,method:s.payment_method,sku:i.sku,name:i.product_name,qty:i.quantity,
+    date:s.sold_on,no:s.sale_no,method:s.payment_method,sku:i.sku,name:i.product_name,...(withUmkm?{owner:owner(i)}:{}),qty:i.quantity,
     sell_price:i.unit_price,subtotal:i.subtotal,...(canCost?{cost:i.unit_cost,profit:n(i.subtotal)-n(i.unit_cost)*n(i.quantity)}:{})
   })));
   const saleColumns=[
     {key:'date',header:'TANGGAL',kind:'date'},{key:'no',header:'NOMOR TRANSAKSI',width:26},
     {key:'method',header:'PEMBAYARAN'},{key:'sku',header:'SKU'},
-    {key:'name',header:'JENIS BARANG',width:35},{key:'qty',header:'JUMLAH',kind:'number'},
+    {key:'name',header:'JENIS BARANG',width:35},...(withUmkm?[{key:'owner',header:'PEMILIK',width:28}]:[]),{key:'qty',header:'JUMLAH',kind:'number'},
     {key:'sell_price',header:'HARGA JUAL',kind:'money'},{key:'subtotal',header:'TOTAL PENJUALAN',kind:'money'},
-    ...(canCost?[{key:'cost',header:'HARGA MODAL',kind:'money'},{key:'profit',header:'LABA KOTOR',kind:'money'}]:[])
+    ...(canCost?[{key:'cost',header:withUmkm?'HARGA MODAL / HARGA UMKM':'HARGA MODAL',kind:'money'},{key:'profit',header:withUmkm?'LABA KOTOR / KEUNTUNGAN BP':'LABA KOTOR',kind:'money'}]:[])
   ];
   const movementSheet={
     name:'Mutasi Stok',
     columns:[
       {key:'created_at',header:'WAKTU (WITA)',kind:'datetime',width:24},
-      {key:'sku',header:'SKU'},{key:'product_name',header:'JENIS BARANG',width:35},
+      {key:'sku',header:'SKU'},{key:'product_name',header:'JENIS BARANG',width:35},...(withUmkm?[{key:'owner',header:'PEMILIK',width:28}]:[]),
       {key:'kind',header:'JENIS MUTASI'},{key:'place',header:'LOKASI'},{key:'quantity_delta',header:'PERUBAHAN',kind:'number'},
       {key:'balance_before',header:'SALDO SEBELUM',kind:'number'},
       {key:'balance_after',header:'SALDO SESUDAH',kind:'number'},
       {key:'reason',header:'KETERANGAN',kind:'notes',width:55}
-    ],rows:detailed.map(m=>({...m,place:locationLabel(m.location)}))
+    ],rows:sheetMovements.map(m=>({...m,place:locationLabel(m.location),...(withUmkm?{owner:owner(m),reason:m.reason+(m.umkm_loss_borne_by==='BP'?' · selisih ditanggung BP':m.umkm_loss_borne_by==='UMKM'?' · selisih tidak ditanggung BP':'')}:{})}))
   };
   const sheets=[
-    reportSheet('MASTER','SALDO AWAL '+dateLabel(from),baseline,warehouseBaseline,[]),
+    reportSheet('MASTER','SALDO AWAL '+dateLabel(from),baseline,warehouseBaseline,[],umkmSection(umkmGroups,umkmOpening,umkmOpening,new Map())),
     ...dailySheets,
-    reportSheet('MASTER AKHIR',periodLabel(from,to),summaryRows,warehouseSummary,detailed),
+    reportSheet('MASTER AKHIR',periodLabel(from,to),summaryRows,warehouseSummary,detailed,umkmSection(umkmGroups,umkmOpening,umkmRunning,umkmTotals)),
     {name:'Penjualan',columns:saleColumns,rows:salesRows},
     movementSheet
   ];
@@ -273,5 +338,6 @@ export function merchandiseMonthlyWorkbook({from,to,stock=[],sales=[],movements=
   return {blob,filename:'laporan-stok-merchandise-'+from+'-sd-'+to+'.xlsx',count:salesRows.length,
     days:dates.length,products:products.length,totalOpening:sum(summaryRows,'opening'),
     totalClosing:sum(summaryRows,'closing'),warehouseClosing:warehouseSummary.some(p=>counted(p.closing))?sum(warehouseSummary,'closing'):null,
+    umkmClosing:withUmkm?[...umkmRunning.values()].reduce((a,b)=>a+b,0):null,
     salesRevenue:sum(summaryRows,'revenue'),sheetCount:sheets.length};
 }

@@ -19,6 +19,7 @@ const resourceNames={
   'merchandise.stock':'Bisnis: stok barang',
   'merchandise.sales':'Bisnis: penjualan',
   'merchandise.reports':'Bisnis: laporan penjualan',
+  'merchandise.umkm':'Bisnis: barang titipan UMKM',
   'visits.dashboard':'Kunjungan: dashboard penilaian guide',
   'visits.guides':'Kunjungan: data guide',
   'visits.records':'Kunjungan: daftar penilaian',
@@ -37,7 +38,7 @@ const actionNames={
   verify:'Verifikasi',sensitive:'Lihat data sensitif',
   costs:'Lihat harga modal',record:'Catat stok',adjust:'Koreksi stok',
   void:'Batalkan transaksi',devices:'Daftarkan HP absen',settings:'Atur titik absen',
-  oversee:'Awasi',assign:'Tunjuk petugas'
+  oversee:'Awasi',assign:'Tunjuk petugas',receive:'Terima & takeout barang'
 };
 const escapeHtml=value=>String(value).replace(/[&<>"']/g,char=>({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
