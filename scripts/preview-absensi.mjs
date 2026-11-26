@@ -27,9 +27,10 @@ const db=openDb(resolve(dir,'portal.sqlite'));seedPermissions(db);
 const password=hashPasswordSync('Preview2026!');
 
 // Struktur dan pegawai fiktif hanya bila basis data pratinjau masih kosong.
-if(!one(db,"SELECT id FROM org_units WHERE code='ABS-KANTOR'")){
+run(db,"UPDATE org_units SET code='BPB_S' WHERE code='ABS-KANTOR' AND NOT EXISTS (SELECT 1 FROM org_units WHERE code='BPB_S')");
+if(!one(db,"SELECT id FROM org_units WHERE code='BPB_S'")){
   const unit=(code,name,parent=null)=>insert(db,'org_units',{code,name,parent_id:parent,is_active:1});
-  const office=unit('ABS-KANTOR','Sekretariat Contoh'),pos1=unit('ABS-POS1','Pos Contoh 1',office.id),pos2=unit('ABS-POS2','Pos Contoh 2',office.id);
+  const office=unit('BPB_S','Sekretariat Contoh'),pos1=unit('ABS-POS1','Pos Contoh 1',office.id),pos2=unit('ABS-POS2','Pos Contoh 2',office.id);
   const position=(code,name,u)=>insert(db,'positions',{code,name,org_unit_id:u.id,is_active:1});
   const employee=(no,name,pos,boss=null,status='Tetap')=>{const e=insert(db,'employees',{employee_no:no,full_name:name,employment_status:status,joined_on:'2020-01-01',is_active:1,phone:'081200000'+no.slice(-3)});insert(db,'employee_placements',{employee_id:e.id,position_id:pos.id,supervisor_employee_id:boss?.id||null,valid_from:'2020-01-01',is_primary:1});return e;};
   const head=employee('ABS-001','Kepala Contoh',position('ABS-P01','Kepala Sekretariat Contoh',office));

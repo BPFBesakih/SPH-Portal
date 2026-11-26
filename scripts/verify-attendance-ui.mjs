@@ -22,7 +22,7 @@ const {chromium}=createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE||'
 const shots=process.argv[2]?resolve(process.argv[2]):null;if(shots)mkdirSync(shots,{recursive:true});
 const freePort=()=>new Promise(r=>{const probe=createServer().listen(0,'127.0.0.1',()=>{const {port}=probe.address();probe.close(()=>r(port));});});
 const db=openDb(':memory:');seedPermissions(db);
-const office=insert(db,'org_units',{code:'UJI-U0',name:'Kantor Uji',is_active:1}),post=insert(db,'org_units',{code:'UJI-U1',name:'Pos Uji',parent_id:office.id,is_active:1});
+const office=insert(db,'org_units',{code:'BPB_S',name:'Kantor Uji',is_active:1}),post=insert(db,'org_units',{code:'UJI-U1',name:'Pos Uji',parent_id:office.id,is_active:1});
 const position=(code,name,unit)=>insert(db,'positions',{code,name,org_unit_id:unit.id,is_active:1});
 position('BPB_PLK_P081_STAF','Staf Kebersihan Bangunan',post);
 position('BPB_PLK_P082_THL','THL Pertamanan',post);
@@ -34,9 +34,8 @@ const guard=employee('UJI-002','Petugas Uji Satu',position('UJI-P2','Petugas Pos
 const helper=employee('UJI-003','Pekerja Harian Uji',position('UJI-P3','THL Pos Uji',post),head);
 const user=insert(db,'users',{username:'absensi.uji',password_hash:hashPasswordSync('UjiAbsensi!2026'),employee_id:head.id,status:'ACTIVE',must_change_password:0,failed_login_count:0,password_changed_at:now()});
 insert(db,'user_roles',{user_id:user.id,role_id:one(db,"SELECT id FROM roles WHERE code='ABSENSI_PENGELOLA'").id,scope_kind:'ALL'});
-run(db,"INSERT INTO attendance_schedule_units VALUES (?, '2026-01-01')",office.id);
-for(let weekday=1;weekday<=6;weekday++)run(db,'INSERT INTO attendance_schedule_weekdays VALUES (?,?,?)',office.id,weekday,weekday===6?'10001':'10000');
-run(db,"INSERT INTO attendance_schedule_holidays VALUES ('2026-12-25','Natal')");
+// Tanggal uji tetap bisa dibuka kapan pun suite dijalankan.
+run(db,"UPDATE attendance_schedule_units SET starts_on='2026-01-01' WHERE org_unit_id=?",office.id);
 const port=await freePort(),base=`http://127.0.0.1:${port}`,dataDir=mkdtempSync(resolve(tmpdir(),'attendance-ui-'));
 const app=createApp({db,dataDir,origin:base});
 await new Promise(r=>app.server.listen(port,'127.0.0.1',r));

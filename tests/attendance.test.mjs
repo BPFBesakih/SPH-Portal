@@ -324,7 +324,6 @@ test('Sekretariat 07:30 WITA is accepted inside the point and uses actual time f
  const day='2026-11-24';
  run(f.db,'INSERT INTO attendance_schedule_units VALUES (?,?)',f.units.office.id,day);
  run(f.db,"INSERT INTO attendance_schedule_weekdays VALUES (?,2,'10000')",f.units.office.id);
- run(f.db,"INSERT INTO attendance_schedule_holidays VALUES ('2026-12-25','Natal') ON CONFLICT DO NOTHING");
  const schedule=await f.route(f.users.staff,'schedule','GET',{},'date='+day);
  const {shift}=schedule.rows.find(r=>r.employee.id===f.e.staff.id);
  assert.deepEqual([shift.code,shift.start_time,shift.end_time,shift.late_time],['10000','08:00','16:00','08:16']);
@@ -348,6 +347,39 @@ test('master shift SQLite sama dengan migrasi dan mengikuti jawaban SDM 26 Nov 2
   [['Ops. Parkir Shift 1','07:00','15:00'],['Kebersihan Parahyangan','08:00','16:00'],['Kebersihan Parahyangan 1/2 Shift','08:00','13:00']]);
  assert.equal(local.some(s=>s.code==='71001'),false,'71001 tidak dipakai');
 });
+test('pilot SQLite memuat kalender dan jadwal untuk Sekretariat lama maupun yang baru diimpor',t=>{
+ const dir=mkdtempSync(resolve(tmpdir(),'absen-pilot-')),path=resolve(dir,'portal.sqlite');
+ let db=new DatabaseSync(path);
+ t.after(()=>{if(db.isOpen)db.close();rmSync(dir,{recursive:true,force:true});});
+ db.exec(readFileSync(new URL('../schema.sql',import.meta.url),'utf8'));
+ const office=insert(db,'org_units',{code:'BPB_S',name:'Sekretariat',is_active:1});
+ db.close();
+ db=openDb(path);
+ const pattern=(conn,id)=>all(conn,'SELECT weekday_no,shift_code FROM attendance_schedule_weekdays WHERE org_unit_id=? ORDER BY weekday_no',id).map(row=>[row.weekday_no,row.shift_code]);
+ const expected=[[1,'10000'],[2,'10000'],[3,'10000'],[4,'10000'],[5,'10000'],[6,'10001']];
+ assert.deepEqual(pattern(db,office.id),expected);
+ assert.equal(one(db,'SELECT starts_on FROM attendance_schedule_units WHERE org_unit_id=?',office.id).starts_on,today());
+ const migration=readFileSync(new URL('../supabase/migrations/20261125132221_attendance_fixed_schedules.sql',import.meta.url),'utf8');
+ const holidays=[...migration.matchAll(/\('(\d{4}-\d\d-\d\d)', '([^']+)'\)/g)].map(([,date,name])=>[date,name]).sort();
+ assert.equal(holidays.length,61);
+ assert.deepEqual(all(db,'SELECT work_date,name FROM attendance_schedule_holidays ORDER BY work_date').map(r=>[r.work_date,r.name]),holidays);
+ run(db,'DELETE FROM attendance_schedule_weekdays WHERE org_unit_id=? AND weekday_no=6',office.id);
+ run(db,"UPDATE attendance_schedule_holidays SET name='Nama lokal' WHERE work_date='2026-12-25'");
+ db.close();
+ db=openDb(path);
+ assert.deepEqual(pattern(db,office.id),expected.slice(0,5));
+ assert.equal(one(db,"SELECT name FROM attendance_schedule_holidays WHERE work_date='2026-12-25'").name,'Nama lokal');
+
+ const imported=openDb(':memory:');
+ try{
+  const other=insert(imported,'org_units',{code:'LAIN',name:'Unit lain',is_active:1});
+  const inactive=insert(imported,'org_units',{code:'BPB_S',name:'Sekretariat',is_active:0});
+  assert.deepEqual(pattern(imported,other.id),[]);
+  assert.deepEqual(pattern(imported,inactive.id),[]);
+  run(imported,'UPDATE org_units SET is_active=1 WHERE id=?',inactive.id);
+  assert.deepEqual(pattern(imported,inactive.id),expected);
+ }finally{imported.close();}
+});
 test('DB lokal lama ikut terkoreksi saat skema dipasang ulang',t=>{
  const dir=mkdtempSync(resolve(tmpdir(),'absen-shift-'));
  const path=resolve(dir,'portal.sqlite');
@@ -367,7 +399,6 @@ test('Pelayanan Internal: kepala urusan dan koordinator mengikuti kalender Sekre
  const f=fixture(t),day='2026-11-24',galungan='2027-01-12';
  run(f.db,'INSERT INTO attendance_schedule_units VALUES (?,?)',f.units.office.id,day);
  run(f.db,"INSERT INTO attendance_schedule_weekdays VALUES (?,2,'10000')",f.units.office.id);
- run(f.db,"INSERT INTO attendance_schedule_holidays VALUES ('2026-12-25','Natal'),('2027-01-12','Penampahan Galungan')");
  run(f.db,'UPDATE positions SET code=?,name=? WHERE id=?','BPB_S_P011','Kepala Urusan Pengadaan & Pelayanan Internal',f.positions.boss.id);
  run(f.db,'UPDATE positions SET code=?,name=? WHERE id=?','BPB_S_P025','Koordinator Pelayanan Internal',f.positions.staff.id);
  const shiftPosition=insert(f.db,'positions',{code:'BPB_S_P056',name:'Staf Pelayanan Internal',org_unit_id:f.units.office.id,is_active:1});
