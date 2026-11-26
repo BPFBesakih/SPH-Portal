@@ -159,7 +159,7 @@ export async function adminRoutes(c) {
   }
   if (p[0] === 'settings') {
     await requireAccess(db, user, 'admin.roles.manage');
-    if (m === 'GET') return Object.fromEntries((await all(db, 'SELECT key,value FROM app_settings')).map(r => [r.key, r.value]));
+    if (m === 'GET') return Object.fromEntries((await all(db, "SELECT key,value FROM app_settings WHERE key<>'attendance_outside_office'")).map(r => [r.key, r.value]));
     if (m === 'PATCH') return await tx(db, async () => {
       assert(typeof b.allow_gap_publication === 'boolean', 'Pilihan kebijakan tidak valid.');
       await run(db, "UPDATE app_settings SET value=? WHERE key='allow_gap_publication'", String(b.allow_gap_publication));

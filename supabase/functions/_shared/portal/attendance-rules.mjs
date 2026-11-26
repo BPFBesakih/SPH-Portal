@@ -39,7 +39,8 @@ export const attendanceFlags = Object.freeze({
 export const outsideReasons = Object.freeze({
   DINAS_LUAR: 'Dinas luar',
   TUGAS_LAPANGAN: 'Tugas lapangan',
-  LAINNYA: 'Lainnya'
+  LAINNYA: 'Lainnya',
+  IZIN_LUAR_AREA: 'Izin absen di luar area kantor'
 });
 export const dayNoteKinds = Object.freeze({
   IZIN: 'Izin',

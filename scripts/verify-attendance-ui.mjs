@@ -22,14 +22,20 @@ const {chromium}=createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE||'
 const shots=process.argv[2]?resolve(process.argv[2]):null;if(shots)mkdirSync(shots,{recursive:true});
 const freePort=()=>new Promise(r=>{const probe=createServer().listen(0,'127.0.0.1',()=>{const {port}=probe.address();probe.close(()=>r(port));});});
 const db=openDb(':memory:');seedPermissions(db);
-const office=insert(db,'org_units',{code:'UJI-U0',name:'Kantor Uji',is_active:1}),post=insert(db,'org_units',{code:'UJI-U1',name:'Pos Uji',parent_id:office.id,is_active:1});
+const office=insert(db,'org_units',{code:'BPB_S',name:'Kantor Uji',is_active:1}),post=insert(db,'org_units',{code:'UJI-U1',name:'Pos Uji',parent_id:office.id,is_active:1});
 const position=(code,name,unit)=>insert(db,'positions',{code,name,org_unit_id:unit.id,is_active:1});
+position('BPB_PLK_P081_STAF','Staf Kebersihan Bangunan',post);
+position('BPB_PLK_P082_THL','THL Pertamanan',post);
+position('BPB_OP_P070','Staf Pelayanan Parkir',post);
+position('BPB_PLK_P074','Staf Keamanan Wilayah I',post);
 const employee=(no,name,pos,boss=null,phone=null)=>{const e=insert(db,'employees',{employee_no:no,full_name:name,employment_status:'Tetap',joined_on:'2020-01-01',is_active:1,phone});insert(db,'employee_placements',{employee_id:e.id,position_id:pos.id,supervisor_employee_id:boss?.id||null,valid_from:'2020-01-01',is_primary:1});return e;};
 const head=employee('UJI-001','Kepala Uji',position('UJI-P1','Kepala Kantor Uji',office));
 const guard=employee('UJI-002','Petugas Uji Satu',position('UJI-P2','Petugas Pos Uji',post),head,'0812-3456-7890');
 const helper=employee('UJI-003','Pekerja Harian Uji',position('UJI-P3','THL Pos Uji',post),head);
 const user=insert(db,'users',{username:'absensi.uji',password_hash:hashPasswordSync('UjiAbsensi!2026'),employee_id:head.id,status:'ACTIVE',must_change_password:0,failed_login_count:0,password_changed_at:now()});
 insert(db,'user_roles',{user_id:user.id,role_id:one(db,"SELECT id FROM roles WHERE code='ABSENSI_PENGELOLA'").id,scope_kind:'ALL'});
+// Tanggal uji tetap bisa dibuka kapan pun suite dijalankan.
+run(db,"UPDATE attendance_schedule_units SET starts_on='2026-01-01' WHERE org_unit_id=?",office.id);
 const port=await freePort(),base=`http://127.0.0.1:${port}`,dataDir=mkdtempSync(resolve(tmpdir(),'attendance-ui-'));
 const app=createApp({db,dataDir,origin:base});
 await new Promise(r=>app.server.listen(port,'127.0.0.1',r));
@@ -92,7 +98,49 @@ try{
   await portal.goto(base+'/');await portal.fill('#login-form [name=username]','absensi.uji');await portal.fill('#login-form [name=password]','UjiAbsensi!2026');await portal.click('#login-form [type=submit]');
   await portal.locator('.nav-link',{hasText:'Absensi'}).click();
   await portal.getByRole('heading',{name:'Absensi',exact:true}).waitFor();
-  assert.deepEqual(await portal.locator('[data-att=tab]').allTextContents(),['Hari ini','Rekap','Perlu dicek','HP Absen','Titik Absen','Absen saya']);
+  assert.deepEqual(await portal.locator('[data-att=tab]').allTextContents(),['Hari ini','Rekap','Perlu dicek','HP Absen','Titik Absen','Absen saya','Jadwal Kerja','Acuan Shift']);
+ });
+ await check('portal: Jadwal Kerja shows the unit shift and holidays for the selected date',async()=>{
+  await tab('Jadwal Kerja');
+  const dateInput=portal.getByLabel('Tanggal jadwal');
+  const result=portal.locator('#attendance-content tbody tr');
+  const chooseDate=async date=>{
+   const response=portal.waitForResponse(r=>r.url().includes('/api/attendance/schedule?date='+date)&&r.ok());
+   await dateInput.fill(date);
+   await portal.locator('[data-att-schedule-form]').getByRole('button',{name:'Terapkan'}).click();
+   await response;
+  };
+  await chooseDate('2026-11-28');
+  await result.getByText('10001',{exact:true}).waitFor();
+  assert.equal(await result.count(),1);
+  await result.getByText('13:00',{exact:true}).waitFor();
+  await result.getByText('08:16',{exact:true}).waitFor();
+  assert((await result.textContent()).includes('Kepala Uji'));
+  await chooseDate('2026-11-29');
+  await result.getByText('Libur mingguan',{exact:true}).waitFor();
+  await chooseDate('2026-12-25');
+  await result.getByText('Hari libur',{exact:true}).waitFor();
+  await result.getByText('Natal',{exact:true}).waitFor();
+ });
+ await check('portal: Acuan Shift shows all options for the selected position without assigning a shift',async()=>{
+  await tab('Acuan Shift');
+  const positionInput=portal.getByLabel('Posisi',{exact:true});
+  const rows=portal.locator('#attendance-content tbody tr');
+  await positionInput.selectOption('BPB_PLK_P081_STAF');
+  assert.equal(await rows.count(),6);
+  assert.deepEqual(await rows.last().locator('td').allTextContents(),['63006','Kebersihan Gedung C 1/2 Shift','08:00','13:00','08:16']);
+  await positionInput.selectOption('BPB_PLK_P082_THL');
+  await portal.getByRole('heading',{name:'THL Pertamanan',exact:true}).waitFor();
+  assert.deepEqual(await rows.first().locator('td').allTextContents(),['62001','Pertamanan','08:00','16:00','08:16']);
+  assert.equal(await rows.count(),2);
+  await positionInput.selectOption('BPB_OP_P070');
+  assert.deepEqual(await rows.locator('td:first-child').allTextContents(),['21001','21002','21003']);
+  assert.deepEqual(await rows.first().locator('td').allTextContents(),['21001','Ops. Parkir Shift 1','07:00','15:00','07:16']);
+  await positionInput.selectOption('BPB_PLK_P074');
+  assert.equal(await rows.count(),12);
+  await rows.getByText('07:00 (esok hari)',{exact:true}).waitFor();
+  assert.deepEqual(await rows.last().locator('td').allTextContents(),['73000','Keamanan Malam 0','22:00','06:00 (esok hari)','22:16']);
+  assert.equal(await portal.getByLabel('Tanggal jadwal').count(),0);
  });
  await check('portal: a point is placed with pasted Google Maps coordinates and drawn on the map with its radius',async()=>{
   await tab('Titik Absen');
@@ -156,19 +204,42 @@ try{
   assert.deepEqual(readdirSync(resolve(dataDir,'attendance')),[row.photo_storage_key]);
   assert.deepEqual(readFileSync(resolve(dataDir,'attendance',row.photo_storage_key)).subarray(0,3),Buffer.from([0xff,0xd8,0xff]));
  });
- await check('shared phone: outside the point the employee picks a reason and the check-in is flagged',async()=>{
+ await check('shared phone: the portal controls which employees can submit outside the radius',async()=>{
   await hp.getByRole('button',{name:'Selesai'}).click();await screen('Siapa yang absen?');
   await phone.setGeolocation({latitude:-8.3700,longitude:115.4512,accuracy:10});
   await hp.locator('[data-search]').fill('satu');
   await hp.locator('[data-action=choose]',{hasText:'Petugas Uji Satu'}).first().click();await hp.getByRole('button',{name:'Ya, benar'}).click();
-  await hp.locator('[data-action=kind][data-kind=IN]').click();
-  await hp.locator('[data-action=shoot]:not([disabled])').waitFor({timeout:15000});await hp.locator('[data-location]',{hasText:'Lokasi didapat'}).waitFor({timeout:15000});
-  await hp.locator('[data-action=shoot]').click();
-  await screen('Di luar titik absen');assert.match(await hp.locator('.status.warn').textContent(),/Anda \d+ m dari Kantor Uji/);
-  await hp.getByRole('button',{name:'Tugas lapangan'}).click();await hp.getByRole('button',{name:'Kirim absen'}).click();
+  let submissions=0;
+  const countSubmit=req=>{if(req.url().endsWith('/api/attendance-form/submit'))submissions++;};
+  hp.on('request',countSubmit);
+  await hp.evaluate(()=>{
+   window.__cameraCalls=0;
+   const devices=navigator.mediaDevices,open=devices.getUserMedia.bind(devices);
+   devices.getUserMedia=constraints=>{window.__cameraCalls++;return open(constraints);};
+  });
+  await hp.locator('[data-action=kind][data-kind=IN]').click();await screen('Absen ditolak');
+  assert.match(await hp.locator('.status.bad').textContent(),/di luar radius absen/);
+  assert.equal(await hp.evaluate(()=>window.__cameraCalls),0);assert.equal(submissions,0);
+  assert.equal(await hp.locator('[data-action=reason]').count(),0);
+  assert.equal(one(db,'SELECT count(*) n FROM attendance_events WHERE employee_id=?',guard.id).n,0);
+  await tab('Titik Absen');
+  const access=portal.locator('section.card').filter({has:portal.getByRole('heading',{name:'Absen di luar area kantor',exact:true})});
+  await access.getByRole('button',{name:'Beri akses'}).click();
+  const grant=dialog();await grant.getByRole('combobox').fill('Petugas Uji Satu');
+  await grant.getByRole('option',{name:/Petugas Uji Satu/}).click();
+  await grant.getByRole('button',{name:'Beri akses'}).click();
+  await access.getByText('Petugas Uji Satu',{exact:true}).waitFor();
+  await hp.getByRole('button',{name:'Kembali'}).click();
+  await hp.locator('[data-action=kind][data-kind=IN]').click();await screen('Selfie untuk absen MASUK');
+  await hp.locator('[data-action=shoot]:not([disabled])').click();
   await hp.locator('.success .where',{hasText:'Di luar titik'}).waitFor({timeout:20000});
   const row=one(db,'SELECT * FROM attendance_events WHERE employee_id=?',guard.id);
-  assert.deepEqual([row.within_point,row.outside_reason,JSON.parse(row.flags).includes('DI_LUAR_TITIK')],[0,'TUGAS_LAPANGAN',true]);
+  assert.deepEqual([row.within_point,row.outside_reason,row.outside_note,JSON.parse(row.flags).includes('DI_LUAR_TITIK')],[0,'IZIN_LUAR_AREA',null,true]);
+  assert.equal(await hp.evaluate(()=>window.__cameraCalls),1);assert.equal(submissions,1);hp.off('request',countSubmit);
+  portal.once('dialog',d=>d.accept());
+  await access.getByRole('button',{name:'Cabut akses'}).click();
+  await access.getByText('Belum ada pegawai yang diberi akses.').waitFor();
+  await tab('HP Absen');
   assert.deepEqual(await hp.evaluate(()=>window.__csp),[]);
  });
  await check('personal phone: the owner opens straight to MASUK/PULANG and can check in a colleague',async()=>{
@@ -178,6 +249,10 @@ try{
   await page.locator('.person .name',{hasText:'Petugas Uji Satu'}).waitFor();
   await page.locator('.status',{hasText:'Sudah absen masuk pukul'}).waitFor();
   assert.equal(await page.locator('[data-action=kind][data-kind=OUT]').getAttribute('class'),'suggested','PULANG disarankan karena sudah absen masuk di HP lain');
+  await own.setGeolocation({latitude:-8.3700,longitude:115.4512,accuracy:10});
+  await page.locator('[data-action=kind][data-kind=OUT]').click();await page.getByRole('heading',{name:'Absen ditolak'}).waitFor();
+  assert.equal(await page.locator('video,[data-action=reason]').count(),0);
+  await page.getByRole('button',{name:'Kembali'}).click();
   await page.getByRole('button',{name:'Absen untuk orang lain'}).click();await page.locator('#app h1',{hasText:'Siapa yang absen?'}).waitFor();
   assert.deepEqual(await page.locator('[data-lists] .group').allTextContents(),['Pemilik HP','Unit Pos Uji']);
   await own.close();

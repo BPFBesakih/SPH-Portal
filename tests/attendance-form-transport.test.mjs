@@ -44,9 +44,9 @@ test('missing client IP, broken JSON and oversized selfies are rejected before u
 });
 test('known errors keep their message and only whitelisted details; unknown failures are redacted',async()=>{
  const upstream=(status,body)=>async()=>Response.json(body,{status});
- let r=await handleAttendanceForm(request('submit'),env,upstream(422,{ok:false,error:'Anda 420 m dari Titik Kantor, di luar titik absen.',details:{code:'OUTSIDE_POINT',point_name:'Titik Kantor',distance_m:420.4,secret:'must-not-leak'}}));
- assert.equal(r.status,422);let data=await r.json();
- assert.deepEqual(data,{error:'Anda 420 m dari Titik Kantor, di luar titik absen.',details:{code:'OUTSIDE_POINT',point_name:'Titik Kantor',distance_m:420}});
+ let r=await handleAttendanceForm(request('check-location'),env,upstream(403,{ok:false,error:'Di luar radius absen.',details:{code:'OUTSIDE_FORBIDDEN',point_name:'Titik Kantor',distance_m:420.4,secret:'must-not-leak'}}));
+ assert.equal(r.status,403);let data=await r.json();
+ assert.deepEqual(data,{error:'Di luar radius absen.',details:{code:'OUTSIDE_FORBIDDEN',point_name:'Titik Kantor',distance_m:420}});
  r=await handleAttendanceForm(request('context'),env,upstream(401,{ok:false,error:'Jam HP berbeda jauh dari jam server.',details:{code:'CLOCK',server_time:'2026-11-05T01:00:00.000Z'}}));
  assert.equal(r.status,401);assert.deepEqual((await r.json()).details,{code:'CLOCK',server_time:'2026-11-05T01:00:00.000Z'});
  for(const status of [403,404,409,429,503]){r=await handleAttendanceForm(request(),env,upstream(status,{ok:false,error:'Pesan '+status}));assert.equal(r.status,status);assert.equal((await r.json()).error,'Pesan '+status);}

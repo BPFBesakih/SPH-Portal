@@ -12,10 +12,11 @@ Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari 
    - **HP bersama** (HP koordinator/pos): diberi label dan unit. HP menampilkan daftar nama unit itu, dan nama lain bisa dicari (minimal 3 huruf).
    - **Sesi pendaftaran** (5–30 menit, misalnya sesudah briefing pagi): satu tautan dikirim ke grup WhatsApp unit. Setiap HP memilih nama pemiliknya lalu menunggu disetujui di portal. Nama yang dipilih lebih dari satu HP ditandai. Menutup sesi menolak HP yang belum disetujui.
    - QR hanya cara lain untuk membuka tautan yang sama di HP tersebut. **Absen harian tidak memakai QR.**
-3. **Absen harian** di `https://bpbesakih.com/absen/` (bisa dipasang sebagai ikon): pilih nama → MASUK/PULANG (server menyarankan yang sesuai) → selfie kamera depan. Lokasi diambil saat itu juga, menunggu sampai akurasi ±100 m paling lama 20 detik.
-4. **Titik absen** diatur Pengelola Absensi di peta (radius bawaan 100 m, 20–1000 m). Absen di luar semua radius tetap tercatat, tetapi wajib diberi alasan (Dinas luar, Tugas lapangan, Lainnya + keterangan).
-5. **Tanda, bukan penolakan.** Absen yang janggal tetap sah dan masuk **Perlu dicek**: di luar titik, GPS kurang akurat (>100 m), lokasi melompat (>120 km/jam), banyak orang (≥4 dalam 10 menit) di satu HP pribadi, belum ada foto acuan, tanpa absen masuk/pulang, absen saat cuti, titik belum diatur. Atasan langsung atau Pengelola Absensi membandingkan selfie dengan **foto acuan** (dipilih dari selfie yang jelas), lalu menilai *Sesuai* atau *Perlu klarifikasi*.
+3. Untuk **absen harian**, buka `https://bpbesakih.com/absen/`, pilih nama, lalu tekan **Masuk** atau **Pulang**. HP mencari lokasi GPS dan server memeriksa radius. Jika lokasinya diizinkan, kamera depan terbuka untuk selfie. Server memeriksa kembali lokasi dan izin saat mencatat absen.
+4. **Titik absen.** Pengelola mengatur radius per titik pada peta (bawaan 100 m, rentang 20–1000 m). Pegawai yang berada di luar semua titik aktif langsung mendapat pesan penolakan sebelum selfie. Di **Absensi → Titik Absen → Absen di luar area kantor**, pengelola dengan cakupan seluruh organisasi dapat memberi atau mencabut izin per pegawai. Izin mengikuti pegawai yang dipilih, termasuk di HP bersama. Pemegang izin cukup mengirim selfie dan lokasi. Rekap menandai catatannya sebagai **Izin absen di luar area kantor**. Saat semua titik nonaktif, hanya pegawai dengan izin tersebut yang dapat absen.
+5. **Perlu dicek.** Catatan yang memerlukan peninjauan meliputi absen luar area oleh pemegang akses, GPS kurang akurat (>100 m), lokasi melompat (>120 km/jam), banyak orang (≥4 dalam 10 menit) di satu HP pribadi, belum ada foto acuan, tanpa absen masuk/pulang, absen saat cuti, dan titik belum diatur. Atasan langsung atau Pengelola Absensi membandingkan selfie dengan **foto acuan**, lalu menilai *Sesuai* atau *Perlu klarifikasi*.
 6. **Status harian dihitung saat dibaca** dari catatan asli, koreksi, keterangan (Izin/Sakit/Dinas luar), dan cuti yang disetujui di modul Cuti. Pulang setelah tengah malam ikut tanggal kerja absen masuknya (shift malam, batas 16 jam).
+7. **Absen lebih awal.** Jam masuk yang tercatat mengikuti waktu aktual server. Untuk Sekretariat Senin–Jumat, absen pukul 07.30 WITA diterima di area yang diizinkan. Jadwalnya tetap 08.00–16.00, dengan batas mulai terlambat 08.16. Jika absen pulang pukul 16.00, rentang kehadirannya 8 jam 30 menit. Modul ini belum menghitung lembur.
 
 ## Siapa melihat dan mengubah apa
 
@@ -71,9 +72,13 @@ PLAYWRIGHT_MODULE=<path playwright> node scripts/verify-attendance-ui.mjs [folde
 
 Akun pratinjau (password `Preview2026!`): `pengelola.absen`, `koordinator.absen`, `pegawai.absen`, `admin.preview`. Skrip mencetak tautan HP bersama contoh. Kamera dan lokasi hanya jalan di *secure context*: buka `/absen/` di laptop yang sama (Chrome DevTools → Toggle device toolbar, Sensors → Location), atau lewatkan port melalui tunnel HTTPS dan jalankan dengan `PREVIEW_ORIGIN=https://alamat-tunnel`. Di iPhone, ikon layar utama punya penyimpanan sendiri: pasang ikon dulu, buka dari ikon, lalu tempel tautan pendaftaran.
 
-Yang diuji otomatis di cabang ini: 33 tes aturan/rute/alur HP (SQLite, tanda tangan WebCrypto sungguhan), 5 tes gateway, 12 pemeriksaan PostgreSQL (PGlite: RLS, role, pemicu, Edge terpaket dengan Drive tiruan, kunci per pegawai tanpa kunci global, pemulihan pendaftaran, tambalan portal-api, Cuti, retensi, operasi `retention` terjadwal), dan 12 pemeriksaan browser (pengaman rilis termasuk galat sementara, peta, tautan WhatsApp/QR, absen di HP bersama/pribadi dengan kamera dan GPS tiruan, di luar titik, sesi pendaftaran, balasan pendaftaran yang hilang, Perlu dicek, ekspor Excel, tanpa pelanggaran CSP). SQL pra-cek dan jadwal retensi diuji di PGlite dengan semua migrasi. Kamera dan GPS di HP sungguhan, pemasangan ikon, serta sinyal lemah di lapangan tetap perlu uji pengguna.
+Pengujian SQLite mencakup tanda tangan HP, pencatatan waktu aktual, pemberian akses, dan pencabutan izin saat selfie sedang diunggah. Pengujian PostgreSQL memakai seluruh migrasi, Edge terpaket, dan penyimpanan Drive tiruan. Pengujian browser mencakup peta, pendaftaran HP, absen di dalam dan di luar titik, pengelolaan akses, tinjauan selfie, dan ekspor Excel. Kamera dan GPS pada HP sungguhan, pemasangan ikon, serta sinyal lemah di lapangan diuji saat pilot.
 
-## Rilis (oleh pemilik repo)
+## Pembaruan akses luar area pada instalasi yang sudah berjalan
+
+Untuk merilis pembaruan, terapkan migrasi `20261125132222_attendance_outside_access_basis.sql`, perbarui Edge Function `attendance-form` dan `portal-api`, lalu rilis aset dan gateway Pages. Pastikan titik kantor yang digunakan pegawai aktif. Daftar pengecualian awal kosong. Untuk membangun bundel `portal-api`, jalankan `scripts/build-attendance-deploy.mjs` terhadap snapshot yang sedang tayang beserta SHA-256 snapshot itu agar perubahan modul lain ikut dipertahankan.
+
+## Riwayat pemasangan awal Tahap 1 (November 2026)
 
 Urutan mengikuti kebiasaan proyek: migrasi → Edge Function → aset Pages → pemeriksaan produksi. Pengaman rilis membuat urutan Pages dan server aman bila tertukar: menu Absensi baru tampil setelah `portal-api` menjawab `attendance/overview`.
 
@@ -126,13 +131,49 @@ Urutan mengikuti kebiasaan proyek: migrasi → Edge Function → aset Pages → 
 
 Teks ini perlu disahkan pemilik/SDM sebelum pilot dan dapat dipasang di halaman privasi.
 
+## Pilot jadwal Sekretariat
+
+Tab **Jadwal Kerja** menampilkan shift per tanggal sesuai cakupan akun. Jadwal berlaku sejak migrasi dipasang dan mengikuti penempatan utama pegawai aktif pada tanggal yang dipilih, termasuk THL. Senin–Jumat memakai `10000` (08.00–16.00 WITA), Sabtu memakai `10001` (08.00–13.00 WITA), dan keduanya mulai terlambat pukul 08.16 WITA. Minggu berstatus **Libur mingguan**. Hari libur nasional dan hari raya Hindu Bali berstatus **Hari libur** beserta namanya. Cuti bersama tetap hari kerja.
+
+Pegawai yang posisinya punya acuan shift (lihat bagian berikut) tidak ikut jadwal tetap unitnya, termasuk kalender liburnya. Menurut SDM, mereka tetap masuk pada hari raya Bali.
+
+Migrasi `20261125132221_attendance_fixed_schedules.sql` memuat:
+- master 41 shift yang dikonfirmasi SDM 26 Nov 2026, dengan mulai terlambat = jam masuk + 16 menit untuk semua shift;
+- libur nasional dari SKB 2026–2027 (bagian A, tanpa cuti bersama);
+- hari raya Hindu Bali 2026–2027 dari daftar Ditjen Bimas Hindu Kemenag yang berlabel Libur Fakultatif, tanpa Deepavali: Siwaratri, Penampahan Galungan, Galungan, Umanis Galungan, Penampahan Kuningan, Kuningan, Tawur Agung Kesanga (2027), Ngembak Geni, Saraswati, dan Pagerwesi.
+
+Kalender hanya bisa diubah lewat SQL. Tahun di luar kalender tersebut menampilkan status **Kalender libur belum tersedia** pada hari dengan pola kerja. Kalender 2028 perlu ditambahkan sebelum akhir 2027, setelah SKB dan daftar Bimas Hindu 2028 terbit. Rekap masih memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Status terlambat dan Alpa memerlukan integrasi jadwal ke perhitungan rekap.
+
+## Acuan shift per posisi
+
+Di **Absensi → Acuan Shift**, pilih posisi untuk melihat kode, jam masuk dan pulang, serta jam mulai terlambat dalam WITA.
+
+| Posisi | Kode acuan |
+|---|---|
+| Staf Pelayanan Internal Sekretariat (`BPB_S_P056`) | `50001` (07.00–15.00 WITA), `50002` (10.00–18.00 WITA) |
+| Koordinator dan staf Pelayanan Shuttle | `20001`–`20004` |
+| Koordinator dan staf Pelayanan Parkir | `21001`–`21003` |
+| Koordinator dan staf Informasi & Penjualan Tiket, Administrasi Layanan Kunjungan, serta Review & Keluhan Pelanggan | `22001`–`22004` |
+| Koordinator dan staf Keamanan Wilayah I–IV | `30001`–`30003`, `70000`–`70003`, `71000`, `71002`, `71003`, `72001`, `73000` |
+| Koordinator dan THL Bankamda | `40001`–`40002` |
+| Koordinator, staf, dan THL Kebersihan Lingkungan | `60001`–`60002` |
+| Koordinator Kebersihan Parahyangan | `61001`–`61002` |
+| Koordinator, staf, dan THL Pertamanan | `62001`–`62002` |
+| Koordinator, staf, dan THL Kebersihan Bangunan | Gedung A `63001`–`63002`, B `63003`–`63004`, C `63005`–`63006` |
+
+Acuan melekat ke kode posisi. Pegawai melihat pilihan untuk posisi utamanya, atasan dapat melihat posisi timnya, dan pengelola melihat posisi sesuai cakupan akses. Penugasan gedung, shift penuh atau setengah, serta hari kerja dan libur pegawai memerlukan jadwal harian. Rekap tetap mencatat jam absen aktual.
+
+Untuk Keamanan, daftar berlaku sebagai acuan bidang. Pembagian shift per wilayah atau regu mengikuti penugasan. Kode `71001` memang tidak dipakai.
+
+Kepala Urusan Pengadaan & Pelayanan Internal (`BPB_S_P011`) dan Koordinator Pelayanan Internal (`BPB_S_P025`) mengikuti jadwal reguler Sekretariat beserta kalender liburnya. Acuan untuk posisi lain, misalnya Pengolahan Sampah, menyusul dari SDM.
+
 ## Penyimpangan dari PRD / belum di tahap 1
 
 - **Foto acuan** dipilih dari selfie absen (bukan unggah pas foto). Unggahan pas foto bisa ditambahkan bila diperlukan.
 - **Keterangan** Izin/Sakit/Dinas luar belum bisa diberi lampiran (surat dokter dan sebagainya).
 - **Antrean offline** belum ada: tanpa sinyal, absen ditolak dan HP meminta mencoba lagi (kiriman ulang aman, tidak tercatat dua kali).
 - **Notifikasi ke atasan** untuk absen bertanda belum ada; atasan membuka tab Perlu dicek.
-- **Jam kerja/shift, terlambat, alpa**, dan **ekspor data aplikasi lama** menyusul pada tahap berikutnya.
+- **Roster shift bergilir, perhitungan terlambat dan Alpa**, serta **ekspor data aplikasi lama** menyusul pada tahap berikutnya.
 - Selfie dibaca portal di dalam transaksi baca permintaan (tanpa kunci global), sama seperti unduhan berkas portal lainnya.
 
 ## Keputusan yang masih terbuka

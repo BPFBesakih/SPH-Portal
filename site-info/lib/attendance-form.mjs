@@ -3,7 +3,7 @@
 // HP, selfie, dan lokasi diperiksa di Edge; isinya tidak pernah dicatat di sini.
 const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow'};
 const respond=(body,status=200)=>Response.json(body,{status,headers});
-const actions='registration|register|session|session-register|context|search|person|submit';
+const actions='registration|register|session|session-register|context|search|person|check-location|submit';
 const pathPattern=new RegExp(`^/api/attendance-form/(${actions})$`);
 // Rincian galat yang boleh diteruskan ke HP: jam server dan jarak ke titik absen.
 function safeDetails(details){

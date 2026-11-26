@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtempSync,rmSync,existsSync,readdirSync} from 'node:fs';
+import {mkdtempSync,rmSync,existsSync,readdirSync,readFileSync} from 'node:fs';
+import {DatabaseSync} from 'node:sqlite';
 import {tmpdir} from 'node:os';
 import {resolve,sep} from 'node:path';
 import {openDb,insert,one,all,run,tx,now,today} from '../lib/db.mjs';
@@ -29,8 +30,8 @@ function memoryPhotos(){
   async remove(key){if(!files.has(key)){const e=new Error('Berkas tidak ada.');e.status=404;throw e;}files.delete(key);log.push(['remove',key]);},
   get(key){return files.get(key)||null;}};
 }
-function fixture(t){
- const db=openDb(':memory:');t.after(()=>db.close());seedPermissions(db);
+function fixture(t,db=openDb(':memory:')){
+ t.after(()=>{if(db.isOpen)db.close();});seedPermissions(db);
  const unit=(code,name,parent=null)=>insert(db,'org_units',{code,name,parent_id:parent,is_active:1});
  const office=unit('U0','Kantor Fiktif'),field=unit('U1','Pos Fiktif',office.id),other=unit('U2','Unit Lain Fiktif');
  const position=(code,name,u)=>insert(db,'positions',{code,name,org_unit_id:u.id,is_active:1});
@@ -318,23 +319,175 @@ test('night shift: check-out after midnight belongs to the check-in work date',a
  const recap=await f.route(f.users.staff,`recap/${f.e.guard.id}`,'GET',{},`from=${day}&to=${shiftDay(day,1)}`);
  assert.deepEqual(recap.days.map(d=>[d.date,d.status,d.minutes]),[[day,'HADIR',510]]);
 });
-test('outside the point: refused before upload without a reason, recorded and flagged with one',async t=>{
- const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});await addPoint(f);
- const far={...submission(f.e.guard),location:{latitude:-8.3700,longitude:115.4512,accuracy:15,age_ms:1000}};
- await assert.rejects(submit(f,device,far),e=>e.status===422&&e.details.code==='OUTSIDE_POINT'&&e.details.point_name==='Titik Kantor Fiktif'&&e.details.distance_m>400);
- assert.equal(f.photos.log.length,0,'selfie tidak diunggah bila absen pasti ditolak');
- await assert.rejects(submit(f,device,{...far,outside:{reason:'LAINNYA',note:''}}),errorWith(422));
- const r=await submit(f,device,{...far,outside:{reason:'TUGAS_LAPANGAN',note:'Patroli fiktif'}});
- assert.equal(r.within_point,false);
- const row=one(f.db,'SELECT * FROM attendance_events WHERE id=?',r.event_id);
- assert.deepEqual([row.outside_reason,row.outside_note],['TUGAS_LAPANGAN','Patroli fiktif']);assert(parseFlags(row.flags).includes('DI_LUAR_TITIK'));
+test('Sekretariat 07:30 WITA is accepted inside the point and uses actual time for attendance duration',async t=>{
+ const f=fixture(t),device=await registerDevice(f,{owner:f.e.staff});await addPoint(f);
+ const day='2026-11-24';
+ run(f.db,'INSERT INTO attendance_schedule_units VALUES (?,?)',f.units.office.id,day);
+ run(f.db,"INSERT INTO attendance_schedule_weekdays VALUES (?,2,'10000')",f.units.office.id);
+ const schedule=await f.route(f.users.staff,'schedule','GET',{},'date='+day);
+ const {shift}=schedule.rows.find(r=>r.employee.id===f.e.staff.id);
+ assert.deepEqual([shift.code,shift.start_time,shift.end_time,shift.late_time],['10000','08:00','16:00','08:16']);
+ const start=await submit(f,device,submission(f.e.staff),wita(day,'07:30'));
+ const end=await submit(f,device,submission(f.e.staff,'OUT'),wita(day,'16:00'));
+ assert.deepEqual([start.work_date,end.work_date,Date.parse(start.recorded_at),Date.parse(end.recorded_at)],[day,day,wita(day,'07:30'),wita(day,'16:00')]);
+ const recap=await f.route(f.users.staff,`recap/${f.e.staff.id}`,'GET',{},`from=${day}&to=${day}`);
+ assert.deepEqual([recap.days[0].status,recap.days[0].minutes],['HADIR',510]);
+});
+test('master shift SQLite sama dengan migrasi dan mengikuti jawaban SDM 26 Nov 2026',t=>{
+ const f=fixture(t);
+ const sql=readFileSync(new URL('../supabase/migrations/20261125132221_attendance_fixed_schedules.sql',import.meta.url),'utf8');
+ const block=sql.slice(sql.indexOf('INSERT INTO portal.attendance_schedule_shifts'),sql.indexOf('INSERT INTO portal.attendance_schedule_holidays'));
+ const migration=[...block.matchAll(/\('(\d+)', '([^']+)', '(\d\d:\d\d)', '(\d\d:\d\d)', '(\d\d:\d\d)', ([01])\)/g)]
+  .map(([,code,name,start_time,end_time,late_time,offset])=>({code,name,start_time,end_time,late_time,end_day_offset:Number(offset)}));
+ const local=all(f.db,'SELECT code,name,start_time,end_time,late_time,end_day_offset FROM attendance_schedule_shifts ORDER BY code').map(row=>({...row}));
+ assert.equal(migration.length,41);assert.deepEqual(local,migration);
+ const minutes=clock=>Number(clock.slice(0,2))*60+Number(clock.slice(3,5));
+ assert.deepEqual(local.filter(s=>minutes(s.late_time)!==minutes(s.start_time)+16).map(s=>s.code),[],'mulai terlambat = jam masuk + 16 menit');
+ assert.deepEqual(['21001','61001','61002'].map(code=>local.find(s=>s.code===code)).map(s=>[s.name,s.start_time,s.end_time]),
+  [['Ops. Parkir Shift 1','07:00','15:00'],['Kebersihan Parahyangan','08:00','16:00'],['Kebersihan Parahyangan 1/2 Shift','08:00','13:00']]);
+ assert.equal(local.some(s=>s.code==='71001'),false,'71001 tidak dipakai');
+});
+test('pilot SQLite memuat kalender dan jadwal untuk Sekretariat lama maupun yang baru diimpor',t=>{
+ const dir=mkdtempSync(resolve(tmpdir(),'absen-pilot-')),path=resolve(dir,'portal.sqlite');
+ let db=new DatabaseSync(path);
+ t.after(()=>{if(db.isOpen)db.close();rmSync(dir,{recursive:true,force:true});});
+ db.exec(readFileSync(new URL('../schema.sql',import.meta.url),'utf8'));
+ const office=insert(db,'org_units',{code:'BPB_S',name:'Sekretariat',is_active:1});
+ db.close();
+ db=openDb(path);
+ const pattern=(conn,id)=>all(conn,'SELECT weekday_no,shift_code FROM attendance_schedule_weekdays WHERE org_unit_id=? ORDER BY weekday_no',id).map(row=>[row.weekday_no,row.shift_code]);
+ const expected=[[1,'10000'],[2,'10000'],[3,'10000'],[4,'10000'],[5,'10000'],[6,'10001']];
+ assert.deepEqual(pattern(db,office.id),expected);
+ assert.equal(one(db,'SELECT starts_on FROM attendance_schedule_units WHERE org_unit_id=?',office.id).starts_on,today());
+ const migration=readFileSync(new URL('../supabase/migrations/20261125132221_attendance_fixed_schedules.sql',import.meta.url),'utf8');
+ const holidays=[...migration.matchAll(/\('(\d{4}-\d\d-\d\d)', '([^']+)'\)/g)].map(([,date,name])=>[date,name]).sort();
+ assert.equal(holidays.length,61);
+ assert.deepEqual(all(db,'SELECT work_date,name FROM attendance_schedule_holidays ORDER BY work_date').map(r=>[r.work_date,r.name]),holidays);
+ run(db,'DELETE FROM attendance_schedule_weekdays WHERE org_unit_id=? AND weekday_no=6',office.id);
+ run(db,"UPDATE attendance_schedule_holidays SET name='Nama lokal' WHERE work_date='2026-12-25'");
+ db.close();
+ db=openDb(path);
+ assert.deepEqual(pattern(db,office.id),expected.slice(0,5));
+ assert.equal(one(db,"SELECT name FROM attendance_schedule_holidays WHERE work_date='2026-12-25'").name,'Nama lokal');
+
+ const imported=openDb(':memory:');
+ try{
+  const other=insert(imported,'org_units',{code:'LAIN',name:'Unit lain',is_active:1});
+  const inactive=insert(imported,'org_units',{code:'BPB_S',name:'Sekretariat',is_active:0});
+  assert.deepEqual(pattern(imported,other.id),[]);
+  assert.deepEqual(pattern(imported,inactive.id),[]);
+  run(imported,'UPDATE org_units SET is_active=1 WHERE id=?',inactive.id);
+  assert.deepEqual(pattern(imported,inactive.id),expected);
+ }finally{imported.close();}
+});
+test('DB lokal lama ikut terkoreksi saat skema dipasang ulang',t=>{
+ const dir=mkdtempSync(resolve(tmpdir(),'absen-shift-'));
+ const path=resolve(dir,'portal.sqlite');
+ let db;
+ t.after(()=>{
+  if(db?.isOpen)db.close();
+  rmSync(dir,{recursive:true,force:true});
+ });
+ db=openDb(path);
+ run(db,"UPDATE attendance_schedule_shifts SET end_time='12:00',late_time='07:15' WHERE code='21001'");
+ run(db,"UPDATE attendance_schedule_shifts SET name='Kebersihan Pahryangan' WHERE code='61001'");db.close();
+ db=openDb(path);
+ assert.deepEqual(all(db,"SELECT code,name,end_time,late_time FROM attendance_schedule_shifts WHERE code IN('21001','61001') ORDER BY code").map(row=>({...row})),
+  [{code:'21001',name:'Ops. Parkir Shift 1',end_time:'15:00',late_time:'07:16'},{code:'61001',name:'Kebersihan Parahyangan',end_time:'16:00',late_time:'08:16'}]);
+});
+test('Pelayanan Internal: kepala urusan dan koordinator mengikuti kalender Sekretariat, staf mendapat dua acuan shift',async t=>{
+ const f=fixture(t),day='2026-11-24',galungan='2027-01-12';
+ run(f.db,'INSERT INTO attendance_schedule_units VALUES (?,?)',f.units.office.id,day);
+ run(f.db,"INSERT INTO attendance_schedule_weekdays VALUES (?,2,'10000')",f.units.office.id);
+ run(f.db,'UPDATE positions SET code=?,name=? WHERE id=?','BPB_S_P011','Kepala Urusan Pengadaan & Pelayanan Internal',f.positions.boss.id);
+ run(f.db,'UPDATE positions SET code=?,name=? WHERE id=?','BPB_S_P025','Koordinator Pelayanan Internal',f.positions.staff.id);
+ const shiftPosition=insert(f.db,'positions',{code:'BPB_S_P056',name:'Staf Pelayanan Internal',org_unit_id:f.units.office.id,is_active:1});
+ const shiftWorker=insert(f.db,'employees',{employee_no:'FX-shift',full_name:'Petugas Shift Fiktif',employment_status:'Tetap',joined_on:'2020-01-01',is_active:1});
+ insert(f.db,'employee_placements',{employee_id:shiftWorker.id,position_id:shiftPosition.id,supervisor_employee_id:f.e.boss.id,valid_from:'2020-01-01',is_primary:1});
+ const names=rows=>rows.map(row=>row.employee.name);
+ const work=await f.route(f.users.manager,'schedule','GET',{},'date='+day);
+ assert.deepEqual(names(work.rows),['Atasan Fiktif','Staf Fiktif']);
+ assert(work.rows.every(row=>row.day_type==='WORK'&&row.shift.code==='10000'));
+ const holiday=await f.route(f.users.manager,'schedule','GET',{},'date='+galungan);
+ assert.deepEqual(holiday.rows.map(row=>[row.employee.name,row.day_type,row.holiday_name,row.shift]),
+  [['Atasan Fiktif','HOLIDAY','Penampahan Galungan',null],['Staf Fiktif','HOLIDAY','Penampahan Galungan',null]]);
+ const options=await f.route(f.users.manager,'shift-options');
+ assert.deepEqual(options.positions.map(position=>position.code),['BPB_S_P056']);
+ assert.deepEqual(options.positions[0].shifts.map(shift=>[shift.code,shift.start_time,shift.end_time]),[
+  ['50001','07:00','15:00'],['50002','10:00','18:00']
+ ]);
+});
+test('outside access is explicit per employee, applies to both directions, and can be revoked',async t=>{
+ const f=fixture(t),device=await registerDevice(f,{owner:f.e.other});await addPoint(f);
+ const far={latitude:-8.3700,longitude:115.4512,accuracy:15,age_ms:1000},outside={reason:'TUGAS_LAPANGAN',note:'Patroli fiktif'};
+ const access=(actor,employee,allowed,version)=>f.route(actor,'outside-access/'+employee.id,'PATCH',{allowed,version});
+ const check=async(employee,location)=>f.form('check-location',await sign(device,'check-location',{employee_id:employee.id,location}));
+ assert.deepEqual(await check(f.e.guard,submission(f.e.guard).location),{allowed:true});
+ await assert.rejects(check(f.e.guard,{...far,age_ms:180000}),errorWith(422));
+ assert.equal((await f.route(f.users.coordinator,'points')).outside_access,undefined);
+ assert.equal((await f.route(f.users.manager,'points')).outside_access.version,0);
+ for(const actor of [f.users.guard,f.users.staff,f.users.coordinator,f.users.it]){
+  await assert.rejects(access(actor,f.e.guard,true,0),errorWith(403));
+ }
+ await access(f.users.manager,f.e.other,true,0);
+ await assert.rejects(check(f.e.guard,far),errorWith(403,'OUTSIDE_FORBIDDEN'));
+ for(const kind of ['IN','OUT']){
+  for(const reason of [undefined,{reason:'DINAS_LUAR'},outside,{reason:'LAINNYA',note:'Alasan uji'}]){
+   await assert.rejects(submit(f,device,submission(f.e.guard,kind,{location:far,outside:reason})),errorWith(403,'OUTSIDE_FORBIDDEN'));
+  }
+ }
+ assert.equal(f.photos.log.length,0);assert.equal(one(f.db,'SELECT count(*) n FROM attendance_events').n,0);
+ await assert.rejects(access(f.users.manager,f.e.guard,true,0),errorWith(409));
+ await access(f.users.manager,f.e.guard,true,1);
+ const body=submission(f.e.guard,'IN',{location:far});
+ assert.deepEqual(await check(f.e.guard,far),{allowed:true});assert.equal(f.photos.log.length,0);
+ const receipt=await submit(f,device,body);
+ const row=one(f.db,'SELECT * FROM attendance_events WHERE id=?',receipt.event_id);
+ assert.deepEqual([receipt.within_point,row.outside_reason,row.outside_note],[false,'IZIN_LUAR_AREA',null]);assert(parseFlags(row.flags).includes('DI_LUAR_TITIK'));
+ const out=submission(f.e.guard,'OUT',{location:far,outside});
+ f.photos.onPut=()=>access(f.users.manager,f.e.guard,false,2);
+ await assert.rejects(submit(f,device,out),errorWith(403,'OUTSIDE_FORBIDDEN'));
+ assert.deepEqual(f.photos.log.map(([op])=>op),['put','put','discard']);
+ assert.equal((await submit(f,device,{...body,outside})).event_id,receipt.event_id);
+ await assert.rejects(check(f.e.guard,far),errorWith(403,'OUTSIDE_FORBIDDEN'));
+ await assert.rejects(submit(f,device,out),errorWith(403,'OUTSIDE_FORBIDDEN'));
+ assert.equal(one(f.db,'SELECT count(*) n FROM attendance_events').n,1);
+ assert.deepEqual(all(f.db,"SELECT action FROM audit_events WHERE object_key=? AND action LIKE '%OUTSIDE_OFFICE' ORDER BY rowid",f.e.guard.id).map(r=>r.action),['GRANT_OUTSIDE_OFFICE','REVOKE_OUTSIDE_OFFICE']);
+});
+test('existing installations preserve earlier reasons when permitting the system-assigned outside access code',async t=>{
+ const dir=mkdtempSync(resolve(tmpdir(),'attendance-basis-')),path=resolve(dir,'portal.sqlite');
+ const legacy=new DatabaseSync(path);
+ t.after(()=>{if(legacy.isOpen)legacy.close();rmSync(dir,{recursive:true,force:true});});
+ const schema=readFileSync(new URL('../schema.sql',import.meta.url),'utf8');
+ legacy.exec(schema.replace("'LAINNYA','IZIN_LUAR_AREA'","'LAINNYA'"));
+ const f=fixture(t,legacy),device=await registerDevice(f,{owner:f.e.guard});await addPoint(f);
+ const receipt=await submit(f,device,submission(f.e.guard));
+ const sample=one(legacy,'SELECT * FROM attendance_events WHERE id=?',receipt.event_id);
+ const historical={...sample,id:randomUUID(),client_key:randomUUID(),within_point:0,outside_reason:'LAINNYA',outside_note:'Keterangan historis',flags:'["DI_LUAR_TITIK"]'};
+ insert(legacy,'attendance_events',historical);
+ const authorized={...historical,id:randomUUID(),client_key:randomUUID(),outside_reason:'IZIN_LUAR_AREA',outside_note:null};
+ assert.throws(()=>insert(legacy,'attendance_events',authorized),/CHECK/);
+ legacy.close();
+ const upgraded=openDb(path);
+ try{
+  insert(upgraded,'attendance_events',authorized);
+  assert.deepEqual([...Object.values(one(upgraded,'SELECT outside_reason,outside_note FROM attendance_events WHERE id=?',historical.id))],['LAINNYA','Keterangan historis']);
+  assert.throws(()=>run(upgraded,'UPDATE attendance_events SET outside_reason=NULL WHERE id=?',authorized.id),/tidak boleh diubah/);
+  assert.equal(upgraded.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
+ }finally{upgraded.close();}
 });
 test('flags: no point yet, weak GPS, impossible jump, crowded personal phone, check-out without check-in',async t=>{
  const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});
  const day=yesterday(),at=c=>wita(day,c);
+ const outside={reason:'DINAS_LUAR'};
+ await assert.rejects(submit(f,device,submission(f.e.guard,'IN',{outside})),errorWith(403,'NO_ACTIVE_POINT'));
+ await f.route(f.users.manager,'outside-access/'+f.e.guard.id,'PATCH',{version:0,allowed:true});
  const r1=await submit(f,device,{...submission(f.e.guard),location:{...POINT,accuracy:150,age_ms:1000}},at('07:00'));
+ assert.equal(one(f.db,'SELECT outside_reason FROM attendance_events WHERE id=?',r1.event_id).outside_reason,'IZIN_LUAR_AREA');
  assert.deepEqual(parseFlags(one(f.db,'SELECT flags FROM attendance_events WHERE id=?',r1.event_id).flags).sort(),['GPS_KURANG_AKURAT','TANPA_FOTO_ACUAN','TITIK_BELUM_ADA']);
- const r2=await submit(f,device,{...submission(f.e.guard,'OUT'),location:{latitude:-8.80,longitude:115.4512,accuracy:20,age_ms:1000}},at('07:10'));
+ await addPoint(f);
+ const r2=await submit(f,device,{...submission(f.e.guard,'OUT'),outside,location:{latitude:-8.80,longitude:115.4512,accuracy:20,age_ms:1000}},at('07:10'));
+ assert.equal(one(f.db,'SELECT outside_reason FROM attendance_events WHERE id=?',r2.event_id).outside_reason,'IZIN_LUAR_AREA','isian alasan dari klien lama diabaikan');
  assert(parseFlags(one(f.db,'SELECT flags FROM attendance_events WHERE id=?',r2.event_id).flags).includes('LOKASI_MELOMPAT'));
  for(const [i,e] of [f.e.staff,f.e.boss,f.e.guard2].entries())await submit(f,device,submission(e),at(`08:0${i}`));
  const r3=await submit(f,device,submission(f.e.thl),at('08:05'));
@@ -351,14 +504,15 @@ test('submission checks: camera JPEG only, fresh selfie and location, size limit
  assert.equal(f.photos.log.length,0);
 });
 test('a failure after the selfie upload removes the uploaded file',async t=>{
- const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});
+ const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});await addPoint(f);
  f.photos.onPut=()=>{run(f.db,"UPDATE attendance_devices SET status='REVOKED',revoked_at=?,revoke_reason='uji' WHERE id=?",now(),device.id);};
  await assert.rejects(submit(f,device,submission(f.e.guard)),errorWith(403));
  assert.deepEqual(f.photos.log.map(([op])=>op),['put','discard']);assert.equal(f.photos.files.size,0);
  assert.equal(one(f.db,'SELECT count(*) n FROM attendance_events').n,0);
 });
 test('attendance events are append-only except selfie removal',async t=>{
- const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard}),r=await submit(f,device,submission(f.e.guard));
+ const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});await addPoint(f);
+ const r=await submit(f,device,submission(f.e.guard));
  assert.throws(()=>run(f.db,'UPDATE attendance_events SET employee_id=? WHERE id=?',f.e.other.id,r.event_id));
  assert.throws(()=>run(f.db,"UPDATE attendance_events SET recorded_at='2020-01-01T00:00:00.000Z' WHERE id=?",r.event_id));
  assert.throws(()=>run(f.db,'DELETE FROM attendance_events WHERE id=?',r.event_id));
@@ -417,7 +571,7 @@ test('scope: employees see themselves, supervisors their reporting line, unit re
  await assert.rejects(f.route(f.users.manager,'recap','GET',{},`from=${shiftDay(day,-70)}&to=${day}`),errorWith(422));
 });
 test('today: live status for the reporting line, borrowed phones visible',async t=>{
- const f=fixture(t),own=await registerDevice(f,{owner:f.e.guard2});
+ const f=fixture(t),own=await registerDevice(f,{owner:f.e.guard2});await addPoint(f);
  await submit(f,own,submission(f.e.guard));
  const rows=(await f.route(f.users.staff,'today')).rows;
  const guard=rows.find(r=>r.employee.id===f.e.guard.id);
