@@ -1,0 +1,28 @@
+name: Verifikasi Absensi PR 46
+on:
+  push:
+    branches: ['verifikasi/pr46-6897807']
+permissions:
+  contents: read
+jobs:
+  verifikasi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 689780716235eda22ab9e1591985e683848f5472
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Pasang dependensi pengujian dari package.json
+        run: npm install --no-package-lock --ignore-scripts --no-audit --no-fund
+      - name: Jalankan seluruh tes termasuk HTTP localhost
+        run: npm test
+      - name: Pasang Chromium untuk uji halaman absen
+        run: |
+          npm install --prefix "$RUNNER_TEMP/absensi-browser" --no-package-lock --ignore-scripts --no-audit --no-fund playwright@1.64.1
+          "$RUNNER_TEMP/absensi-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Uji browser dengan pegawai, kamera, dan lokasi fiktif
+        run: PLAYWRIGHT_MODULE="$RUNNER_TEMP/absensi-browser/node_modules/playwright" node scripts/verify-attendance-ui.mjs
