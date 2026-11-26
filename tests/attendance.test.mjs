@@ -349,11 +349,17 @@ test('master shift SQLite sama dengan migrasi dan mengikuti jawaban SDM 26 Nov 2
  assert.equal(local.some(s=>s.code==='71001'),false,'71001 tidak dipakai');
 });
 test('DB lokal lama ikut terkoreksi saat skema dipasang ulang',t=>{
- const dir=mkdtempSync(resolve(tmpdir(),'absen-shift-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const dir=mkdtempSync(resolve(tmpdir(),'absen-shift-'));
  const path=resolve(dir,'portal.sqlite');
- let db=openDb(path);run(db,"UPDATE attendance_schedule_shifts SET end_time='12:00',late_time='07:15' WHERE code='21001'");
+ let db;
+ t.after(()=>{
+  if(db?.isOpen)db.close();
+  rmSync(dir,{recursive:true,force:true});
+ });
+ db=openDb(path);
+ run(db,"UPDATE attendance_schedule_shifts SET end_time='12:00',late_time='07:15' WHERE code='21001'");
  run(db,"UPDATE attendance_schedule_shifts SET name='Kebersihan Pahryangan' WHERE code='61001'");db.close();
- db=openDb(path);t.after(()=>{if(db.isOpen)db.close();});
+ db=openDb(path);
  assert.deepEqual(all(db,"SELECT code,name,end_time,late_time FROM attendance_schedule_shifts WHERE code IN('21001','61001') ORDER BY code").map(row=>({...row})),
   [{code:'21001',name:'Ops. Parkir Shift 1',end_time:'15:00',late_time:'07:16'},{code:'61001',name:'Kebersihan Parahyangan',end_time:'16:00',late_time:'08:16'}]);
 });
