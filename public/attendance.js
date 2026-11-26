@@ -107,7 +107,7 @@ function todayTab(){
 
 /* ---------- Jadwal kerja ---------- */
 function scheduleTab(){
- const labels={WORK:'Hari kerja',NATIONAL_HOLIDAY:'Libur nasional',WEEKLY_OFF:'Libur mingguan',CALENDAR_PENDING:'Kalender libur belum tersedia'};
+ const labels={WORK:'Hari kerja',HOLIDAY:'Hari libur',WEEKLY_OFF:'Libur mingguan',CALENDAR_PENDING:'Kalender libur belum tersedia'};
  const rows=A.schedule.rows.map(row=>{
   const shift=row.shift;
   const name=shift?`<strong>${esc(shift.name)}</strong><br><span class="muted text-small">${esc(shift.code)}</span>`:'—';

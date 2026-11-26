@@ -603,7 +603,8 @@ CREATE TABLE IF NOT EXISTS attendance_schedule_weekdays (
 CREATE TABLE IF NOT EXISTS attendance_schedule_holidays (
  work_date TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 120));
 
--- Master 41 shift absensi dalam WITA, sesuai migrasi jadwal PostgreSQL.
+-- Master 41 shift absensi dalam WITA, sesuai migrasi jadwal PostgreSQL (dikonfirmasi SDM 26 Nov 2026).
+-- Data master ini ditimpa setiap kali skema dipasang, supaya DB lokal lama ikut terkoreksi.
 INSERT INTO attendance_schedule_shifts (code,name,start_time,end_time,late_time,end_day_offset) VALUES
  ('10000','Sekretariat Senin-Jumat','08:00','16:00','08:16',0),
  ('10001','Sekretariat Sabtu','08:00','13:00','08:16',0),
@@ -611,24 +612,24 @@ INSERT INTO attendance_schedule_shifts (code,name,start_time,end_time,late_time,
  ('20002','Ops. Shuttle Shift 2','10:00','18:00','10:16',0),
  ('20003','Ops. Shuttle Shift 3','14:00','22:00','14:16',0),
  ('20004','Ops. Shuttle half-shift','07:00','12:00','07:16',0),
- ('21001','Ops. Parkir Shift 1','07:00','12:00','07:15',0),
- ('21002','Ops. Parkir Shift 2','10:00','18:00','10:15',0),
- ('21003','Ops. Parkir half-shift','07:00','12:00','07:15',0),
+ ('21001','Ops. Parkir Shift 1','07:00','15:00','07:16',0),
+ ('21002','Ops. Parkir Shift 2','10:00','18:00','10:16',0),
+ ('21003','Ops. Parkir half-shift','07:00','12:00','07:16',0),
  ('22001','Ops. Kunjungan Shift 1','07:00','15:00','07:16',0),
- ('22002','Ops. Kunjungan Shift 2','10:00','18:00','10:15',0),
+ ('22002','Ops. Kunjungan Shift 2','10:00','18:00','10:16',0),
  ('22003','Ops. Kunjungan half-shift 1','07:00','12:00','07:16',0),
- ('22004','Ops. Kunjungan half-shift 2','13:00','18:00','13:15',0),
- ('30001','Keamanan Shift 1','07:00','15:00','07:15',0),
- ('30002','Keamanan Shift 2','15:00','22:00','15:15',0),
- ('30003','Keamanan Shift 3','22:00','07:00','22:15',1),
- ('40001','Bankamda Shift 1','07:00','15:00','07:15',0),
- ('40002','Bankamda Shift 2','10:00','18:00','10:15',0),
- ('50001','Sekretariat Umum Shift 1','07:00','15:00','07:15',0),
- ('50002','Sekretariat Umum Shift 2','10:00','18:00','10:15',0),
+ ('22004','Ops. Kunjungan half-shift 2','13:00','18:00','13:16',0),
+ ('30001','Keamanan Shift 1','07:00','15:00','07:16',0),
+ ('30002','Keamanan Shift 2','15:00','22:00','15:16',0),
+ ('30003','Keamanan Shift 3','22:00','07:00','22:16',1),
+ ('40001','Bankamda Shift 1','07:00','15:00','07:16',0),
+ ('40002','Bankamda Shift 2','10:00','18:00','10:16',0),
+ ('50001','Sekretariat Umum Shift 1','07:00','15:00','07:16',0),
+ ('50002','Sekretariat Umum Shift 2','10:00','18:00','10:16',0),
  ('60001','Kebersihan Lingkungan','07:00','15:00','07:16',0),
  ('60002','Kebersihan Lingkungan 1/2 Shift','07:00','12:00','07:16',0),
- ('61001','Kebersihan Pahryangan','08:00','16:00','08:16',0),
- ('61002','Kebersihan Pahryangan 1/2 Shift','08:00','13:00','08:16',0),
+ ('61001','Kebersihan Parahyangan','08:00','16:00','08:16',0),
+ ('61002','Kebersihan Parahyangan 1/2 Shift','08:00','13:00','08:16',0),
  ('62001','Pertamanan','08:00','16:00','08:16',0),
  ('62002','Pertamanan 1/2 Shift','08:00','13:00','08:16',0),
  ('63001','Kebersihan Gedung A','06:00','14:00','06:16',0),
@@ -636,17 +637,18 @@ INSERT INTO attendance_schedule_shifts (code,name,start_time,end_time,late_time,
  ('63003','Kebersihan Gedung B','10:00','18:00','10:16',0),
  ('63004','Kebersihan Gedung B 1/2 Shift','10:00','15:00','10:16',0),
  ('63005','Kebersihan Gedung C','08:00','16:00','08:16',0),
- ('63006','Kebersihan Gedung C 1/2 Shift','08:00','13:00','08:15',0),
- ('70000','Keamanan Pagi 0','07:00','15:00','07:15',0),
- ('70001','Keamanan Pagi 1','06:00','13:00','06:15',0),
- ('70002','Keamanan Pagi 2','09:00','17:00','09:15',0),
- ('70003','Keamanan Pagi 3','07:00','12:00','07:15',0),
- ('71000','Keamanan Siang 0','11:00','18:00','11:15',0),
- ('71002','Keamanan Siang 2','11:00','17:00','11:15',0),
- ('71003','Keamanan Siang 3','10:00','18:00','10:15',0),
- ('72001','Keamanan Sore 1','15:00','23:00','15:15',0),
- ('73000','Keamanan Malam 0','22:00','06:00','22:15',1)
-ON CONFLICT(code) DO NOTHING;
+ ('63006','Kebersihan Gedung C 1/2 Shift','08:00','13:00','08:16',0),
+ ('70000','Keamanan Pagi 0','07:00','15:00','07:16',0),
+ ('70001','Keamanan Pagi 1','06:00','13:00','06:16',0),
+ ('70002','Keamanan Pagi 2','09:00','17:00','09:16',0),
+ ('70003','Keamanan Pagi 3','07:00','12:00','07:16',0),
+ ('71000','Keamanan Siang 0','11:00','18:00','11:16',0),
+ ('71002','Keamanan Siang 2','11:00','17:00','11:16',0),
+ ('71003','Keamanan Siang 3','10:00','18:00','10:16',0),
+ ('72001','Keamanan Sore 1','15:00','23:00','15:16',0),
+ ('73000','Keamanan Malam 0','22:00','06:00','22:16',1)
+ON CONFLICT(code) DO UPDATE SET name=excluded.name,start_time=excluded.start_time,
+ end_time=excluded.end_time,late_time=excluded.late_time,end_day_offset=excluded.end_day_offset;
 
 -- E-Arsip Humas (Tahap 1): arsip dokumen administrasi per bagian dengan pengawasan Humas.
 -- Padanan PostgreSQL: supabase/migrations/20261112100000_archive_module.sql.

@@ -187,14 +187,16 @@ try{
     const mine=await portal(guardUser,'attendance/recap');assert.deepEqual(mine.employees.map(r=>r.employee.name),['Petugas Fiktif']);
     await assert.rejects(portal(guardUser,`attendance/recap/${people.thl.id}`),e=>e instanceof api.AppError&&e.status===403);
   });
-  await check('Sekretariat schedule uses the confirmed master shifts, weekly days, and national holidays',async()=>{
+  await check('Sekretariat schedule uses the confirmed master shifts, weekly days, national holidays, and Bali holy days',async()=>{
     const unit=await one(db,"SELECT id FROM org_units WHERE code='BPB_S'");
     const plan=await one(db,'SELECT CAST(starts_on AS TEXT) AS starts_on FROM attendance_schedule_units WHERE org_unit_id=?',unit.id);
     assert.equal(plan.starts_on,witaDate(Date.now()));
     assert.equal((await one(db,'SELECT count(*)::int AS n FROM attendance_schedule_shifts')).n,41);
     assert.deepEqual((await all(db,'SELECT code,end_day_offset FROM attendance_schedule_shifts WHERE end_day_offset=1 ORDER BY code')).map(row=>row.code),['30003','73000']);
+    assert.equal((await one(db,"SELECT count(*)::int AS n FROM attendance_schedule_shifts WHERE late_time<>start_time+interval '16 minutes'")).n,0,'mulai terlambat = jam masuk + 16 menit');
+    assert.deepEqual(await one(db,"SELECT CAST(start_time AS TEXT) AS start_time,CAST(end_time AS TEXT) AS end_time FROM attendance_schedule_shifts WHERE code='21001'"),{start_time:'07:00:00',end_time:'15:00:00'});
     const holidays=await all(db,'SELECT EXTRACT(YEAR FROM work_date)::int AS year, count(*)::int AS n FROM attendance_schedule_holidays GROUP BY 1 ORDER BY 1');
-    assert.deepEqual(holidays.map(row=>[row.year,row.n]),[[2026,17],[2027,18]]);
+    assert.deepEqual(holidays.map(row=>[row.year,row.n]),[[2026,27],[2027,34]]);
 
     const position=await insert(db,'positions',{org_unit_id:unit.id,code:'ABS-PILOT',name:'Sekretariat Uji'});
     const employees=[];
@@ -214,10 +216,10 @@ try{
     assert.equal(saturday.rows.length,42);
     assert(saturday.rows.every(row=>row.shift?.code==='10001'&&row.shift?.end_time==='13:00'&&row.shift?.late_time==='08:16'));
     assert((await schedule(manager,'2026-11-29')).rows.every(row=>row.day_type==='WEEKLY_OFF'&&row.shift===null));
-    for(const day of ['2026-12-25','2027-02-06']){
+    for(const [day,name] of [['2026-12-25','Natal'],['2027-02-06','Tahun Baru Imlek'],['2027-01-13','Hari Raya Galungan'],['2027-01-23','Hari Raya Kuningan'],['2027-12-25','Natal dan Hari Raya Saraswati']]){
       const {rows}=await schedule(manager,day);
       assert.equal(rows.length,42);
-      assert(rows.every(row=>row.day_type==='NATIONAL_HOLIDAY'&&row.holiday_name&&row.shift===null));
+      assert(rows.every(row=>row.day_type==='HOLIDAY'&&row.holiday_name===name&&row.shift===null),day);
     }
     assert((await schedule(manager,'2026-12-24')).rows.every(row=>row.day_type==='WORK'),'cuti bersama memerlukan aturan sendiri');
     assert((await schedule(manager,'2028-01-03')).rows.every(row=>row.day_type==='CALENDAR_PENDING'&&row.shift===null));
@@ -273,7 +275,7 @@ try{
     assert.deepEqual(mine[0].shifts.map(s=>[s.code,s.start_time,s.end_time,s.late_time]),[
       ['63001','06:00','14:00','06:16'],['63002','06:00','11:00','06:16'],
       ['63003','10:00','18:00','10:16'],['63004','10:00','15:00','10:16'],
-      ['63005','08:00','16:00','08:16'],['63006','08:00','13:00','08:15'],
+      ['63005','08:00','16:00','08:16'],['63006','08:00','13:00','08:16'],
     ]);
     const overview=await portal(self,'attendance/overview');
     assert.equal(overview.shift_references,true);

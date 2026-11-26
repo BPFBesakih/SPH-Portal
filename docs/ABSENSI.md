@@ -133,9 +133,16 @@ Teks ini perlu disahkan pemilik/SDM sebelum pilot dan dapat dipasang di halaman 
 
 ## Pilot jadwal Sekretariat
 
-Tab **Jadwal Kerja** menampilkan shift per tanggal sesuai cakupan akun. Jadwal berlaku sejak migrasi dipasang dan mengikuti penempatan utama pegawai aktif pada tanggal yang dipilih. Senin–Jumat memakai `10000` (08.00–16.00 WITA), Sabtu memakai `10001` (08.00–13.00 WITA), dan ambang keterlambatan keduanya pukul 08.16 WITA. Minggu dan hari libur nasional berstatus libur.
+Tab **Jadwal Kerja** menampilkan shift per tanggal sesuai cakupan akun. Jadwal berlaku sejak migrasi dipasang dan mengikuti penempatan utama pegawai aktif pada tanggal yang dipilih, termasuk THL. Senin–Jumat memakai `10000` (08.00–16.00 WITA), Sabtu memakai `10001` (08.00–13.00 WITA), dan keduanya mulai terlambat pukul 08.16 WITA. Minggu berstatus **Libur mingguan**. Hari libur nasional dan hari raya Hindu Bali berstatus **Hari libur** beserta namanya. Cuti bersama tetap hari kerja.
 
-Migrasi `20261125132221_attendance_fixed_schedules.sql` memuat master 41 shift dan hari libur nasional dari SKB 2026–2027. Tahun di luar kalender tersebut menampilkan status **Kalender libur belum tersedia** pada hari dengan pola kerja. Rekap masih memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Status terlambat dan Alpa memerlukan integrasi jadwal ke perhitungan rekap.
+Pegawai yang posisinya punya acuan shift (lihat bagian berikut) tidak ikut jadwal tetap unitnya, termasuk kalender liburnya. Menurut SDM, mereka tetap masuk pada hari raya Bali.
+
+Migrasi `20261125132221_attendance_fixed_schedules.sql` memuat:
+- master 41 shift yang dikonfirmasi SDM 26 Nov 2026, dengan mulai terlambat = jam masuk + 16 menit untuk semua shift;
+- libur nasional dari SKB 2026–2027 (bagian A, tanpa cuti bersama);
+- hari raya Hindu Bali 2026–2027 dari daftar Ditjen Bimas Hindu Kemenag yang berlabel Libur Fakultatif, tanpa Deepavali: Siwaratri, Penampahan Galungan, Galungan, Umanis Galungan, Penampahan Kuningan, Kuningan, Tawur Agung Kesanga (2027), Ngembak Geni, Saraswati, dan Pagerwesi.
+
+Kalender hanya bisa diubah lewat SQL. Tahun di luar kalender tersebut menampilkan status **Kalender libur belum tersedia** pada hari dengan pola kerja. Kalender 2028 perlu ditambahkan sebelum akhir 2027, setelah SKB dan daftar Bimas Hindu 2028 terbit. Rekap masih memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Status terlambat dan Alpa memerlukan integrasi jadwal ke perhitungan rekap.
 
 ## Acuan shift per posisi
 
@@ -155,7 +162,9 @@ Di **Absensi → Acuan Shift**, pilih posisi untuk melihat kode, jam masuk dan p
 
 Acuan melekat ke kode posisi. Pegawai melihat pilihan untuk posisi utamanya, atasan dapat melihat posisi timnya, dan pengelola melihat posisi sesuai cakupan akses. Penugasan gedung, shift penuh atau setengah, serta hari kerja dan libur pegawai memerlukan jadwal harian. Rekap tetap mencatat jam absen aktual.
 
-Untuk Keamanan, daftar berlaku sebagai acuan bidang. Pembagian shift per wilayah atau regu mengikuti penugasan. Dua kode Sekretariat Umum (`50001` dan `50002`) tersedia di master dan menunggu konfirmasi posisi yang menggunakannya.
+Untuk Keamanan, daftar berlaku sebagai acuan bidang. Pembagian shift per wilayah atau regu mengikuti penugasan. Kode `71001` memang tidak dipakai.
+
+Dua kode Sekretariat Umum (`50001` dan `50002`) dipakai tim Pelayanan Internal Sekretariat (jawaban SDM 26 Nov 2026). Kode posisinya belum diterima. Setelah kode itu dicantumkan di `positionShiftGroups` (`lib/attendance.mjs`), tim tersebut otomatis keluar dari jadwal tetap Sekretariat dan melihat kedua acuan ini. Sampai saat itu, Jadwal Kerja masih menampilkan jadwal Sekretariat untuk mereka. Posisi lain yang bekerja dengan shift, misalnya Pengolahan Sampah, menyusul dari SDM.
 
 ## Penyimpangan dari PRD / belum di tahap 1
 

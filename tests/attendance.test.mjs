@@ -334,6 +334,48 @@ test('Sekretariat 07:30 WITA is accepted inside the point and uses actual time f
  const recap=await f.route(f.users.staff,`recap/${f.e.staff.id}`,'GET',{},`from=${day}&to=${day}`);
  assert.deepEqual([recap.days[0].status,recap.days[0].minutes],['HADIR',510]);
 });
+test('master shift SQLite sama dengan migrasi dan mengikuti jawaban SDM 26 Nov 2026',t=>{
+ const f=fixture(t);
+ const sql=readFileSync(new URL('../supabase/migrations/20261125132221_attendance_fixed_schedules.sql',import.meta.url),'utf8');
+ const block=sql.slice(sql.indexOf('INSERT INTO portal.attendance_schedule_shifts'),sql.indexOf('INSERT INTO portal.attendance_schedule_holidays'));
+ const migration=[...block.matchAll(/\('(\d+)', '([^']+)', '(\d\d:\d\d)', '(\d\d:\d\d)', '(\d\d:\d\d)', ([01])\)/g)]
+  .map(([,code,name,start_time,end_time,late_time,offset])=>({code,name,start_time,end_time,late_time,end_day_offset:Number(offset)}));
+ const local=all(f.db,'SELECT code,name,start_time,end_time,late_time,end_day_offset FROM attendance_schedule_shifts ORDER BY code').map(row=>({...row}));
+ assert.equal(migration.length,41);assert.deepEqual(local,migration);
+ const minutes=clock=>Number(clock.slice(0,2))*60+Number(clock.slice(3,5));
+ assert.deepEqual(local.filter(s=>minutes(s.late_time)!==minutes(s.start_time)+16).map(s=>s.code),[],'mulai terlambat = jam masuk + 16 menit');
+ assert.deepEqual(['21001','61001','61002'].map(code=>local.find(s=>s.code===code)).map(s=>[s.name,s.start_time,s.end_time]),
+  [['Ops. Parkir Shift 1','07:00','15:00'],['Kebersihan Parahyangan','08:00','16:00'],['Kebersihan Parahyangan 1/2 Shift','08:00','13:00']]);
+ assert.equal(local.some(s=>s.code==='71001'),false,'71001 tidak dipakai');
+});
+test('DB lokal lama ikut terkoreksi saat skema dipasang ulang',t=>{
+ const dir=mkdtempSync(resolve(tmpdir(),'absen-shift-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const path=resolve(dir,'portal.sqlite');
+ let db=openDb(path);run(db,"UPDATE attendance_schedule_shifts SET end_time='12:00',late_time='07:15' WHERE code='21001'");
+ run(db,"UPDATE attendance_schedule_shifts SET name='Kebersihan Pahryangan' WHERE code='61001'");db.close();
+ db=openDb(path);t.after(()=>{if(db.isOpen)db.close();});
+ assert.deepEqual(all(db,"SELECT code,name,end_time,late_time FROM attendance_schedule_shifts WHERE code IN('21001','61001') ORDER BY code").map(row=>({...row})),
+  [{code:'21001',name:'Ops. Parkir Shift 1',end_time:'15:00',late_time:'07:16'},{code:'61001',name:'Kebersihan Parahyangan',end_time:'16:00',late_time:'08:16'}]);
+});
+test('jadwal tetap: hari raya Bali libur, posisi beracuan shift tidak ikut jadwal unit',async t=>{
+ const f=fixture(t),day='2026-11-24',galungan='2027-01-12';
+ run(f.db,'INSERT INTO attendance_schedule_units VALUES (?,?)',f.units.office.id,day);
+ run(f.db,"INSERT INTO attendance_schedule_weekdays VALUES (?,2,'10000')",f.units.office.id);
+ run(f.db,"INSERT INTO attendance_schedule_holidays VALUES ('2026-12-25','Natal'),('2027-01-12','Penampahan Galungan')");
+ // Satu kode posisi beracuan shift dipakai di unit berjadwal tetap, seperti tim Pelayanan Internal Sekretariat.
+ const shiftPosition=insert(f.db,'positions',{code:'BPB_OP_P044',name:'Staf Shift Fiktif',org_unit_id:f.units.office.id,is_active:1});
+ const shiftWorker=insert(f.db,'employees',{employee_no:'FX-shift',full_name:'Petugas Shift Fiktif',employment_status:'Tetap',joined_on:'2020-01-01',is_active:1});
+ insert(f.db,'employee_placements',{employee_id:shiftWorker.id,position_id:shiftPosition.id,supervisor_employee_id:f.e.boss.id,valid_from:'2020-01-01',is_primary:1});
+ const names=rows=>rows.map(row=>row.employee.name);
+ const work=await f.route(f.users.manager,'schedule','GET',{},'date='+day);
+ assert.deepEqual(names(work.rows),['Atasan Fiktif','Staf Fiktif']);
+ assert(work.rows.every(row=>row.day_type==='WORK'&&row.shift.code==='10000'));
+ const holiday=await f.route(f.users.manager,'schedule','GET',{},'date='+galungan);
+ assert.deepEqual(holiday.rows.map(row=>[row.employee.name,row.day_type,row.holiday_name,row.shift]),
+  [['Atasan Fiktif','HOLIDAY','Penampahan Galungan',null],['Staf Fiktif','HOLIDAY','Penampahan Galungan',null]]);
+ const options=await f.route(f.users.manager,'shift-options');
+ assert.deepEqual(options.positions.find(position=>position.code==='BPB_OP_P044').shifts.map(shift=>shift.code),['20001','20002','20003','20004']);
+});
 test('outside access is explicit per employee, applies to both directions, and can be revoked',async t=>{
  const f=fixture(t),device=await registerDevice(f,{owner:f.e.other});await addPoint(f);
  const far={latitude:-8.3700,longitude:115.4512,accuracy:15,age_ms:1000},outside={reason:'TUGAS_LAPANGAN',note:'Patroli fiktif'};

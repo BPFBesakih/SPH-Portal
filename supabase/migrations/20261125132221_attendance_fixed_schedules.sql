@@ -41,7 +41,8 @@ REVOKE ALL ON portal.attendance_schedule_shifts, portal.attendance_schedule_unit
   portal.attendance_schedule_weekdays, portal.attendance_schedule_holidays
   FROM PUBLIC, anon, authenticated, service_role;
 
--- Master Shift Absensi SPH Portal yang dikonfirmasi, 41 kode.
+-- Master Shift Absensi SPH Portal, 41 kode, dikonfirmasi SDM 26 Nov 2026.
+-- Mulai terlambat = jam masuk + 16 menit untuk semua shift. Kode 71001 memang tidak dipakai.
 INSERT INTO portal.attendance_schedule_shifts (code, name, start_time, end_time, late_time, end_day_offset) VALUES
   ('10000', 'Sekretariat Senin-Jumat', '08:00', '16:00', '08:16', 0),
   ('10001', 'Sekretariat Sabtu', '08:00', '13:00', '08:16', 0),
@@ -49,24 +50,24 @@ INSERT INTO portal.attendance_schedule_shifts (code, name, start_time, end_time,
   ('20002', 'Ops. Shuttle Shift 2', '10:00', '18:00', '10:16', 0),
   ('20003', 'Ops. Shuttle Shift 3', '14:00', '22:00', '14:16', 0),
   ('20004', 'Ops. Shuttle half-shift', '07:00', '12:00', '07:16', 0),
-  ('21001', 'Ops. Parkir Shift 1', '07:00', '12:00', '07:15', 0),
-  ('21002', 'Ops. Parkir Shift 2', '10:00', '18:00', '10:15', 0),
-  ('21003', 'Ops. Parkir half-shift', '07:00', '12:00', '07:15', 0),
+  ('21001', 'Ops. Parkir Shift 1', '07:00', '15:00', '07:16', 0),
+  ('21002', 'Ops. Parkir Shift 2', '10:00', '18:00', '10:16', 0),
+  ('21003', 'Ops. Parkir half-shift', '07:00', '12:00', '07:16', 0),
   ('22001', 'Ops. Kunjungan Shift 1', '07:00', '15:00', '07:16', 0),
-  ('22002', 'Ops. Kunjungan Shift 2', '10:00', '18:00', '10:15', 0),
+  ('22002', 'Ops. Kunjungan Shift 2', '10:00', '18:00', '10:16', 0),
   ('22003', 'Ops. Kunjungan half-shift 1', '07:00', '12:00', '07:16', 0),
-  ('22004', 'Ops. Kunjungan half-shift 2', '13:00', '18:00', '13:15', 0),
-  ('30001', 'Keamanan Shift 1', '07:00', '15:00', '07:15', 0),
-  ('30002', 'Keamanan Shift 2', '15:00', '22:00', '15:15', 0),
-  ('30003', 'Keamanan Shift 3', '22:00', '07:00', '22:15', 1),
-  ('40001', 'Bankamda Shift 1', '07:00', '15:00', '07:15', 0),
-  ('40002', 'Bankamda Shift 2', '10:00', '18:00', '10:15', 0),
-  ('50001', 'Sekretariat Umum Shift 1', '07:00', '15:00', '07:15', 0),
-  ('50002', 'Sekretariat Umum Shift 2', '10:00', '18:00', '10:15', 0),
+  ('22004', 'Ops. Kunjungan half-shift 2', '13:00', '18:00', '13:16', 0),
+  ('30001', 'Keamanan Shift 1', '07:00', '15:00', '07:16', 0),
+  ('30002', 'Keamanan Shift 2', '15:00', '22:00', '15:16', 0),
+  ('30003', 'Keamanan Shift 3', '22:00', '07:00', '22:16', 1),
+  ('40001', 'Bankamda Shift 1', '07:00', '15:00', '07:16', 0),
+  ('40002', 'Bankamda Shift 2', '10:00', '18:00', '10:16', 0),
+  ('50001', 'Sekretariat Umum Shift 1', '07:00', '15:00', '07:16', 0),
+  ('50002', 'Sekretariat Umum Shift 2', '10:00', '18:00', '10:16', 0),
   ('60001', 'Kebersihan Lingkungan', '07:00', '15:00', '07:16', 0),
   ('60002', 'Kebersihan Lingkungan 1/2 Shift', '07:00', '12:00', '07:16', 0),
-  ('61001', 'Kebersihan Pahryangan', '08:00', '16:00', '08:16', 0),
-  ('61002', 'Kebersihan Pahryangan 1/2 Shift', '08:00', '13:00', '08:16', 0),
+  ('61001', 'Kebersihan Parahyangan', '08:00', '16:00', '08:16', 0),
+  ('61002', 'Kebersihan Parahyangan 1/2 Shift', '08:00', '13:00', '08:16', 0),
   ('62001', 'Pertamanan', '08:00', '16:00', '08:16', 0),
   ('62002', 'Pertamanan 1/2 Shift', '08:00', '13:00', '08:16', 0),
   ('63001', 'Kebersihan Gedung A', '06:00', '14:00', '06:16', 0),
@@ -74,20 +75,21 @@ INSERT INTO portal.attendance_schedule_shifts (code, name, start_time, end_time,
   ('63003', 'Kebersihan Gedung B', '10:00', '18:00', '10:16', 0),
   ('63004', 'Kebersihan Gedung B 1/2 Shift', '10:00', '15:00', '10:16', 0),
   ('63005', 'Kebersihan Gedung C', '08:00', '16:00', '08:16', 0),
-  ('63006', 'Kebersihan Gedung C 1/2 Shift', '08:00', '13:00', '08:15', 0),
-  ('70000', 'Keamanan Pagi 0', '07:00', '15:00', '07:15', 0),
-  ('70001', 'Keamanan Pagi 1', '06:00', '13:00', '06:15', 0),
-  ('70002', 'Keamanan Pagi 2', '09:00', '17:00', '09:15', 0),
-  ('70003', 'Keamanan Pagi 3', '07:00', '12:00', '07:15', 0),
-  ('71000', 'Keamanan Siang 0', '11:00', '18:00', '11:15', 0),
-  ('71002', 'Keamanan Siang 2', '11:00', '17:00', '11:15', 0),
-  ('71003', 'Keamanan Siang 3', '10:00', '18:00', '10:15', 0),
-  ('72001', 'Keamanan Sore 1', '15:00', '23:00', '15:15', 0),
-  ('73000', 'Keamanan Malam 0', '22:00', '06:00', '22:15', 1);
+  ('63006', 'Kebersihan Gedung C 1/2 Shift', '08:00', '13:00', '08:16', 0),
+  ('70000', 'Keamanan Pagi 0', '07:00', '15:00', '07:16', 0),
+  ('70001', 'Keamanan Pagi 1', '06:00', '13:00', '06:16', 0),
+  ('70002', 'Keamanan Pagi 2', '09:00', '17:00', '09:16', 0),
+  ('70003', 'Keamanan Pagi 3', '07:00', '12:00', '07:16', 0),
+  ('71000', 'Keamanan Siang 0', '11:00', '18:00', '11:16', 0),
+  ('71002', 'Keamanan Siang 2', '11:00', '17:00', '11:16', 0),
+  ('71003', 'Keamanan Siang 3', '10:00', '18:00', '10:16', 0),
+  ('72001', 'Keamanan Sore 1', '15:00', '23:00', '15:16', 0),
+  ('73000', 'Keamanan Malam 0', '22:00', '06:00', '22:16', 1);
 
--- Hari libur nasional sesuai bagian A lampiran SKB tahun 2026 dan 2027.
--- 2026: https://jdih.kemnaker.go.id/asset/data_puu/2025kb002.pdf
--- 2027: https://data-jdih.menpan.go.id/dokumen/2026skb002.pdf
+-- Kalender libur jadwal tetap (jawaban SDM 26 Nov 2026). Pegawai yang memakai acuan shift tetap masuk.
+-- 1. Libur nasional sesuai bagian A lampiran SKB tahun 2026 dan 2027. Cuti bersama tidak libur.
+--    2026: https://jdih.kemnaker.go.id/asset/data_puu/2025kb002.pdf
+--    2027: https://data-jdih.menpan.go.id/dokumen/2026skb002.pdf
 INSERT INTO portal.attendance_schedule_holidays (work_date, name) VALUES
   ('2026-01-01', 'Tahun Baru Masehi'),
   ('2026-01-16', 'Isra Mikraj'),
@@ -102,7 +104,7 @@ INSERT INTO portal.attendance_schedule_holidays (work_date, name) VALUES
   ('2026-05-27', 'Iduladha'),
   ('2026-05-31', 'Hari Raya Waisak'),
   ('2026-06-01', 'Hari Lahir Pancasila'),
-  ('2026-06-16', 'Tahun Baru Hijriah'),
+  ('2026-06-16', 'Tahun Baru Hijriah dan Penampahan Galungan'),
   ('2026-08-17', 'Hari Kemerdekaan RI'),
   ('2026-08-25', 'Maulid Nabi Muhammad'),
   ('2026-12-25', 'Natal'),
@@ -122,8 +124,42 @@ INSERT INTO portal.attendance_schedule_holidays (work_date, name) VALUES
   ('2027-06-06', 'Tahun Baru Hijriah'),
   ('2027-08-15', 'Maulid Nabi Muhammad'),
   ('2027-08-17', 'Hari Kemerdekaan RI'),
-  ('2027-12-25', 'Natal'),
+  ('2027-12-25', 'Natal dan Hari Raya Saraswati'),
   ('2027-12-26', 'Isra Mikraj');
+
+-- 2. Hari raya Hindu Bali berlabel Libur Fakultatif pada daftar Ditjen Bimas Hindu Kemenag, tanpa Deepavali.
+--    2026: surat B-253/DJ.VI/Dt.VI.I.3/BA.03/09/2025. Tawur Agung Kesanga 18 Maret 2026 berlabel cuti bersama.
+--    2027: surat B-307/DJ.VI/Dt.VI.I.3/BA.03/09/2026 tanggal 18 September 2026,
+--          https://bimashindu.kemenag.go.id/storage/files/20260918101947Surat%20Hari%20Libur%20Hindu%20Tahun%202027%20.pdf
+--    Dua hari raya Bali bertepatan dengan libur nasional, jadi namanya digabung di baris nasional di atas:
+--    Penampahan Galungan 16 Juni 2026 dan Hari Raya Saraswati 25 Desember 2027.
+INSERT INTO portal.attendance_schedule_holidays (work_date, name) VALUES
+  ('2026-01-17', 'Hari Suci Siwaratri'),
+  ('2026-03-20', 'Ngembak Geni'),
+  ('2026-04-04', 'Hari Raya Saraswati'),
+  ('2026-04-08', 'Hari Raya Pagerwesi'),
+  ('2026-06-17', 'Hari Raya Galungan'),
+  ('2026-06-18', 'Umanis Galungan'),
+  ('2026-06-26', 'Penampahan Kuningan'),
+  ('2026-06-27', 'Hari Raya Kuningan'),
+  ('2026-10-31', 'Hari Raya Saraswati'),
+  ('2026-11-04', 'Hari Raya Pagerwesi'),
+  ('2027-01-06', 'Hari Suci Siwaratri'),
+  ('2027-01-12', 'Penampahan Galungan'),
+  ('2027-01-13', 'Hari Raya Galungan'),
+  ('2027-01-14', 'Umanis Galungan'),
+  ('2027-01-22', 'Penampahan Kuningan'),
+  ('2027-01-23', 'Hari Raya Kuningan'),
+  ('2027-03-07', 'Tawur Agung Kesanga'),
+  ('2027-03-09', 'Ngembak Geni'),
+  ('2027-05-29', 'Hari Raya Saraswati'),
+  ('2027-06-02', 'Hari Raya Pagerwesi'),
+  ('2027-08-10', 'Penampahan Galungan'),
+  ('2027-08-11', 'Hari Raya Galungan'),
+  ('2027-08-12', 'Umanis Galungan'),
+  ('2027-08-20', 'Penampahan Kuningan'),
+  ('2027-08-21', 'Hari Raya Kuningan'),
+  ('2027-12-29', 'Hari Raya Pagerwesi');
 
 INSERT INTO portal.attendance_schedule_units (org_unit_id, starts_on)
 SELECT id, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Makassar')::date

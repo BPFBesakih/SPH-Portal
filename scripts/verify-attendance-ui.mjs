@@ -120,7 +120,7 @@ try{
   await chooseDate('2026-11-29');
   await result.getByText('Libur mingguan',{exact:true}).waitFor();
   await chooseDate('2026-12-25');
-  await result.getByText('Libur nasional',{exact:true}).waitFor();
+  await result.getByText('Hari libur',{exact:true}).waitFor();
   await result.getByText('Natal',{exact:true}).waitFor();
  });
  await check('portal: Acuan Shift shows all options for the selected position without assigning a shift',async()=>{
@@ -129,18 +129,18 @@ try{
   const rows=portal.locator('#attendance-content tbody tr');
   await positionInput.selectOption('BPB_PLK_P081_STAF');
   assert.equal(await rows.count(),6);
-  assert.deepEqual(await rows.last().locator('td').allTextContents(),['63006','Kebersihan Gedung C 1/2 Shift','08:00','13:00','08:15']);
+  assert.deepEqual(await rows.last().locator('td').allTextContents(),['63006','Kebersihan Gedung C 1/2 Shift','08:00','13:00','08:16']);
   await positionInput.selectOption('BPB_PLK_P082_THL');
   await portal.getByRole('heading',{name:'THL Pertamanan',exact:true}).waitFor();
   assert.deepEqual(await rows.first().locator('td').allTextContents(),['62001','Pertamanan','08:00','16:00','08:16']);
   assert.equal(await rows.count(),2);
   await positionInput.selectOption('BPB_OP_P070');
   assert.deepEqual(await rows.locator('td:first-child').allTextContents(),['21001','21002','21003']);
-  assert.deepEqual(await rows.first().locator('td').allTextContents(),['21001','Ops. Parkir Shift 1','07:00','12:00','07:15']);
+  assert.deepEqual(await rows.first().locator('td').allTextContents(),['21001','Ops. Parkir Shift 1','07:00','15:00','07:16']);
   await positionInput.selectOption('BPB_PLK_P074');
   assert.equal(await rows.count(),12);
   await rows.getByText('07:00 (esok hari)',{exact:true}).waitFor();
-  assert.deepEqual(await rows.last().locator('td').allTextContents(),['73000','Keamanan Malam 0','22:00','06:00 (esok hari)','22:15']);
+  assert.deepEqual(await rows.last().locator('td').allTextContents(),['73000','Keamanan Malam 0','22:00','06:00 (esok hari)','22:16']);
   assert.equal(await portal.getByLabel('Tanggal jadwal').count(),0);
  });
  await check('portal: a point is placed with pasted Google Maps coordinates and drawn on the map with its radius',async()=>{

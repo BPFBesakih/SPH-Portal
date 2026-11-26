@@ -406,12 +406,15 @@ async function activeScheduleUnits(db, day) {
   return new Set((await all(db, `SELECT s.org_unit_id FROM attendance_schedule_units s
   JOIN org_units u ON u.id=s.org_unit_id WHERE u.is_active=1 AND s.starts_on<=?`, day)).map(row => row.org_unit_id));
 }
-function scheduledPeople(scope, units, people = scope.people) {
-  return people.filter(person => person.is_active && !person.ambiguous && scope.readable.has(person.id) && units.has(person.org_unit_id));
+const shiftPositionCodes = [...new Set(positionShiftPairs.map(([position]) => position))];
+const shiftPositionSql = `SELECT id FROM positions WHERE code IN (${shiftPositionCodes.map(() => '?').join(',')})`;
+async function scheduledPeople(db, scope, units, people = scope.people) {
+  const shiftPositions = new Set((await all(db, shiftPositionSql, ...shiftPositionCodes)).map(row => row.id));
+  return people.filter(person => person.is_active && !person.ambiguous && scope.readable.has(person.id) && units.has(person.org_unit_id) && !shiftPositions.has(person.position_id));
 }
 async function scheduleForDate(db, scope, day, todayDate) {
   const units = await activeScheduleUnits(db, day);
-  const people = scheduledPeople(scope, units, day === todayDate ? scope.people : await directory(db, null, day));
+  const people = await scheduledPeople(db, scope, units, day === todayDate ? scope.people : await directory(db, null, day));
   if (!people.length) return {
     date: day,
     rows: []
@@ -426,7 +429,7 @@ async function scheduleForDate(db, scope, day, todayDate) {
   WHERE work_date>=? AND work_date<=? LIMIT 1`, day.slice(0, 4) + '-01-01', day.slice(0, 4) + '-12-31');
   const rows = people.map(person => {
     const shift = shiftByUnit.get(person.org_unit_id);
-    const dayType = holiday ? 'NATIONAL_HOLIDAY' : !shift ? 'WEEKLY_OFF' : knownYear ? 'WORK' : 'CALENDAR_PENDING';
+    const dayType = holiday ? 'HOLIDAY' : !shift ? 'WEEKLY_OFF' : knownYear ? 'WORK' : 'CALENDAR_PENDING';
     return {
       employee: view(person),
       day_type: dayType,
@@ -453,7 +456,7 @@ export async function attendanceRoutes({db, user, p, method, body: b = {}, url},
    AND NOT EXISTS(SELECT 1 FROM attendance_reference_photos r WHERE r.event_id=e.id)`, new Date(nowMs - attendanceRules.photoRetentionDays * DAY).toISOString()))?.n || 0) : 0;
     const todayDate = today();
     const hasScheduleTables = await scheduleTablesReady(db);
-    const schedule = hasScheduleTables && scheduledPeople(scope, await activeScheduleUnits(db, todayDate)).length > 0;
+    const schedule = hasScheduleTables && (await scheduledPeople(db, scope, await activeScheduleUnits(db, todayDate))).length > 0;
     const shiftReferences = hasScheduleTables && (await positionShiftReferences(db, scope, user, deps)).length > 0;
     return {
       today: todayDate,
