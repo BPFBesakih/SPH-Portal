@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: bba82e1556e141681103947d3997805aa4bbb2fb
+          ref: 528c77820365cc6de90bbfa727a0d281fb0f6580
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
@@ -26,3 +26,21 @@ jobs:
           "$RUNNER_TEMP/absensi-browser/node_modules/.bin/playwright" install --with-deps chromium
       - name: Uji browser dengan pegawai, kamera, dan lokasi fiktif
         run: PLAYWRIGHT_MODULE="$RUNNER_TEMP/absensi-browser/node_modules/playwright" node scripts/verify-attendance-ui.mjs
+  produksi:
+    name: Cocokkan halaman absen produksi dengan master
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 528c77820365cc6de90bbfa727a0d281fb0f6580
+          persist-credentials: false
+      - name: Periksa aset publik bpbesakih.com
+        run: |
+          set -euo pipefail
+          for asset in absen/sw.js absen/absen.js portal-static/manifest.json; do
+            curl --fail --silent --show-error --location --compressed --retry 3 --max-time 20 \
+              "https://bpbesakih.com/$asset" -o "$RUNNER_TEMP/live-asset"
+            cmp "site-info/dist/$asset" "$RUNNER_TEMP/live-asset"
+            echo "Sesuai dengan master: /$asset"
+          done
