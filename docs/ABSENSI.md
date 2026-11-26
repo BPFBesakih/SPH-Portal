@@ -150,6 +150,7 @@ Di **Absensi → Acuan Shift**, pilih posisi untuk melihat kode, jam masuk dan p
 
 | Posisi | Kode acuan |
 |---|---|
+| Staf Pelayanan Internal Sekretariat (`BPB_S_P056`) | `50001` (07.00–15.00 WITA), `50002` (10.00–18.00 WITA) |
 | Koordinator dan staf Pelayanan Shuttle | `20001`–`20004` |
 | Koordinator dan staf Pelayanan Parkir | `21001`–`21003` |
 | Koordinator dan staf Informasi & Penjualan Tiket, Administrasi Layanan Kunjungan, serta Review & Keluhan Pelanggan | `22001`–`22004` |
@@ -164,7 +165,7 @@ Acuan melekat ke kode posisi. Pegawai melihat pilihan untuk posisi utamanya, ata
 
 Untuk Keamanan, daftar berlaku sebagai acuan bidang. Pembagian shift per wilayah atau regu mengikuti penugasan. Kode `71001` memang tidak dipakai.
 
-Dua kode Sekretariat Umum (`50001` dan `50002`) dipakai tim Pelayanan Internal Sekretariat (jawaban SDM 26 Nov 2026). Kode posisinya belum diterima. Setelah kode itu dicantumkan di `positionShiftGroups` (`lib/attendance.mjs`), tim tersebut otomatis keluar dari jadwal tetap Sekretariat dan melihat kedua acuan ini. Sampai saat itu, Jadwal Kerja masih menampilkan jadwal Sekretariat untuk mereka. Posisi lain yang bekerja dengan shift, misalnya Pengolahan Sampah, menyusul dari SDM.
+Kepala Urusan Pengadaan & Pelayanan Internal (`BPB_S_P011`) dan Koordinator Pelayanan Internal (`BPB_S_P025`) mengikuti jadwal reguler Sekretariat beserta kalender liburnya. Acuan untuk posisi lain, misalnya Pengolahan Sampah, menyusul dari SDM.
 
 ## Penyimpangan dari PRD / belum di tahap 1
 

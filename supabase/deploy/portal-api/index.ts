@@ -10435,6 +10435,9 @@ var shiftFields = `s.code, s.name,
   substr(CAST(s.end_time AS TEXT),1,5) AS end_time,
   substr(CAST(s.late_time AS TEXT),1,5) AS late_time, s.end_day_offset`;
 var positionShiftGroups = [{
+  positions: ["BPB_S_P056"],
+  shifts: ["50001", "50002"]
+}, {
   positions: ["BPB_OP_P044", "BPB_OP_P069"],
   shifts: ["20001", "20002", "20003", "20004"]
 }, {

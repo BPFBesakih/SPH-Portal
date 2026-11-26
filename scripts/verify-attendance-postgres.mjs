@@ -288,10 +288,12 @@ try{
     await run(db,'UPDATE positions SET is_active=0 WHERE id=?',positions.get(building).id);
     assert.deepEqual(await options(self),[]);
   });
-  await check('operations, regional security and Bankamda have distinct reference shifts without a daily assignment',async()=>{
+  await check('shift references follow position codes for Internal Services, operations, regional security and Bankamda',async()=>{
+    const sekretariat=await one(db,"SELECT id,code FROM org_units WHERE code='BPB_S'");
     const ops=await insert(db,'org_units',{code:'ABS-OPS',name:'Operasional Uji'});
     const security=await insert(db,'org_units',{code:'ABS-SEC',name:'Keamanan Uji'});
     const groups=[
+      [sekretariat,['BPB_S_P056'],['50001','50002']],
       [ops,['BPB_OP_P044','BPB_OP_P069'],['20001','20002','20003','20004']],
       [ops,['BPB_OP_P045','BPB_OP_P070'],['21001','21002','21003']],
       [ops,['BPB_OP_P041','BPB_OP_P042','BPB_OP_P043','BPB_OP_P066','BPB_OP_P067','BPB_OP_P068'],['22001','22002','22003','22004']],
@@ -302,10 +304,10 @@ try{
     for(const [unit,codes] of groups)for(const code of codes){
       await insert(db,'positions',{org_unit_id:unit.id,code,name:'Posisi uji '+code});
     }
-    for(const [unit,codes] of [[ops,['BPB_OP_P018','BPB_OP_P071']],[security,['BPB_PLK_P078','BPB_PLK_P083_STAF']]]){
+    for(const [unit,codes] of [[sekretariat,['BPB_S_P011','BPB_S_P025']],[ops,['BPB_OP_P018','BPB_OP_P071']],[security,['BPB_PLK_P078','BPB_PLK_P083_STAF']]]){
       for(const code of codes)await insert(db,'positions',{org_unit_id:unit.id,code,name:'Posisi tanpa acuan '+code});
     }
-    for(const unit of [ops,security]){
+    for(const unit of [sekretariat,ops,security]){
       const actor=await account('pengelola-'+unit.code.toLowerCase(),null,'ABSENSI_PENGELOLA','ASSIGNED_UNITS',[unit.id]);
       const {positions}=await portal(actor,'attendance/shift-options');
       const expected=new Map(groups.filter(([groupUnit])=>groupUnit.id===unit.id)
