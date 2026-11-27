@@ -158,13 +158,18 @@ function recapTab(){
 async function exportRecap(){
  const unit=A.unit?`&unit=${encodeURIComponent(A.unit)}`:'';
  const data=await api(`attendance/recap?from=${A.from}&to=${A.to}&detail=1${unit}`);
- const summary=data.employees.map(r=>({nama:r.employee.name,nomor:r.employee.employee_no,jabatan:r.employee.position,unit:r.employee.unit,...r.summary,jam:Math.round(r.summary.menit/6)/10}));
+ // Hari dan menit terlambat dihitung dari keterangan ketepatan masuk per hari (sama dengan lembar Rincian harian).
+ const summary=data.employees.map(r=>{
+  const late=r.days.filter(d=>d.timing?.late);
+  return {nama:r.employee.name,nomor:r.employee.employee_no,jabatan:r.employee.position,unit:r.employee.unit,...r.summary,
+   hari_terlambat:late.length,menit_terlambat:late.reduce((total,d)=>total+d.timing.minutes,0),jam:Math.round(r.summary.menit/6)/10};
+ });
  const detail=[];
  for(const r of data.employees)for(const d of r.days)detail.push({tanggal:d.date,nama:r.employee.name,nomor:r.employee.employee_no,unit:r.employee.unit,status:statusLabel[d.status],masuk:d.in_at,ketepatan:timingLabel(d.timing),pulang:d.out_at,menit:d.minutes,tanda:d.flags.map(f=>flagLabel[f]||f).join(', '),keterangan:d.note?`${noteLabel[d.note.kind]}${d.note.note?': '+d.note.note:''}`:'',koreksi:d.corrected?'Ya':''});
  await post('attendance/exports',{kind:'detail',from:data.from,to:data.to,rows:detail.length});
  const col=(header,key,kind='text',width)=>({header,key,kind,width});
  download(createXlsx([
-  {name:'Ringkasan',columns:[col('Nama','nama','text',30),col('Nomor pegawai','nomor'),col('Jabatan','jabatan','text',28),col('Unit','unit','text',24),col('Hadir','hadir','number'),col('Tanpa pulang','tanpa_pulang','number'),col('Tanpa masuk','tanpa_masuk','number'),col('Cuti','cuti','number'),col('Izin','izin','number'),col('Sakit','sakit','number'),col('Dinas luar','dinas_luar','number'),col('Tidak ada catatan','tanpa_catatan','number'),col('Hari ditandai','ditandai','number'),col('Jam kerja','jam','number')],rows:summary},
+  {name:'Ringkasan',columns:[col('Nama','nama','text',30),col('Nomor pegawai','nomor'),col('Jabatan','jabatan','text',28),col('Unit','unit','text',24),col('Hadir','hadir','number'),col('Hari terlambat','hari_terlambat','number'),col('Menit terlambat','menit_terlambat','number'),col('Tanpa pulang','tanpa_pulang','number'),col('Tanpa masuk','tanpa_masuk','number'),col('Cuti','cuti','number'),col('Izin','izin','number'),col('Sakit','sakit','number'),col('Dinas luar','dinas_luar','number'),col('Tidak ada catatan','tanpa_catatan','number'),col('Hari ditandai','ditandai','number'),col('Jam kerja','jam','number')],rows:summary},
   {name:'Rincian harian',columns:[col('Tanggal','tanggal','date'),col('Nama','nama','text',30),col('Nomor pegawai','nomor'),col('Unit','unit','text',24),col('Status','status','text',22),col('Masuk','masuk','datetime'),col('Ketepatan masuk','ketepatan','text',36),col('Pulang','pulang','datetime'),col('Menit kerja','menit','number'),col('Tanda','tanda','notes',30),col('Keterangan','keterangan','notes',30),col('Dikoreksi','koreksi')],rows:detail}
  ]),`absensi-${data.from}-sd-${data.to}.xlsx`);
 }

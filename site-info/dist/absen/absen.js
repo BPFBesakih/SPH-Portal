@@ -400,9 +400,13 @@ async function shoot(){
  </section>`,true,retake);
 }
 function retake(){
- if(!S.attempt)return;
- S.attempt.photo=null;
- S.attempt.photoConfirmed=false;
+ const attempt=S.attempt,camera=S.camera;if(!attempt)return;
+ attempt.photo=null;
+ attempt.photoConfirmed=false;
+ // Lokasi sudah didapat dan radius sudah dicek sebelum selfie pertama, dan GPS tetap berjalan.
+ // Kamera langsung dibuka lagi tanpa mencari lokasi ulang; server tetap memeriksa lokasi saat
+ // absen dicatat. Bila GPS sudah berhenti (misalnya sesudah gangguan), lokasi dicari dari awal.
+ if(camera&&camera.watch!=null&&camera.position&&!camera.denied)return openSelfie(camera,attempt.kind);
  return locateAttempt();
 }
 async function submit(){

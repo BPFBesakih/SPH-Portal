@@ -21,6 +21,16 @@ import {createApp} from '../server.mjs';
 const {chromium}=createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE||'playwright');
 const shots=process.argv[2]?resolve(process.argv[2]):null;if(shots)mkdirSync(shots,{recursive:true});
 const freePort=()=>new Promise(r=>{const probe=createServer().listen(0,'127.0.0.1',()=>{const {port}=probe.address();probe.close(()=>r(port));});});
+// Ekspor Excel memakai ZIP "store" (tanpa kompresi), jadi XML tiap sheet terbaca langsung dari berkas.
+// Hasilnya baris data sebagai objek {judul kolom: nilai}; angka menjadi Number.
+function xlsxRows(file,index){
+ const text=readFileSync(file,'utf8'),from=text.indexOf(`xl/worksheets/sheet${index}.xml<?xml`);
+ assert(from>=0,`sheet ${index} tidak ditemukan`);
+ const sheet=text.slice(from,text.indexOf('</worksheet>',from));
+ const [head,...body]=[...sheet.matchAll(/<row r="\d+"[^>]*>(.*?)<\/row>/g)].map(([,row])=>Object.fromEntries(
+  [...row.matchAll(/<c r="([A-Z]+)\d+"[^>]*>(?:<is><t[^>]*>(.*?)<\/t><\/is>|<v>(.*?)<\/v>)<\/c>/g)].map(([,column,text,value])=>[column,text??Number(value)])));
+ return body.map(row=>Object.fromEntries(Object.entries(head).map(([column,header])=>[header,row[column]])));
+}
 const db=openDb(':memory:');seedPermissions(db);
 const office=insert(db,'org_units',{code:'BPB_S',name:'Kantor Uji',is_active:1}),post=insert(db,'org_units',{code:'UJI-U1',name:'Pos Uji',parent_id:office.id,is_active:1});
 const position=(code,name,unit)=>insert(db,'positions',{code,name,org_unit_id:unit.id,is_active:1});
@@ -202,11 +212,16 @@ try{
   await screen('Periksa foto absen MASUK');
   assert(await hp.getByAltText('Selfie yang akan dikirim').evaluate(img=>img.decode().then(()=>img.naturalWidth>0)));
   assert.equal(one(db,'SELECT count(*) n FROM attendance_events').n,0);
+  // Ambil ulang dan Kembali dari pratinjau langsung membuka kamera: lokasi tidak dicari dan radius tidak dicek ulang.
+  let locationChecks=0;const countCheck=req=>{if(req.url().endsWith('/api/attendance-form/check-location'))locationChecks++;};
+  hp.on('request',countCheck);
   await hp.getByRole('button',{name:'Ambil ulang foto'}).click();
+  await screen('Selfie untuk absen MASUK');assert.match(await hp.locator('[data-location]').textContent(),/^Lokasi didapat/);
   await hp.locator('[data-action=shoot]:enabled').click();
   await screen('Periksa foto absen MASUK');
   await hp.locator('header').getByRole('button',{name:'Kembali'}).click();
   await screen('Selfie untuk absen MASUK');
+  hp.off('request',countCheck);assert.equal(locationChecks,0);
   assert.equal(one(db,'SELECT count(*) n FROM attendance_events').n,0);
   await hp.locator('[data-action=shoot]:enabled').click();
   const preview=await hp.getByAltText('Selfie yang akan dikirim').getAttribute('src');
@@ -376,6 +391,21 @@ try{
   assert.match(download.suggestedFilename(),/^absensi-\d{4}-\d{2}-\d{2}-sd-\d{4}-\d{2}-\d{2}\.xlsx$/);
   const file=await download.path();assert.equal(readFileSync(file).subarray(0,2).toString(),'PK');
   assert.equal(one(db,"SELECT count(*) n FROM audit_events WHERE action='EXPORT'").n,1);
+  // Ringkasan menghitung hari dan menit terlambat. Kepala Uji (jadwal tetap Kantor Uji, 08.00, terlambat
+  // mulai 08.16) masuk Senin 23 Nov 08.20 dan Selasa 24 Nov 09.05 WITA: 2 hari, 20 + 65 = 85 menit.
+  const device=one(db,'SELECT id FROM attendance_devices ORDER BY created_at LIMIT 1'),point=one(db,'SELECT id,name FROM attendance_points ORDER BY created_at LIMIT 1');
+  for(const [day,at] of [['2026-11-23','2026-11-23T00:20:00.000Z'],['2026-11-24','2026-11-24T01:05:00.000Z']])
+   insert(db,'attendance_events',{employee_id:head.id,kind:'IN',recorded_at:at,work_date:day,device_id:device.id,client_key:crypto.randomUUID(),latitude:-8.3741,longitude:115.4512,accuracy_m:8,
+    point_id:point.id,point_name:point.name,distance_m:0,within_point:1,photo_mime:'image/jpeg',photo_size:1000,photo_checksum:'0'.repeat(64),photo_deleted_at:at,flags:'[]'});
+  await portal.locator('[data-att-field=from]').fill('2026-11-23');await portal.locator('[data-att-field=to]').fill('2026-11-24');
+  await Promise.all([portal.waitForResponse(r=>r.url().includes('attendance/recap?from=2026-11-23&to=2026-11-24')),portal.locator('[data-att=apply]').click()]);
+  const [lateDownload]=await Promise.all([portal.waitForEvent('download'),portal.locator('[data-att=export]').click()]);
+  const lateFile=await lateDownload.path();
+  const summaryRow=xlsxRows(lateFile,1).find(r=>r.Nama==='Kepala Uji');
+  assert.deepEqual([summaryRow['Hari terlambat'],summaryRow['Menit terlambat']],[2,85]);
+  assert(xlsxRows(lateFile,1).filter(r=>r.Nama!=='Kepala Uji').every(r=>r['Hari terlambat']===0&&r['Menit terlambat']===0));
+  assert.deepEqual(xlsxRows(lateFile,2).filter(r=>r.Nama==='Kepala Uji').map(r=>r['Ketepatan masuk']).sort(),
+   ['Terlambat 1 jam 5 menit dari jam masuk 08.00 WITA','Terlambat 20 menit dari jam masuk 08.00 WITA']);
   assert.deepEqual(await portal.evaluate(()=>window.__csp),[],'tanpa pelanggaran CSP (Leaflet, QR, selfie blob)');
   assert.deepEqual(errors,[]);
  });
