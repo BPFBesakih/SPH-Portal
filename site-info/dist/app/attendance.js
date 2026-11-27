@@ -86,7 +86,7 @@ function render(){
 }
 function headerActions(){
  if(A.tab==='recap')return btn('Ekspor Excel','export','download','outlined');
- if(A.tab==='devices')return `${btn('Daftarkan HP pribadi','device-personal','plus','primary')}${btn('Daftarkan HP bersama','device-shared','plus','outlined')}${btn('Buka sesi pendaftaran','session-open','people','outlined')}`;
+ if(A.tab==='devices')return `${btn('Daftarkan HP pribadi','device-personal','plus','primary')}${btn('Buka sesi pendaftaran','session-open','people','outlined')}`;
  if(A.tab==='points'&&A.points?.can_manage)return btn('Tambah titik','point-new','location','primary');
  return '';
 }
@@ -315,9 +315,13 @@ function sessionCard(s){
 }
 function devicesTab(){
  const d=A.devices;
- const rows=d.devices.map(x=>`<tr><td>${esc(x.label)}${x.owner?`<br><span class="muted text-small">${esc([x.owner.position,x.owner.unit].filter(Boolean).join(' · '))}</span>`:x.unit?`<br><span class="muted text-small">${esc(x.unit.name)}</span>`:''}</td><td>${x.kind==='SHARED'?'HP bersama':'HP pribadi'}</td><td>${pill(x.status==='ACTIVE'&&!x.owner_active?'Nonaktif (pemilik nonaktif)':x.status==='PENDING'&&!x.registered?'Menunggu dibuka':deviceStatus[x.status],x.status==='ACTIVE'&&x.owner_active?'positive':x.status==='PENDING'?'warm':'negative')}${x.status==='PENDING'&&x.expires_at?`<br><span class="muted text-small">Tautan berlaku sampai ${formatDate(x.expires_at)}</span>`:''}${x.revoke_reason?`<br><span class="muted text-small">${esc(x.revoke_reason)}</span>`:''}</td><td>${x.last_seen_at?`${formatDate(x.last_seen_at)} ${time(x.last_seen_at)}`:'—'}</td><td>${number(x.events_7d)} absen · ${number(x.people_7d)} orang</td><td>${x.status==='PENDING'&&!x.registered?`<button type="button" class="button text" data-att="device-link" data-id="${esc(x.id)}" data-version="${x.row_version}">Tautan baru</button>`:''}${['PENDING','ACTIVE'].includes(x.status)?`<button type="button" class="button text" data-att="device-revoke" data-id="${esc(x.id)}" data-version="${x.row_version}">Nonaktifkan</button>`:''}</td></tr>`);
+ // HP bersama tidak dipakai lagi untuk absen (keputusan 27 Nov 2026); barisnya tetap tampil
+ // supaya riwayatnya terbaca dan HP-nya bisa dinonaktifkan.
+ const retired=x=>x.retired&&['PENDING','ACTIVE'].includes(x.status);
+ const status=x=>retired(x)?pill('Tidak dipakai lagi','negative'):pill(x.status==='ACTIVE'&&!x.owner_active?'Nonaktif (pemilik nonaktif)':x.status==='PENDING'&&!x.registered?'Menunggu dibuka':deviceStatus[x.status],x.status==='ACTIVE'&&x.owner_active?'positive':x.status==='PENDING'?'warm':'negative');
+ const rows=d.devices.map(x=>`<tr><td>${esc(x.label)}${x.owner?`<br><span class="muted text-small">${esc([x.owner.position,x.owner.unit].filter(Boolean).join(' · '))}</span>`:x.unit?`<br><span class="muted text-small">${esc(x.unit.name)}</span>`:''}</td><td>${x.kind==='SHARED'?'HP bersama':'HP pribadi'}</td><td>${status(x)}${retired(x)?'<br><span class="muted text-small">HP bersama tidak bisa dipakai absen. Daftarkan ulang sebagai HP pribadi pemegangnya.</span>':''}${x.status==='PENDING'&&x.expires_at&&!x.retired?`<br><span class="muted text-small">Tautan berlaku sampai ${formatDate(x.expires_at)}</span>`:''}${x.revoke_reason?`<br><span class="muted text-small">${esc(x.revoke_reason)}</span>`:''}</td><td>${x.last_seen_at?`${formatDate(x.last_seen_at)} ${time(x.last_seen_at)}`:'—'}</td><td>${number(x.events_7d)} absen · ${number(x.people_7d)} orang</td><td>${x.status==='PENDING'&&!x.registered&&!x.retired?`<button type="button" class="button text" data-att="device-link" data-id="${esc(x.id)}" data-version="${x.row_version}">Tautan baru</button>`:''}${['PENDING','ACTIVE'].includes(x.status)?`<button type="button" class="button text" data-att="device-revoke" data-id="${esc(x.id)}" data-version="${x.row_version}">Nonaktifkan</button>`:''}</td></tr>`);
  return `<div data-sessions>${d.sessions.map(sessionCard).join('')}</div>
- ${card('HP terdaftar','Satu HP terdaftar bisa dipakai banyak pegawai. Pegawai tanpa HP tidak perlu didaftarkan.',table(['HP','Jenis','Status','Terakhir dipakai','7 hari terakhir',''],rows,'Belum ada HP terdaftar.'))}`;
+ ${card('HP terdaftar','Pemilik HP absen untuk dirinya sendiri. Pegawai lain hanya bisa diabsenkan atasan langsungnya dari HP pribadi atasan itu, jadi pegawai tanpa HP tidak perlu didaftarkan.',table(['HP','Jenis','Status','Terakhir dipakai','7 hari terakhir',''],rows,'Belum ada HP terdaftar.'))}`;
 }
 async function refreshSessions(){
  for(const s of A.devices.sessions){const next=(await api(`attendance/sessions/${s.id}`,{background:true})).session;Object.assign(s,next);}
@@ -333,16 +337,8 @@ async function devicePersonal(){
    const result=await post('attendance/devices',{kind:'PERSONAL',owner_employee_id:owner.id});
    await rerender();
    shareDialog('Tautan pendaftaran HP pribadi',registrationUrl(result.token),{phone:result.phone,text:`Tautan pendaftaran HP absen untuk ${owner.name}. Buka di HP Anda (sekali pakai):`,note:`Kirim tautan ini ke WhatsApp ${owner.name}${result.phone?'':' (nomor HP belum tercatat di data pegawai, jadi pilih kontaknya di WhatsApp)'}. Tautan hanya bisa dipakai di satu HP dan berlaku sampai ${formatDate(result.expires_at)}.`});
-  },{note:'Nama pemilik langsung muncul setiap kali aplikasi absen dibuka di HP itu. HP pribadi tetap bisa dipakai teman yang menumpang absen.'});
+  },{note:'Nama pemilik langsung muncul setiap kali aplikasi absen dibuka di HP itu. Bila pemiliknya atasan, bawahan langsungnya juga bisa diabsenkan dari HP ini. Untuk HP koordinator atau HP pos, pilih orang yang memegangnya sebagai pemilik.'});
  setupEmployeePicker(el,people.map(p=>({id:p.id,full_name:p.name,employee_no:p.employee_no,position_name:[p.position,p.unit].filter(Boolean).join(' · ')})));
-}
-function deviceShared(){
- formDialog('Daftarkan HP bersama',`<label class="field"><span>Unit</span><select name="org_unit_id" required>${unitOptions('',{blank:'Pilih unit…'})}</select></label><label class="field"><span>Label HP</span><input name="label" required minlength="3" maxlength="80" placeholder="HP Koordinator Pos 3"></label>`,
-  async b=>{
-   const result=await post('attendance/devices',{kind:'SHARED',...b});
-   await rerender();
-   shareDialog('Tautan pendaftaran HP bersama',registrationUrl(result.token),{text:`Tautan pendaftaran ${b.label} untuk absen. Buka di HP tersebut (sekali pakai):`,note:`Kirim ke WhatsApp koordinator, lalu buka tautan itu di ${b.label}. Saat absen, HP ini menampilkan daftar nama unitnya.`});
-  },{note:'HP koordinator atau HP pos. Pegawai memilih namanya sendiri lalu selfie.'});
 }
 function sessionOpen(){
  formDialog('Buka sesi pendaftaran',`<label class="field"><span>Unit</span><select name="org_unit_id" required>${unitOptions('',{blank:'Pilih unit…'})}</select></label><label class="field"><span>Lama sesi (menit)</span><input type="number" name="minutes" min="5" max="30" value="30" required></label>`,
@@ -521,7 +517,6 @@ export function bindAttendancePage(){
    if(action==='review'){const item=A.review.items.find(i=>i.id===el.dataset.id);await showPhoto(item,{employee:item.employee,review:item});return;}
    if(action==='reference-pick'){const m=A.review.missing_reference.find(x=>x.event_id===el.dataset.id);await showPhoto({id:m.event_id,employee_id:m.employee.id,recorded_at:m.recorded_at,kind:m.kind},{employee:m.employee,canSet:m.can_set});return;}
    if(action==='device-personal'){await devicePersonal();return;}
-   if(action==='device-shared'){deviceShared();return;}
    if(action==='session-open'){sessionOpen();return;}
    if(action==='session-share'){const s=A.devices.sessions.find(x=>x.id===el.dataset.id),token=A.sessionTokens.get(s.id);shareDialog('Tautan sesi pendaftaran',sessionUrl(token),{text:`Sesi pendaftaran HP absen ${s.unit.name}. Buka di HP Anda, pilih nama Anda, lalu tunggu disetujui:`,note:'Kirim ke grup WhatsApp unit.'});return;}
    if(action==='session-close'){if(!confirm('Tutup sesi? HP yang belum disetujui akan ditolak.'))return;await post(`attendance/sessions/${el.dataset.id}/close`,{row_version:Number(el.dataset.version)});A.sessionTokens.delete(el.dataset.id);toast('Sesi ditutup.');await rerender();return;}

@@ -48,11 +48,15 @@ if(!one(db,"SELECT id FROM org_units WHERE code='BPB_S'")){
   account('pegawai.absen','ABS-002',null);
   account('admin.preview',null,'SUPER_ADMIN');
   insert(db,'attendance_points',{name:'Titik Contoh Sekretariat',latitude:-8.3741,longitude:115.4512,radius_m:attendanceRules.radiusDefault,is_active:1,created_by:null});
-  // HP bersama contoh dengan token tetap, supaya tautannya tetap sama setiap restart.
-  insert(db,'attendance_devices',{kind:'SHARED',org_unit_id:pos1.id,label:'HP Pos Contoh 1',status:'PENDING',registration_token_hash:digest('a'.repeat(64)),
-    registration_expires_at:new Date(Date.now()+365*86400000).toISOString(),created_by:null});
 }
-const pending=one(db,"SELECT id FROM attendance_devices WHERE registration_token_hash=? AND status='PENDING'",digest('a'.repeat(64)));
+// HP pribadi contoh milik Koordinator Pos Contoh (atasan langsung tiga petugas), dengan token
+// tetap supaya tautannya sama setiap restart. Dari HP ini koordinator absen untuk dirinya dan
+// bisa mengabsenkan ketiga petugasnya; pegawai lain ditolak. HP bersama tidak dipakai lagi.
+const exampleToken='b'.repeat(64),coordinatorId=one(db,"SELECT id FROM employees WHERE employee_no='ABS-003'")?.id;
+if(coordinatorId&&!one(db,'SELECT id FROM attendance_devices WHERE registration_token_hash=?',digest(exampleToken)))
+  insert(db,'attendance_devices',{kind:'PERSONAL',owner_employee_id:coordinatorId,status:'PENDING',registration_token_hash:digest(exampleToken),
+    registration_expires_at:new Date(Date.now()+365*86400000).toISOString(),created_by:null});
+const pending=one(db,"SELECT id FROM attendance_devices WHERE registration_token_hash=? AND status='PENDING'",digest(exampleToken));
 const {server}=createApp({db,dataDir:dir,origin});
 server.listen(port,'127.0.0.1',()=>console.log(`
 Portal pratinjau : ${origin}/#attendance
@@ -62,7 +66,8 @@ Akun (password Preview2026!):
   pegawai.absen     — pegawai biasa (hanya absen sendiri)
   admin.preview     — Superadmin
 Halaman absen    : ${origin}/absen/
-Tautan HP contoh : ${pending?`${origin}/absen/#daftar=${'a'.repeat(64)}`:'(sudah dipakai — buat tautan baru di menu Absensi → HP Absen)'}
+Tautan HP contoh : ${pending?`${origin}/absen/#daftar=${exampleToken}`:'(sudah dipakai — buat tautan baru di menu Absensi → HP Absen)'}
+                   HP pribadi Koordinator Pos Contoh: absen sendiri + mengabsenkan 3 bawahan langsungnya
 Titik contoh     : -8.3741, 115.4512 (radius ${attendanceRules.radiusDefault} m). Atur lokasi tiruan di Chrome DevTools → Sensors.
 Selfie pratinjau : ${resolve(dir,'attendance')}
 Hentikan dengan Ctrl+C. Jalankan dengan --reset untuk memulai dari awal.`));

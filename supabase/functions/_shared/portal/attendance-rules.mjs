@@ -8,8 +8,6 @@ export const attendanceRules = Object.freeze({
   radiusMin: 20,
   radiusMax: 1000,
   accuracyLimit: 100,
-  crowdedPeople: 4,
-  crowdedMinutes: 10,
   jumpKmh: 120,
   jumpMinMeters: 1000,
   jumpWindowHours: 12,

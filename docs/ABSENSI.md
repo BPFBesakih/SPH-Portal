@@ -1,20 +1,26 @@
 # Absensi — absen harian lewat HP terdaftar (tahap 1)
 
-**Status (27 November 2026): tahap 1 tayang sejak 11 November (PR #31).** Jadwal pilot Sekretariat dan pemeriksaan radius sebelum selfie masuk lewat PR #46 (di-merge 26 November). Pratinjau selfie dan keterangan ketepatan masuk ada di PR #47 (cabang `feature/absensi-pratinjau-keterangan`) dan belum dirilis. Langkah rilis setiap pembaruan ada di bagian **Rilis pembaruan**, cara kembalinya di bagian **Rollback**. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`).
+**Status (27 November 2026): tahap 1 tayang sejak 11 November (PR #31).** Jadwal pilot Sekretariat dan pemeriksaan radius sebelum selfie masuk lewat PR #46 (di-merge 26 November). Pratinjau selfie dan keterangan ketepatan masuk masuk lewat PR #47 (di-merge 27 November). Aturan **absen untuk orang lain hanya oleh atasan langsung** ada di cabang `claude/absensi-hanya-atasan-langsung` dan belum dirilis. Langkah rilis setiap pembaruan ada di bagian **Rilis pembaruan**, cara kembalinya di bagian **Rollback**. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`); bagian yang diganti keputusan sesudahnya tercatat di **Penyimpangan dari PRD**.
 
 Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari HP, untuk pegawai kantor, petugas shift/lapangan, dan THL (guide tidak ikut). Hasilnya rekap untuk atasan dan SDM, belum untuk gaji atau sanksi. Ketepatan masuk dinilai untuk pegawai dengan jadwal tetap pada hari kerja. Hari tanpa absen tampil sebagai **"Tidak ada catatan"**. Ekspor data aplikasi absen lama ditunda sesuai keputusan pemilik.
 
 ## Cara kerja singkat
 
-1. **Yang didaftarkan adalah HP, bukan pegawai.** Banyak pegawai tidak punya HP dan menumpang absen di HP teman, koordinator, atau HP pos. Di HP terdaftar mana pun, siapa saja bisa absen dengan memilih namanya lalu selfie.
+1. **Yang didaftarkan adalah HP pribadi.** Untuk mencegah titip absen (keputusan pemilik 27 November 2026):
+   - pemilik HP absen untuk dirinya sendiri;
+   - pegawai lain hanya bisa diabsenkan **atasan langsungnya**, dari HP pribadi atasan itu. Pegawai tanpa HP absen di HP atasan langsungnya; rekan kerja, atasan tidak langsung, atau koordinator yang bukan atasannya tidak bisa mengabsenkan;
+   - atasan langsung mengikuti penempatan utama yang berlaku hari ini (WITA) di Data Pegawai, sama dengan hak koreksi dan keterangan. Pegawai tanpa atasan atau dengan penempatan utama ganda hanya bisa absen di HP-nya sendiri;
+   - **HP bersama tidak dipakai lagi.** HP bersama yang sudah terdaftar menolak absen dan menampilkan layar "HP bersama tidak dipakai lagi". HP koordinator atau HP pos didaftarkan ulang sebagai HP pribadi pemegangnya: buka tautan HP pribadi di HP itu, dan pendaftaran bersama yang lama dicabut otomatis. Satu pegawai boleh punya lebih dari satu HP pribadi.
+
+   Server memeriksa hak ini setiap kali nama dibuka, lokasi dicek, dan absen dicatat (diulang di bawah kunci per pegawai sesudah selfie diunggah). Penolakan memakai kode `NOT_DIRECT_SUPERVISOR` atau `SHARED_RETIRED` dan tidak pernah mengunggah selfie.
 2. **Pendaftaran HP lewat tautan WhatsApp.** Di menu Absensi → HP Absen, SDM atau koordinator membuat tautan sekali pakai (berlaku 7 hari):
-   - **HP pribadi**: tautan dikirim ke WhatsApp pemilik (nomor diambil dari data pegawai bila ada). Setiap kali dibuka, HP langsung menampilkan nama pemiliknya.
-   - **HP bersama** (HP koordinator/pos): diberi label dan unit. HP menampilkan daftar nama unit itu, dan nama lain bisa dicari (minimal 3 huruf).
-   - **Sesi pendaftaran** (5–30 menit, misalnya sesudah briefing pagi): satu tautan dikirim ke grup WhatsApp unit. Setiap HP memilih nama pemiliknya lalu menunggu disetujui di portal. Nama yang dipilih lebih dari satu HP ditandai. Menutup sesi menolak HP yang belum disetujui.
+   - **HP pribadi**: tautan dikirim ke WhatsApp pemilik (nomor diambil dari data pegawai bila ada). Setiap kali dibuka, HP langsung menampilkan nama pemiliknya. Bila pemiliknya atasan, tombol **Absen untuk bawahan** membuka daftar bawahan langsungnya.
+   - **HP bersama** tidak bisa didaftarkan lagi (portal menolak, tombolnya dihapus). Tautan HP bersama yang dibuat sebelumnya ditolak saat dibuka.
+   - **Sesi pendaftaran** (5–30 menit, misalnya sesudah briefing pagi): satu tautan dikirim ke grup WhatsApp unit. Setiap HP memilih nama pemiliknya lalu menunggu disetujui di portal. Nama yang dipilih lebih dari satu HP ditandai. Menutup sesi menolak HP yang belum disetujui. Karena HP atasan bisa mengabsenkan bawahan langsungnya, setujui HP hanya bila pemegangnya memang orang yang namanya dipilih, terutama untuk nama atasan.
    - QR hanya cara lain untuk membuka tautan yang sama di HP tersebut. **Absen harian tidak memakai QR.**
-3. Untuk **absen harian**, buka `https://bpbesakih.com/absen/`, pilih nama, lalu tekan **Masuk** atau **Pulang**. HP mencari lokasi GPS dan server memeriksa radius. Jika lokasinya diizinkan, kamera depan terbuka untuk selfie. Pegawai melihat foto, lalu memilih **Ambil ulang foto** atau **Kirim absen**. Tombol **Kembali** di pojok kanan atas pratinjau membuka kamera kembali (di layar di bawah 360 px tombolnya hanya panah ←). **Ambil ulang foto** dan **Kembali** langsung membuka kamera tanpa mencari lokasi ulang; lokasi yang sudah didapat tetap dipakai. Server memeriksa kembali lokasi dan izin saat mencatat absen. Saat mengirim, HP memilih titik GPS terakurat yang berumur maksimal 30 detik. Jika semua titik sudah lebih lama, HP mencari lokasi baru dan tetap memakai foto yang sudah dikonfirmasi selama masih berlaku. Bila server tetap menolak karena di luar radius, tombol **Cek lokasi lagi** mencari lokasi ulang; foto yang sudah dikonfirmasi dikirim ulang dengan kunci kiriman yang sama, tanpa selfie baru, selama umurnya belum 4,5 menit.
-4. **Titik absen.** Pengelola mengatur radius per titik pada peta (bawaan 100 m, rentang 20–1000 m). Pegawai yang berada di luar semua titik aktif langsung mendapat pesan penolakan sebelum selfie. Di **Absensi → Titik Absen → Absen di luar area kantor**, pengelola dengan cakupan seluruh organisasi dapat memberi atau mencabut izin per pegawai. Izin mengikuti pegawai yang dipilih, termasuk di HP bersama. Pemegang izin cukup mengirim selfie dan lokasi. Rekap menandai catatannya sebagai **Izin absen di luar area kantor**. Saat semua titik nonaktif, hanya pegawai dengan izin tersebut yang dapat absen.
-5. **Perlu dicek.** Catatan yang memerlukan peninjauan meliputi absen luar area oleh pemegang akses, GPS kurang akurat (>100 m), lokasi melompat (>120 km/jam), banyak orang (≥4 dalam 10 menit) di satu HP pribadi, belum ada foto acuan, tanpa absen masuk/pulang, absen saat cuti, dan titik belum diatur. Atasan langsung atau Pengelola Absensi membandingkan selfie dengan **foto acuan**, lalu menilai *Sesuai* atau *Perlu klarifikasi*.
+3. Untuk **absen harian**, buka `https://bpbesakih.com/absen/`. Nama pemilik HP langsung tampil; atasan bisa menekan **Absen untuk bawahan** lalu memilih nama bawahan langsungnya. Tekan **Masuk** atau **Pulang**. HP mencari lokasi GPS dan server memeriksa radius. Jika lokasinya diizinkan, kamera depan terbuka untuk selfie. Pegawai melihat foto, lalu memilih **Ambil ulang foto** atau **Kirim absen**. Tombol **Kembali** di pojok kanan atas pratinjau membuka kamera kembali (di layar di bawah 360 px tombolnya hanya panah ←). **Ambil ulang foto** dan **Kembali** langsung membuka kamera tanpa mencari lokasi ulang; lokasi yang sudah didapat tetap dipakai. Server memeriksa kembali lokasi dan izin saat mencatat absen. Saat mengirim, HP memilih titik GPS terakurat yang berumur maksimal 30 detik. Jika semua titik sudah lebih lama, HP mencari lokasi baru dan tetap memakai foto yang sudah dikonfirmasi selama masih berlaku. Bila server tetap menolak karena di luar radius, tombol **Cek lokasi lagi** mencari lokasi ulang; foto yang sudah dikonfirmasi dikirim ulang dengan kunci kiriman yang sama, tanpa selfie baru, selama umurnya belum 4,5 menit.
+4. **Titik absen.** Pengelola mengatur radius per titik pada peta (bawaan 100 m, rentang 20–1000 m). Pegawai yang berada di luar semua titik aktif langsung mendapat pesan penolakan sebelum selfie. Di **Absensi → Titik Absen → Absen di luar area kantor**, pengelola dengan cakupan seluruh organisasi dapat memberi atau mencabut izin per pegawai. Izin mengikuti pegawai yang diabsenkan, termasuk saat diabsenkan atasan dari HP atasan. Pemegang izin cukup mengirim selfie dan lokasi. Rekap menandai catatannya sebagai **Izin absen di luar area kantor**. Saat semua titik nonaktif, hanya pegawai dengan izin tersebut yang dapat absen.
+5. **Perlu dicek.** Catatan yang memerlukan peninjauan meliputi absen luar area oleh pemegang akses, GPS kurang akurat (>100 m), lokasi melompat (>120 km/jam), belum ada foto acuan, tanpa absen masuk/pulang, absen saat cuti, dan titik belum diatur. Tanda **Banyak pegawai di satu HP pribadi** tidak dibuat lagi sejak aturan atasan langsung (HP pribadi yang ramai kini berarti atasan mengabsenkan timnya); absen lama yang sudah bertanda tetap tampil sampai dinilai. Atasan langsung atau Pengelola Absensi membandingkan selfie dengan **foto acuan**, lalu menilai *Sesuai* atau *Perlu klarifikasi*.
 6. **Status harian dihitung saat dibaca** dari catatan asli, koreksi, keterangan (Izin/Sakit/Dinas luar), dan cuti yang disetujui di modul Cuti. Pulang setelah tengah malam ikut tanggal kerja absen masuknya (shift malam, batas 16 jam).
 7. **Absen lebih awal.** Jam masuk yang tercatat mengikuti waktu aktual server. Untuk Sekretariat Senin–Jumat, absen pukul 07.30 WITA diterima di area yang diizinkan. Jadwalnya tetap 08.00–16.00, dengan batas mulai terlambat 08.16. Jika absen pulang pukul 16.00, rentang kehadirannya 8 jam 30 menit. Modul ini belum menghitung lembur.
 
@@ -22,7 +28,7 @@ Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari 
 
 | Peran | Lihat | Ubah |
 |---|---|---|
-| Pegawai (akun tertaut) | Absen sendiri (tab *Absen saya*) | — |
+| Pegawai (akun tertaut) | Absen sendiri (tab *Absen saya*) | — (di HP: absen untuk diri sendiri; atasan juga untuk bawahan langsungnya) |
 | Atasan (penempatan utama) | Bawahan langsung dan tidak langsung | Hanya bawahan **langsung**: keterangan, koreksi jam (≤ 7 hari), menyisihkan absen salah nama, penilaian, foto acuan |
 | Pengelola Absensi (`ABSENSI_PENGELOLA`) | Sesuai cakupan role | Semua di atas tanpa batas 7 hari, HP Absen, titik absen (cakupan seluruh organisasi) |
 | Koordinator HP Absen (`ABSENSI_KOORDINATOR`) | Absen sendiri | Mendaftarkan/menonaktifkan HP dan membuka sesi untuk unit cakupannya |
@@ -44,7 +50,7 @@ Izin baru: `hr.attendance.read`, `.manage`, `.devices`, `.settings` (modul `hr`)
 | Gateway Pages `/api/attendance-form/*` | `site-info/lib/attendance-form.mjs`, `site-info/functions/api/attendance-form/[[action]].js` |
 | Tambalan `portal-api` | `scripts/build-attendance-deploy.mjs` → `supabase/deploy/portal-api/index.ts` |
 | Migrasi | `supabase/migrations/20261105120000_attendance_module.sql` (dan padanan SQLite di `schema.sql`) |
-| Pra-cek rilis (hanya membaca) | `supabase/checks/check-attendance-readiness.sql` |
+| Pra-cek rilis (hanya membaca) | `supabase/checks/check-attendance-readiness.sql`; dampak aturan atasan langsung: `supabase/checks/check-attendance-direct-supervisor.sql` |
 | Jadwal retensi selfie (opsional) | `supabase/setup/schedule-attendance-retention.sql` (pg_cron + pg_net → operasi `retention`) |
 | Antarmuka | `public/attendance.js` (menu Absensi), `public/absen/` (PWA HP), `public/assets/vendor/leaflet/` (Leaflet 1.9.4, BSD-2) |
 
@@ -53,8 +59,9 @@ Pilihan yang penting untuk produksi:
 - **Kunci HP**: saat mendaftar, HP membuat pasangan kunci ECDSA P-256 dengan WebCrypto; kunci privat *tidak bisa diekspor* dan tersimpan di IndexedDB HP. Server hanya menyimpan kunci publik. Setiap permintaan menandatangani tindakan, ID HP, jam, dan isi kiriman. Selisih jam lebih dari 10 menit ditolak dengan jam server, lalu HP otomatis mengulang sekali dengan jam yang disesuaikan.
 - **Pendaftaran tahan sinyal putus**: kunci baru disimpan di HP *sebelum* pendaftaran dikirim. Bila balasan hilang padahal server sudah menyimpan, kiriman ulang (tombol *Coba lagi*, atau otomatis saat halaman dibuka lagi) memakai kunci yang sama dan mendapat HP yang sama: tautan + kunci sama, atau sesi + kunci + nama sama. Kunci lain tetap ditolak, dan HP yang sudah dinonaktifkan tidak hidup lagi. Halaman juga meminta penyimpanan permanen (`navigator.storage.persist`) supaya kunci tidak terhapus saat ruang HP sempit.
 - **Token** tautan dan sesi hanya disimpan sebagai hash (SHA-256) dan hanya ditampilkan sekali kepada pembuatnya. Mendaftar ulang di HP yang sama mencabut pendaftaran lama hanya bila HP membuktikan masih memegang kunci lama. Bukti dari HP yang tidak dikenal server (misalnya sesudah basis data dipulihkan dari backup) diabaikan, sehingga HP tetap bisa mendaftar.
-- **Status di HP**: jam masuk/pulang hari ini hanya dikirim untuk pemilik HP pribadi di HP-nya sendiri. Penumpang dan HP bersama hanya melihat keadaannya (belum masuk, sudah masuk, sudah pulang), cukup untuk menyorot tombol yang benar tanpa membuka jam orang lain.
-- **Tanpa kunci global portal.** Edge `attendance-form` memakai transaksi pendek dan mengunci per pegawai (`pg_advisory_xact_lock(hashtextextended('portal.attendance:<id>',0))`), sehingga lonjakan absen pagi tidak menahan transaksi portal lain. Batas frekuensi per IP dan per HP (lebih longgar untuk HP bersama).
+- **Status di HP**: jam masuk/pulang hari ini hanya dikirim untuk pemilik HP pribadi di HP-nya sendiri. Saat atasan mengabsenkan bawahannya, HP hanya melihat keadaannya (belum masuk, sudah masuk, sudah pulang), cukup untuk menyorot tombol yang benar tanpa membuka jam orang lain.
+- **Daftar nama di HP**: `context` hanya mengirim pemilik dan bawahan langsungnya (grup `owner` dan `team`). Pencarian nama (`search`, tetap ada untuk HP versi lama) dibatasi ke nama yang sama, jadi daftar pegawai lain tidak bisa ditelusuri dari HP.
+- **Tanpa kunci global portal.** Edge `attendance-form` memakai transaksi pendek dan mengunci per pegawai (`pg_advisory_xact_lock(hashtextextended('portal.attendance:<id>',0))`), sehingga lonjakan absen pagi tidak menahan transaksi portal lain. Batas frekuensi per IP dan per HP.
 - **Selfie** (JPEG ≤ 300 KB, diambil ≤ 5 menit sebelum dikirim) diunggah ke Google Drive folder **SPH-Portal-Absensi** *di luar* transaksi; bila penyimpanan absen gagal, berkasnya dihapus lagi. Kiriman ulang dengan kunci kiriman yang sama tidak mengunggah dua kali. Portal membaca selfie satu per satu lewat `attendance/photos/<id>`.
 - **Catatan absen append-only**: pemicu basis data menolak DELETE dan semua UPDATE kecuali penghapusan selfie oleh retensi.
 - **Retensi 90 hari**: selfie lebih tua dari 90 hari dihapus dari Drive. Penghapusan berjalan di latar belakang sesudah absen baru atau saat halaman absen dibuka di HP aktif, paling sering 6 jam sekali, dengan lease agar tidak ganda. Baris absen tetap. Selfie yang menjadi foto acuan disimpan selama pegawai aktif; foto acuan pegawai yang sudah nonaktif lebih dari 90 hari ikut dilepas. Untuk masa tanpa pemakaian sama sekali, Edge `attendance-form` menerima operasi terjadwal `retention` (hanya dengan secret key; gateway HP tidak meneruskannya) yang bisa dipanggil pg_cron + pg_net lewat `supabase/setup/schedule-attendance-retention.sql` (opsional). Status penghapusan dan jumlah selfie yang menunggu tampil di tab Titik Absen.
@@ -70,9 +77,9 @@ node scripts/verify-attendance-postgres.mjs <pglite/dist/index.js>
 PLAYWRIGHT_MODULE=<path playwright> node scripts/verify-attendance-ui.mjs [folder-tangkapan-layar]
 ```
 
-Akun pratinjau (password `Preview2026!`): `pengelola.absen`, `koordinator.absen`, `pegawai.absen`, `admin.preview`. Skrip mencetak tautan HP bersama contoh. Kamera dan lokasi hanya jalan di *secure context*: buka `/absen/` di laptop yang sama (Chrome DevTools → Toggle device toolbar, Sensors → Location), atau lewatkan port melalui tunnel HTTPS dan jalankan dengan `PREVIEW_ORIGIN=https://alamat-tunnel`. Di iPhone, ikon layar utama punya penyimpanan sendiri: pasang ikon dulu, buka dari ikon, lalu tempel tautan pendaftaran.
+Akun pratinjau (password `Preview2026!`): `pengelola.absen`, `koordinator.absen`, `pegawai.absen`, `admin.preview`. Skrip mencetak tautan HP pribadi contoh milik Koordinator Pos Contoh, atasan langsung tiga petugas: dari HP itu koordinator bisa mengabsenkan ketiganya, sedangkan nama lain tidak tersedia. Kamera dan lokasi hanya jalan di *secure context*: buka `/absen/` di laptop yang sama (Chrome DevTools → Toggle device toolbar, Sensors → Location), atau lewatkan port melalui tunnel HTTPS dan jalankan dengan `PREVIEW_ORIGIN=https://alamat-tunnel`. Di iPhone, ikon layar utama punya penyimpanan sendiri: pasang ikon dulu, buka dari ikon, lalu tempel tautan pendaftaran.
 
-Pengujian SQLite mencakup tanda tangan HP, pencatatan waktu aktual, pemberian akses, dan pencabutan izin saat selfie sedang diunggah. Pengujian PostgreSQL memakai seluruh migrasi, Edge terpaket, dan penyimpanan Drive tiruan. Pengujian browser mencakup peta, pendaftaran HP, absen di dalam dan di luar titik, pratinjau selfie dan kirim ulang foto sesudah ditolak di luar radius, pengelolaan akses, tinjauan selfie, dan ekspor Excel. Kamera dan GPS pada HP sungguhan, pemasangan ikon, serta sinyal lemah di lapangan diuji saat pilot.
+Pengujian SQLite mencakup tanda tangan HP, pencatatan waktu aktual, pemberian akses, dan pencabutan izin saat selfie sedang diunggah. Pengujian PostgreSQL memakai seluruh migrasi, Edge terpaket, dan penyimpanan Drive tiruan. Pengujian browser mencakup peta, pendaftaran HP, atasan mengabsenkan bawahan langsung, HP tanpa bawahan, HP bersama lama, absen di dalam dan di luar titik, pratinjau selfie dan kirim ulang foto sesudah ditolak di luar radius, pengelolaan akses, tinjauan selfie, dan ekspor Excel. Kamera dan GPS pada HP sungguhan, pemasangan ikon, serta sinyal lemah di lapangan diuji saat pilot.
 
 ## Rilis pembaruan
 
@@ -98,6 +105,24 @@ Tanpa migrasi. HP dan portal lama mengabaikan field baru `timing`; HP dan portal
 2. `portal-api`: snapshot dasar `d09d5a36…` (master `528c778`) → `62c82e429c2f21c1e13c826679de6d1669aaa9b09fa5148f7ca3429d5de633b4`.
 3. Uji di HP sungguhan (Android dan iPhone): pratinjau, **Ambil ulang foto**, **Kembali**, **Cek lokasi lagi**, dan keterangan ketepatan masuk untuk pegawai Sekretariat.
 4. Merge PR: cache `/absen/` `sph-absen-v1.4.3`, bundel `/app/` `portal-17fe45d1dbb7.js` + `portal-28cfaa1eaf72.css`.
+
+### Absen untuk orang lain hanya oleh atasan langsung (cabang `claude/absensi-hanya-atasan-langsung`)
+
+Tanpa migrasi dan tanpa mengubah data. Prasyarat: PR #47 sudah dirilis (Edge `9c3db4bc…`, `portal-api` `62c82e42…`).
+
+1. **Sebelum rilis**, jalankan `supabase/checks/check-attendance-direct-supervisor.sql` di SQL Editor (hanya membaca). Hasilnya:
+   - HP bersama yang masih aktif atau menunggu. Sesudah rilis HP itu tidak bisa dipakai absen: siapkan tautan HP pribadi untuk pemegangnya, atau nonaktifkan.
+   - Absen 30 hari terakhir di HP pribadi orang lain yang bukan atasan langsungnya. Absen seperti ini ditolak sesudah rilis, jadi beri tahu pegawai dan pemilik HP tersebut.
+   - Pegawai aktif tanpa atasan langsung yang pasti. Bila pegawai itu tidak punya HP, rapikan atasannya di Data Pegawai lebih dulu.
+2. Edge `attendance-form` → SHA-256 `ac664fa078bdc1db9f117d601acf36c6d9c8886a8e7aedc4f0f188ffbc36e40e`, `verify_jwt` tetap mati. Mulai saat ini server menerapkan aturan baru, juga untuk HP yang masih memuat halaman lama.
+3. `portal-api`: snapshot dasar `62c82e42…` (master `2e69b61`) → `66d01d558d53ffc50f1fe9951cf1055920e651d5f22984bca7cfe0c9ceb23d6c`. Hanya rute HP Absen yang berubah: HP bersama tidak bisa didaftarkan dan tidak mendapat tautan baru, dan daftar HP menandainya **Tidak dipakai lagi**.
+4. Merge PR: cache `/absen/` `sph-absen-v1.5.0`, bundel `/app/` `portal-15dc4ab7e63d.js` + `portal-28cfaa1eaf72.css`.
+5. Uji di HP sungguhan:
+   - HP pribadi atasan: **Absen untuk bawahan** hanya menampilkan bawahan langsungnya, lalu absen satu bawahan sampai tercatat;
+   - HP pegawai tanpa bawahan: tidak ada tombol untuk orang lain;
+   - HP bersama lama: tampil layar **HP bersama tidak dipakai lagi**; tempel tautan HP pribadi pemegangnya, lalu pastikan HP itu kembali bisa dipakai dan baris HP bersama berubah **Nonaktif**.
+
+Urutan Edge → Pages dianjurkan, tetapi tidak kritis. Halaman HP lama dengan Edge baru hanya bisa mencari nama bawahan langsung. Halaman HP baru dengan Edge lama sudah tidak menampilkan nama lain dan menampilkan layar HP bersama, tetapi penolakan di server baru berlaku sesudah langkah 2.
 
 ## Riwayat pemasangan awal Tahap 1 (November 2026)
 
@@ -127,12 +152,14 @@ Kembalikan per pembaruan, mulai dari yang terakhir dirilis. Migrasi Absensi adit
 
 | Pembaruan | Edge `attendance-form` | `portal-api` | Pages |
 |---|---|---|---|
+| Atasan langsung | `9c3db4bc…` | salinan versi aktif sebelum deploy (`62c82e42…` bila itu yang aktif) | revert PR cabang `claude/absensi-hanya-atasan-langsung` |
 | PR #47 | `7ee11ac2…` | salinan versi aktif sebelum deploy (`d09d5a36…` bila itu yang aktif) | revert PR #47 |
 | PR #46 | `5624a7c0…` | salinan versi aktif sebelum deploy (`94eaa33e…` bila itu yang aktif) | revert PR #46, sesudah PR #47 di-revert |
 
 - **Pages** cepat: Cloudflare → Workers & Pages → sph-portal → Deployments → deployment produksi terakhir sebelum merge → *Rollback to this deployment* (sementara; deploy berikutnya dari master menimpanya). Permanen: tombol *Revert* di PR, lalu merge PR revert itu.
 - **Menghentikan absen dari HP sementara** tanpa menyentuh modul lain: hapus Edge `attendance-form`. HP menampilkan pesan gagal saat dibuka, sedangkan data tetap bisa dibaca di portal. Deploy ulang berkas yang sama untuk menyalakannya lagi.
 - **Jadwal retensi** (bila dipasang): `SELECT cron.unschedule('attendance-selfie-retention');`
+- **Atasan langsung**: tidak ada data yang perlu dibatalkan. HP bersama yang sudah didaftarkan ulang sebagai HP pribadi tetap HP pribadi; pendaftaran bersamanya yang lama tetap nonaktif, jadi bila HP bersama ingin dipakai lagi, daftarkan HP baru. HP bersama yang tidak didaftarkan ulang langsung bisa dipakai lagi.
 - **Titik kembali sebelum Absensi** (master `187455b`, `portal-api` `e580bd6e…`, 10 November) kini hanya catatan sejarah. Jangan dipakai lagi: mengembalikan Pages atau `portal-api` ke versi itu ikut mencabut semua pembaruan sesudahnya, antara lain E-Arsip Humas, pembaruan Kunjungan, Merchandise, dan Barang Titipan UMKM.
 
 **Sesudah rollback:**
@@ -161,6 +188,8 @@ Migrasi `20261125132221_attendance_fixed_schedules.sql` memuat:
 
 Kalender hanya bisa diubah lewat SQL. Tahun di luar kalender tersebut menampilkan status **Kalender libur belum tersedia** pada hari dengan pola kerja. Kalender 2028 perlu ditambahkan sebelum akhir 2027, setelah SKB dan daftar Bimas Hindu 2028 terbit. Rekap masih memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Bukti absen masuk pertama dan riwayat di HP pribadi menampilkan ketepatan jam yang tercatat. Di portal, tab **Hari ini**, **Absen saya**, rincian rekap, dan ekspor harian memakai jam masuk setelah koreksi. Untuk Sekretariat, 08.15 WITA masih dalam toleransi. Mulai 08.16, durasi terlambat dihitung sejak jam masuk 08.00. Penilaian hanya berlaku jika jadwal kerja pegawai pada tanggal itu sudah pasti. Keterangannya ditulis seperti **Terlambat 16 menit dari jam masuk 08.00 WITA**; 60 menit atau lebih ditulis dalam jam dan menit, misalnya **Terlambat 1 jam 5 menit**. Lembar **Ringkasan** di ekspor punya kolom terpisah **Hari terlambat** dan **Menit terlambat** (total menit sejak jam masuk), dihitung dari keterangan per hari di lembar **Rincian harian**. Kolom **Penilaian jam masuk** menunjukkan berapa hari masuk yang bisa dinilai. Jika ada jam masuk tetapi seluruhnya belum bisa dinilai, kolom ini menampilkan **Belum dapat dinilai** dan kedua total terlambat dikosongkan. Untuk periode campuran, total mencakup hari yang bisa dinilai saja. Periode tanpa jam masuk ditandai **Tidak ada jam masuk**.
 
+Keputusan pemilik (27 November 2026, malam): absen untuk orang lain hanya oleh atasan langsungnya, dari HP pribadi atasan itu, untuk mencegah titip absen. HP bersama tidak dipakai lagi, dan tanda HP pribadi ramai dihapus. Rinciannya ada di **Cara kerja singkat** nomor 1.
+
 Keputusan pemilik (27 November 2026): keterangan telat tetap muncul apa pun keadaannya, termasuk bila pada hari itu ada keterangan Izin/Sakit/Dinas luar, izin absen di luar area kantor, atau cuti yang disetujui. Riwayat di HP pribadi tidak mengikuti koreksi atasan.
 
 ## Acuan shift per posisi
@@ -188,6 +217,7 @@ Kepala Urusan Pengadaan & Pelayanan Internal (`BPB_S_P011`) dan Koordinator Pela
 
 ## Penyimpangan dari PRD / belum di tahap 1
 
+- **Absen untuk orang lain** (keputusan pemilik 27 November 2026) menggantikan bagian PRD tentang HP bersama dan menumpang di HP teman: ATR-AB-07 (satu HP untuk banyak pegawai), ATR-AB-09 (pencarian nama di luar unit), UJI-AB-03 (absen di HP pribadi teman), UJI-AB-17 dan tanda HP pribadi ramai di ATR-TD. Kini hanya pemilik HP dan atasan langsung yang bisa mengabsenkan, dan HP bersama tidak dipakai lagi.
 - **Foto acuan** dipilih dari selfie absen (bukan unggah pas foto). Unggahan pas foto bisa ditambahkan bila diperlukan.
 - **Keterangan** Izin/Sakit/Dinas luar belum bisa diberi lampiran (surat dokter dan sebagainya).
 - **Antrean offline** belum ada: tanpa sinyal, absen ditolak dan HP meminta mencoba lagi (kiriman ulang aman, tidak tercatat dua kali).

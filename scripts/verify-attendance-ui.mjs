@@ -4,8 +4,9 @@
 //
 // Portal SQLite di memori, data pegawai fiktif, kamera dan GPS tiruan Chromium, ubin peta
 // OpenStreetMap diganti gambar kosong (tidak ada panggilan jaringan keluar). Memeriksa:
-// titik absen di peta, pendaftaran HP bersama/pribadi lewat tautan WhatsApp (QR opsional),
-// absen MASUK di HP bersama (selfie + lokasi), absen di luar titik dengan alasan,
+// titik absen di peta, pendaftaran HP pribadi lewat tautan WhatsApp (QR opsional), atasan
+// mengabsenkan bawahan langsungnya dari HP-nya (selfie + lokasi), HP rekan kerja tanpa
+// pilihan nama lain, HP bersama lama yang tidak dipakai lagi, akses absen di luar area,
 // sesi pendaftaran banyak HP dengan persetujuan, serta Hari ini, Perlu dicek (selfie,
 // foto acuan, penilaian), Rekap + ekspor Excel di portal. Tidak boleh ada pelanggaran CSP.
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import {resolve} from 'node:path';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:net';
 import {openDb,insert,one,all,run,now} from '../lib/db.mjs';
-import {seedPermissions,hashPasswordSync} from '../lib/auth.mjs';
+import {seedPermissions,hashPasswordSync,digest} from '../lib/auth.mjs';
 import {createApp} from '../server.mjs';
 
 const {chromium}=createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE||'playwright');
@@ -170,40 +171,52 @@ try{
   await shot(portal,'portal-titik-absen');
  });
  const shareLink=async()=>{const d=dialog();const link=await d.locator('[data-link]').inputValue();const wa=await d.locator('a',{hasText:'Kirim lewat WhatsApp'}).getAttribute('href');await d.locator('summary').click();await d.locator('.attendance-qr svg').waitFor();return {link,wa,d};};
- let sharedLink,personalLink;
- await check('portal: registering a shared and a personal phone gives single-use WhatsApp links (QR optional)',async()=>{
+ // Tautan HP pribadi baru dari menu HP Absen untuk pegawai yang dicari dengan `query`.
+ const personalPhoneLink=async(query,name)=>{
+  await tab('HP Absen');await portal.locator('[data-att=device-personal]').click();
+  const d=dialog();await d.locator('[role=combobox]').fill(query);await d.locator('[role=option]',{hasText:name}).click();await d.getByRole('button',{name:'Simpan'}).click();
+  return shareLink();
+ };
+ const deviceOf=link=>one(db,'SELECT * FROM attendance_devices WHERE registration_token_hash=?',digest(link.split('#daftar=')[1]));
+ let supervisorLink,personalLink;
+ await check('portal: personal phones get single-use WhatsApp links (QR optional); shared phones can no longer be registered',async()=>{
   await tab('HP Absen');
-  await portal.locator('[data-att=device-shared]').click();
-  let d=dialog();await d.locator('[name=org_unit_id]').selectOption({label:'Pos Uji'});await d.locator('[name=label]').fill('HP Pos Uji');await d.getByRole('button',{name:'Simpan'}).click();
-  let share=await shareLink();sharedLink=share.link;
-  assert.match(sharedLink,new RegExp(`^${base.replace(/[.]/g,'\\.')}/absen/#daftar=[a-f0-9]{64}$`));assert.match(share.wa,/^https:\/\/wa\.me\/\?text=/);
+  assert.equal(await portal.locator('[data-att=device-shared]').count(),0,'tombol Daftarkan HP bersama tidak ada lagi');
+  let share=await personalPhoneLink('kepala','Kepala Uji');supervisorLink=share.link;
+  assert.match(supervisorLink,new RegExp(`^${base.replace(/[.]/g,'\\.')}/absen/#daftar=[a-f0-9]{64}$`));assert.match(share.wa,/^https:\/\/wa\.me\/\?text=/);
+  assert.match(await share.d.textContent(),/Kepala Uji/);
   await shot(portal,'portal-tautan-hp');
   await share.d.locator('[data-close]').first().click();
-  await portal.locator('#attendance-content td',{hasText:'HP Pos Uji'}).waitFor();
-  await portal.locator('[data-att=device-personal]').click();
-  d=dialog();await d.locator('[role=combobox]').fill('petugas');await d.locator('[role=option]',{hasText:'Petugas Uji Satu'}).click();await d.getByRole('button',{name:'Simpan'}).click();
-  share=await shareLink();personalLink=share.link;
+  await portal.locator('#attendance-content td',{hasText:'HP pribadi Kepala Uji'}).waitFor();
+  share=await personalPhoneLink('petugas','Petugas Uji Satu');personalLink=share.link;
   assert.match(share.wa,/^https:\/\/wa\.me\/6281234567890\?text=/,'nomor HP pegawai dipakai untuk WhatsApp');
   await share.d.locator('[data-close]').first().click();
  });
  const phone=await phoneContext(),hp=await phone.newPage();
  const phoneLog=[];hp.on('console',m=>phoneLog.push(`${m.type()}: ${m.text()}`));hp.on('pageerror',e=>phoneLog.push('pageerror: '+e.message));hp.on('requestfailed',r=>phoneLog.push(`failed: ${r.url()} ${r.failure()?.errorText}`));
  const screen=async text=>{try{await hp.locator('#app h1',{hasText:text}).waitFor({timeout:15000});}catch(error){console.error('PHONE SCREEN:',await hp.locator('#app').innerText().catch(()=>'?'),'\nLOG:',phoneLog.join('\n'));throw error;}};
- await check('shared phone: registration link, then any employee checks in with a selfie inside the point',async()=>{
-  await hp.goto(sharedLink);await screen('Daftarkan HP ini untuk absen');
+ await check('supervisor phone: registration link, then the supervisor checks in a direct report with a selfie inside the point',async()=>{
+  await hp.goto(supervisorLink);await screen('Daftarkan HP ini untuk absen');
   assert.equal(await hp.evaluate(()=>location.hash),'','token dihapus dari alamat');
+  await hp.locator('#app',{hasText:'HP pribadi milik Kepala Uji'}).waitFor();
   await hp.getByRole('button',{name:'Ya, daftarkan'}).click();await screen('HP berhasil didaftarkan');
-  await hp.getByRole('button',{name:'Mulai absen'}).click();await screen('Siapa yang absen?');
-  assert.deepEqual(await hp.locator('[data-lists] .group').allTextContents(),['Unit Pos Uji']);
-  await shot(hp,'hp-pilih-nama');
+  await hp.getByRole('button',{name:'Mulai absen'}).click();
+  await hp.locator('.person .name',{hasText:'Kepala Uji'}).waitFor();
   const headerHeight=()=>hp.locator('header.top').evaluate(el=>Math.round(el.getBoundingClientRect().height));
   assert(await hp.locator('#back').isHidden());const plainHeader=await headerHeight();
-  await hp.locator('[data-action=choose]',{hasText:'Pekerja Harian Uji'}).click();await screen('Absen sebagai');
+  await shot(hp,'hp-pemilik-atasan');
+  await hp.getByRole('button',{name:'Absen untuk bawahan'}).click();await screen('Absen untuk siapa?');
+  assert.deepEqual(await hp.locator('[data-lists] .group').allTextContents(),['Saya','Bawahan langsung']);
+  assert.deepEqual(await hp.locator('[data-lists] [data-action=choose]').evaluateAll(list=>list.map(b=>b.firstChild.textContent)),['Kepala Uji','Pekerja Harian Uji','Petugas Uji Satu']);
+  assert.equal(await hp.locator('[data-search]').count(),0,'tanpa pencarian nama di luar bawahan langsung');
+  await shot(hp,'hp-pilih-nama');
+  await hp.locator('[data-action=choose]',{hasText:'Pekerja Harian Uji'}).click();await screen('Absen untuk bawahan langsung');
   assert(await hp.locator('#back').isVisible());
   assert.equal(await headerHeight(),plainHeader,'kepala halaman tidak berubah tinggi saat tombol Kembali tampil');
   await hp.getByRole('button',{name:'Ya, benar'}).click();
   await hp.locator('.status',{hasText:'Belum absen masuk hari ini.'}).waitFor();
-  assert.match(await hp.locator('#device-label').textContent(),/HP bersama · HP Pos Uji/);
+  await hp.locator('.person .muted',{hasText:'Absen untuk bawahan langsung'}).waitFor();
+  assert.match(await hp.locator('#device-label').textContent(),/^HP pribadi Kepala Uji$/);
   await shot(hp,'hp-masuk-pulang');
   await hp.locator('[data-action=kind][data-kind=IN]').click();await screen('Selfie untuk absen MASUK');
   await hp.locator('[data-action=shoot]:not([disabled])').waitFor({timeout:15000});
@@ -258,10 +271,11 @@ try{
   assert.deepEqual(readdirSync(resolve(dataDir,'attendance')),[row.photo_storage_key]);
   assert.deepEqual(readFileSync(resolve(dataDir,'attendance',row.photo_storage_key)).subarray(0,3),Buffer.from([0xff,0xd8,0xff]));
  });
- await check('shared phone: the portal controls which employees can submit outside the radius',async()=>{
-  await hp.getByRole('button',{name:'Selesai'}).click();await screen('Siapa yang absen?');
+ await check('supervisor phone: back to the owner after each check-in; the portal controls who can submit outside the radius',async()=>{
+  await hp.getByRole('button',{name:'Selesai'}).click();
+  await hp.locator('.person .name',{hasText:'Kepala Uji'}).waitFor();
   await phone.setGeolocation({latitude:-8.3700,longitude:115.4512,accuracy:10});
-  await hp.locator('[data-search]').fill('satu');
+  await hp.getByRole('button',{name:'Absen untuk bawahan'}).click();await screen('Absen untuk siapa?');
   await hp.locator('[data-action=choose]',{hasText:'Petugas Uji Satu'}).first().click();await hp.getByRole('button',{name:'Ya, benar'}).click();
   let submissions=0;
   const countSubmit=req=>{if(req.url().endsWith('/api/attendance-form/submit'))submissions++;};
@@ -299,20 +313,54 @@ try{
   await tab('HP Absen');
   assert.deepEqual(await hp.evaluate(()=>window.__csp),[]);
  });
- await check('personal phone: the owner opens straight to MASUK/PULANG and can check in a colleague',async()=>{
+ await check('personal phone without direct reports: the owner opens straight to MASUK/PULANG and cannot pick another name',async()=>{
   const own=await phoneContext(),page=await own.newPage();
   await page.goto(personalLink);await page.locator('#app',{hasText:'HP pribadi milik Petugas Uji Satu'}).waitFor();
   await page.getByRole('button',{name:'Ya, daftarkan'}).click();await page.getByRole('button',{name:'Mulai absen'}).click();
   await page.locator('.person .name',{hasText:'Petugas Uji Satu'}).waitFor();
   await page.locator('.status',{hasText:'Sudah absen masuk pukul'}).waitFor();
-  assert.equal(await page.locator('[data-action=kind][data-kind=OUT]').getAttribute('class'),'suggested','PULANG disarankan karena sudah absen masuk di HP lain');
+  assert.equal(await page.locator('[data-action=kind][data-kind=OUT]').getAttribute('class'),'suggested','PULANG disarankan karena sudah diabsenkan masuk oleh atasannya');
+  assert.equal(await page.locator('[data-action=pick]').count(),0,'tanpa tombol absen untuk orang lain');
+  await shot(page,'hp-pemilik-tanpa-bawahan');
   await own.setGeolocation({latitude:-8.3700,longitude:115.4512,accuracy:10});
   await page.locator('[data-action=kind][data-kind=OUT]').click();await page.getByRole('heading',{name:'Absen ditolak'}).waitFor();
   assert.equal(await page.locator('video,[data-action=reason]').count(),0);
   await page.getByRole('button',{name:'Kembali'}).click();
-  await page.getByRole('button',{name:'Absen untuk orang lain'}).click();await page.locator('#app h1',{hasText:'Siapa yang absen?'}).waitFor();
-  assert.deepEqual(await page.locator('[data-lists] .group').allTextContents(),['Pemilik HP','Unit Pos Uji']);
+  await page.locator('.person .name',{hasText:'Petugas Uji Satu'}).waitFor();
+  assert.equal(await page.locator('[data-action=pick]').count(),0);
+  assert.deepEqual(await page.evaluate(()=>window.__csp),[]);
   await own.close();
+ });
+ await check('shared phone registered earlier: a dedicated screen, no check-ins, and re-registration as a personal phone',async()=>{
+  // Portal tidak bisa membuat HP bersama lagi. Untuk meniru HP bersama lama, HP ini didaftarkan
+  // sebagai HP pribadi lalu barisnya diubah menjadi HP bersama di basis data.
+  const old=await personalPhoneLink('pekerja','Pekerja Harian Uji');await old.d.locator('[data-close]').first().click();
+  const context=await phoneContext(),page=await context.newPage();
+  await page.goto(old.link);await page.getByRole('button',{name:'Ya, daftarkan'}).click();await page.getByRole('button',{name:'Mulai absen'}).click();
+  await page.locator('.person .name',{hasText:'Pekerja Harian Uji'}).waitFor();
+  const legacy=deviceOf(old.link);
+  run(db,"UPDATE attendance_devices SET kind='SHARED',owner_employee_id=NULL,org_unit_id=?,label='HP Pos Lama' WHERE id=?",post.id,legacy.id);
+  const before=one(db,'SELECT count(*) n FROM attendance_events').n;
+  await page.reload();await page.locator('#app h1',{hasText:'HP bersama tidak dipakai lagi'}).waitFor();
+  assert.match(await page.locator('#device-label').textContent(),/HP bersama · HP Pos Lama/);
+  assert.equal(await page.locator('[data-action=kind]').count(),0,'tanpa tombol MASUK/PULANG');
+  await shot(page,'hp-bersama-tidak-dipakai');
+  await tab('HP Absen');
+  const row=portal.locator('#attendance-content tr',{hasText:'HP Pos Lama'});
+  await row.locator('.badge',{hasText:'Tidak dipakai lagi'}).waitFor();
+  assert.equal(await row.locator('[data-att=device-link]').count(),0);
+  await shot(portal,'portal-hp-bersama-lama');
+  // Didaftarkan ulang sebagai HP pribadi pemegangnya: pendaftaran HP bersama dicabut.
+  const fresh=await personalPhoneLink('pekerja','Pekerja Harian Uji');await fresh.d.locator('[data-close]').first().click();
+  await page.locator('[data-paste] input').fill(fresh.link);await page.getByRole('button',{name:'Buka tautan'}).click();
+  await page.locator('#app h1',{hasText:'Daftarkan HP ini untuk absen'}).waitFor();
+  await page.locator('.status.warn',{hasText:'Pendaftaran lama akan diganti'}).waitFor();
+  await page.getByRole('button',{name:'Ya, daftarkan'}).click();await page.getByRole('button',{name:'Mulai absen'}).click();
+  await page.locator('.person .name',{hasText:'Pekerja Harian Uji'}).waitFor();
+  assert.equal(one(db,'SELECT status FROM attendance_devices WHERE id=?',legacy.id).status,'REVOKED');
+  assert.equal(one(db,'SELECT count(*) n FROM attendance_events').n,before);
+  assert.deepEqual(await page.evaluate(()=>window.__csp),[]);
+  await context.close();
  });
  await check('registration session: phones register at once and start after approval in the portal',async()=>{
   await portal.locator('[data-att=session-open]').click();
@@ -329,11 +377,7 @@ try{
   await other.close();
  });
  await check('lost reply: registration that reached the server is recovered with the same key, by "Coba lagi" or on reopening',async()=>{
-  const sharedPhoneLink=async label=>{
-   await tab('HP Absen');await portal.locator('[data-att=device-shared]').click();
-   const d=dialog();await d.locator('[name=org_unit_id]').selectOption({label:'Pos Uji'});await d.locator('[name=label]').fill(label);await d.getByRole('button',{name:'Simpan'}).click();
-   const share=await shareLink();await share.d.locator('[data-close]').first().click();return share.link;
-  };
+  const phoneLink=async(query,name)=>{const share=await personalPhoneLink(query,name);await share.d.locator('[data-close]').first().click();return share.link;};
   // Balasan pertama dibuang SESUDAH server menyimpan, seperti sinyal putus di lapangan.
   const lossyPhone=async()=>{
    const context=await phoneContext();let dropped=0;
@@ -341,24 +385,26 @@ try{
    await context.route(`${base}/api/attendance-form/register`,async r=>{if(dropped++===0){await r.fetch();await r.abort('connectionreset');return;}await r.continue();});
    return context;
   };
-  const registered=label=>{const rows=all(db,'SELECT * FROM attendance_devices WHERE label=?',label);assert.equal(rows.length,1);return rows[0];};
-  // 1. Tombol "Coba lagi".
-  let link=await sharedPhoneLink('HP Pos Cadangan'),context=await lossyPhone(),page=await context.newPage();
+  // Satu tautan = satu baris HP (hash tautan tetap tersimpan sesudah dipakai).
+  const registered=link=>{const rows=all(db,'SELECT * FROM attendance_devices WHERE registration_token_hash=?',digest(link.split('#daftar=')[1]));assert.equal(rows.length,1);return rows[0];};
+  // 1. Tombol "Coba lagi" (HP cadangan atasan: daftar bawahan langsungnya ikut tampil).
+  let link=await phoneLink('kepala','Kepala Uji'),context=await lossyPhone(),page=await context.newPage();
   await page.goto(link);await page.locator('#app h1',{hasText:'Daftarkan HP ini untuk absen'}).waitFor();
   await page.getByRole('button',{name:'Ya, daftarkan'}).click();await page.locator('#app h1',{hasText:'Belum berhasil'}).waitFor({timeout:15000});
-  let row=registered('HP Pos Cadangan');assert.equal(row.status,'ACTIVE','server sudah menyimpan walau balasan hilang');
+  let row=registered(link);assert.equal(row.status,'ACTIVE','server sudah menyimpan walau balasan hilang');
   await page.getByRole('button',{name:'Coba lagi'}).click();await page.locator('#app h1',{hasText:'HP berhasil didaftarkan'}).waitFor({timeout:15000});
-  assert.equal(registered('HP Pos Cadangan').id,row.id);assert.equal(one(db,"SELECT count(*) n FROM audit_events WHERE action='ACTIVATE' AND object_key=?",row.id).n,1);
-  await page.getByRole('button',{name:'Mulai absen'}).click();await page.locator('#app h1',{hasText:'Siapa yang absen?'}).waitFor();
+  assert.equal(registered(link).id,row.id);assert.equal(one(db,"SELECT count(*) n FROM audit_events WHERE action='ACTIVATE' AND object_key=?",row.id).n,1);
+  await page.getByRole('button',{name:'Mulai absen'}).click();await page.locator('.person .name',{hasText:'Kepala Uji'}).waitFor();
+  await page.getByRole('button',{name:'Absen untuk bawahan'}).waitFor();
   assert(await page.evaluate(()=>window.__persist)>=1,'penyimpanan permanen diminta sesudah pendaftaran');
   await context.close();
   // 2. HP ditutup sebelum mencoba lagi: saat dibuka kembali, pendaftaran dilanjutkan sendiri.
-  link=await sharedPhoneLink('HP Pos Malam');context=await lossyPhone();page=await context.newPage();
+  link=await phoneLink('petugas','Petugas Uji Satu');context=await lossyPhone();page=await context.newPage();
   await page.goto(link);await page.getByRole('button',{name:'Ya, daftarkan'}).click();await page.locator('#app h1',{hasText:'Belum berhasil'}).waitFor({timeout:15000});
-  row=registered('HP Pos Malam');assert.equal(row.status,'ACTIVE');
+  row=registered(link);assert.equal(row.status,'ACTIVE');
   await page.goto(base+'/absen/');await page.locator('#app h1',{hasText:'HP berhasil didaftarkan'}).waitFor({timeout:15000});
-  assert.equal(registered('HP Pos Malam').id,row.id);
-  await page.getByRole('button',{name:'Mulai absen'}).click();await page.locator('#app h1',{hasText:'Siapa yang absen?'}).waitFor();
+  assert.equal(registered(link).id,row.id);
+  await page.getByRole('button',{name:'Mulai absen'}).click();await page.locator('.person .name',{hasText:'Petugas Uji Satu'}).waitFor();
   assert.deepEqual(await page.evaluate(()=>window.__csp),[]);
   await context.close();
  });
@@ -366,7 +412,7 @@ try{
   await tab('Hari ini');
   const row=portal.locator('#attendance-content tr',{hasText:'Petugas Uji Satu'});
   await row.locator('.badge',{hasText:'Masuk, belum pulang'}).waitFor();await row.locator('.badge',{hasText:'Di luar titik'}).waitFor();
-  assert.match(await portal.locator('#attendance-content tr',{hasText:'Pekerja Harian Uji'}).textContent(),/lewat HP Pos Uji/);
+  assert.match(await portal.locator('#attendance-content tr',{hasText:'Pekerja Harian Uji'}).textContent(),/lewat HP pribadi Kepala Uji \(menumpang\)/);
   await shot(portal,'portal-hari-ini');
   await tab('Perlu dicek');
   const item=portal.locator('#attendance-content tr',{hasText:'Petugas Uji Satu'});await item.locator('[data-att=review]').click();
