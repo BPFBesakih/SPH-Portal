@@ -2,7 +2,7 @@
 
 **Status (10 November 2026): dipasang ulang di cabang `claude/absensi-pasang-ulang` di atas master `187455b`, siap di-merge, belum dirilis.** PR #23 sempat di-merge 7 November lalu dibatalkan lewat PR #28 sebelum langkah server dijalankan. Cabang ini membalik pembatalan itu dan menambah enam perbaikan hasil review 10 November. Pemilik repo menguji lokal, lalu merge dan merilis sendiri. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`); review kesiapan deploy ada di Project `claude/kesiapan-deploy-absensi.md`.
 
-Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari HP, untuk pegawai kantor, petugas shift/lapangan, dan THL (guide tidak ikut). Hasilnya rekap untuk atasan dan SDM, belum untuk gaji atau sanksi. Jam kerja unit dan shift diimpor belakangan; sampai saat itu portal belum menilai terlambat atau alpa, sehingga hari tanpa absen tampil sebagai **"Tidak ada catatan"**. Ekspor data aplikasi absen lama ditunda sesuai keputusan pemilik.
+Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari HP, untuk pegawai kantor, petugas shift/lapangan, dan THL (guide tidak ikut). Hasilnya rekap untuk atasan dan SDM, belum untuk gaji atau sanksi. Ketepatan masuk dinilai untuk pegawai dengan jadwal tetap pada hari kerja. Hari tanpa absen tampil sebagai **"Tidak ada catatan"**. Ekspor data aplikasi absen lama ditunda sesuai keputusan pemilik.
 
 ## Cara kerja singkat
 
@@ -12,7 +12,7 @@ Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari 
    - **HP bersama** (HP koordinator/pos): diberi label dan unit. HP menampilkan daftar nama unit itu, dan nama lain bisa dicari (minimal 3 huruf).
    - **Sesi pendaftaran** (5–30 menit, misalnya sesudah briefing pagi): satu tautan dikirim ke grup WhatsApp unit. Setiap HP memilih nama pemiliknya lalu menunggu disetujui di portal. Nama yang dipilih lebih dari satu HP ditandai. Menutup sesi menolak HP yang belum disetujui.
    - QR hanya cara lain untuk membuka tautan yang sama di HP tersebut. **Absen harian tidak memakai QR.**
-3. Untuk **absen harian**, buka `https://bpbesakih.com/absen/`, pilih nama, lalu tekan **Masuk** atau **Pulang**. HP mencari lokasi GPS dan server memeriksa radius. Jika lokasinya diizinkan, kamera depan terbuka untuk selfie. Server memeriksa kembali lokasi dan izin saat mencatat absen.
+3. Untuk **absen harian**, buka `https://bpbesakih.com/absen/`, pilih nama, lalu tekan **Masuk** atau **Pulang**. HP mencari lokasi GPS dan server memeriksa radius. Jika lokasinya diizinkan, kamera depan terbuka untuk selfie. Pegawai melihat foto, lalu memilih **Ambil ulang foto** atau **Kirim absen**. Tombol **Kembali** di pojok kanan atas pratinjau membuka kamera kembali. Server memeriksa kembali lokasi dan izin saat mencatat absen.
 4. **Titik absen.** Pengelola mengatur radius per titik pada peta (bawaan 100 m, rentang 20–1000 m). Pegawai yang berada di luar semua titik aktif langsung mendapat pesan penolakan sebelum selfie. Di **Absensi → Titik Absen → Absen di luar area kantor**, pengelola dengan cakupan seluruh organisasi dapat memberi atau mencabut izin per pegawai. Izin mengikuti pegawai yang dipilih, termasuk di HP bersama. Pemegang izin cukup mengirim selfie dan lokasi. Rekap menandai catatannya sebagai **Izin absen di luar area kantor**. Saat semua titik nonaktif, hanya pegawai dengan izin tersebut yang dapat absen.
 5. **Perlu dicek.** Catatan yang memerlukan peninjauan meliputi absen luar area oleh pemegang akses, GPS kurang akurat (>100 m), lokasi melompat (>120 km/jam), banyak orang (≥4 dalam 10 menit) di satu HP pribadi, belum ada foto acuan, tanpa absen masuk/pulang, absen saat cuti, dan titik belum diatur. Atasan langsung atau Pengelola Absensi membandingkan selfie dengan **foto acuan**, lalu menilai *Sesuai* atau *Perlu klarifikasi*.
 6. **Status harian dihitung saat dibaca** dari catatan asli, koreksi, keterangan (Izin/Sakit/Dinas luar), dan cuti yang disetujui di modul Cuti. Pulang setelah tengah malam ikut tanggal kerja absen masuknya (shift malam, batas 16 jam).
@@ -39,7 +39,7 @@ Izin baru: `hr.attendance.read`, `.manage`, `.devices`, `.settings` (modul `hr`)
 | Halaman absen tanpa login (pendaftaran, absen, retensi) | `lib/attendance-form.mjs` |
 | Rute portal `attendance/*` | `lib/attendance.mjs` |
 | Penyimpanan selfie lokal | `lib/attendance-photos.mjs` (`<DATA_DIR>/attendance/`) |
-| Versi cloud (async) | `supabase/functions/_shared/portal/attendance*.mjs`, dibuat oleh `node scripts/generate-cloud-modules.mjs --only=attendance-rules,attendance-form,attendance` |
+| Versi cloud (async) | `supabase/functions/_shared/portal/attendance*.mjs`, dibuat oleh `node scripts/generate-cloud-modules.mjs --only=attendance-rules,attendance-schedule,attendance-form,attendance` |
 | Edge Function halaman absen | `supabase/functions/attendance-form/index.ts` → paket `supabase/deploy/attendance-form/index.ts` (`node scripts/build-attendance-form.mjs`) |
 | Gateway Pages `/api/attendance-form/*` | `site-info/lib/attendance-form.mjs`, `site-info/functions/api/attendance-form/[[action]].js` |
 | Tambalan `portal-api` | `scripts/build-attendance-deploy.mjs` → `supabase/deploy/portal-api/index.ts` |
@@ -142,7 +142,7 @@ Migrasi `20261125132221_attendance_fixed_schedules.sql` memuat:
 - libur nasional dari SKB 2026–2027 (bagian A, tanpa cuti bersama);
 - hari raya Hindu Bali 2026–2027 dari daftar Ditjen Bimas Hindu Kemenag yang berlabel Libur Fakultatif, tanpa Deepavali: Siwaratri, Penampahan Galungan, Galungan, Umanis Galungan, Penampahan Kuningan, Kuningan, Tawur Agung Kesanga (2027), Ngembak Geni, Saraswati, dan Pagerwesi.
 
-Kalender hanya bisa diubah lewat SQL. Tahun di luar kalender tersebut menampilkan status **Kalender libur belum tersedia** pada hari dengan pola kerja. Kalender 2028 perlu ditambahkan sebelum akhir 2027, setelah SKB dan daftar Bimas Hindu 2028 terbit. Rekap masih memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Status terlambat dan Alpa memerlukan integrasi jadwal ke perhitungan rekap.
+Kalender hanya bisa diubah lewat SQL. Tahun di luar kalender tersebut menampilkan status **Kalender libur belum tersedia** pada hari dengan pola kerja. Kalender 2028 perlu ditambahkan sebelum akhir 2027, setelah SKB dan daftar Bimas Hindu 2028 terbit. Rekap masih memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Bukti absen masuk pertama dan riwayat di HP pribadi menampilkan ketepatan jam yang tercatat. Di portal, tab **Hari ini**, **Absen saya**, rincian rekap, dan ekspor harian memakai jam masuk setelah koreksi. Untuk Sekretariat, 08.15 WITA masih dalam toleransi. Mulai 08.16, durasi terlambat dihitung sejak jam masuk 08.00. Penilaian hanya berlaku jika jadwal kerja pegawai pada tanggal itu sudah pasti.
 
 ## Acuan shift per posisi
 
@@ -173,7 +173,7 @@ Kepala Urusan Pengadaan & Pelayanan Internal (`BPB_S_P011`) dan Koordinator Pela
 - **Keterangan** Izin/Sakit/Dinas luar belum bisa diberi lampiran (surat dokter dan sebagainya).
 - **Antrean offline** belum ada: tanpa sinyal, absen ditolak dan HP meminta mencoba lagi (kiriman ulang aman, tidak tercatat dua kali).
 - **Notifikasi ke atasan** untuk absen bertanda belum ada; atasan membuka tab Perlu dicek.
-- **Roster shift bergilir, perhitungan terlambat dan Alpa**, serta **ekspor data aplikasi lama** menyusul pada tahap berikutnya.
+- **Roster shift bergilir dan perhitungan Alpa**, serta **ekspor data aplikasi lama** menyusul pada tahap berikutnya.
 - Selfie dibaca portal di dalam transaksi baca permintaan (tanpa kunci global), sama seperti unduhan berkas portal lainnya.
 
 ## Keputusan yang masih terbuka

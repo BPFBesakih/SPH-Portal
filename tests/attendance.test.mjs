@@ -333,6 +333,34 @@ test('Sekretariat 07:30 WITA is accepted inside the point and uses actual time f
  const recap=await f.route(f.users.staff,`recap/${f.e.staff.id}`,'GET',{},`from=${day}&to=${day}`);
  assert.deepEqual([recap.days[0].status,recap.days[0].minutes],['HADIR',510]);
 });
+test('keterangan telat mengikuti batas WITA, jam masuk efektif dan jadwal pada tanggal absen',async t=>{
+ const f=fixture(t),staff=f.e.staff,device=await registerDevice(f,{owner:staff});
+ await addPoint(f);
+ const day='2026-11-24',query=`from=${day}&to=${day}`;
+ run(f.db,'INSERT INTO attendance_schedule_units VALUES (?,?)',f.units.office.id,day);
+ run(f.db,"INSERT INTO attendance_schedule_weekdays VALUES (?,2,'10000')",f.units.office.id);
+ const input=submission(staff),arrival=wita(day,'08:16');
+ const late={late:true,minutes:16,start_time:'08:00',late_time:'08:16'};
+ assert.deepEqual((await submit(f,device,input,arrival)).timing,late);
+ assert.deepEqual((await submit(f,device,input,arrival+60000)).timing,late);
+ const status=async()=> (await f.route(f.users.staff,`recap/${staff.id}`,'GET',{},query)).days[0].timing;
+ assert.deepEqual(await status(),late);
+ const context=await f.form('context',await sign(device,'context',{},arrival),{nowMs:arrival});
+ assert.deepEqual(context.history[0].timing,late);
+ const repeated=submission(staff,'IN',{confirmed_order:true});
+ assert.equal((await submit(f,device,repeated,arrival+3600000)).timing,null);
+ await f.route(f.users.manager,'corrections','POST',{employee_id:staff.id,work_date:day,
+  in_at:new Date(wita(day,'08:15')+59000).toISOString(),reason:'Jam masuk dikonfirmasi'});
+ assert.equal((await status()).late,false);
+ const exported=await f.route(f.users.manager,'recap','GET',{},query+'&detail=1');
+ assert.deepEqual(exported.employees.find(row=>row.employee.id===staff.id).days[0].timing,await status());
+ assert.equal((await submit(f,device,submission(staff,'OUT'),wita(day,'16:00'))).timing,null);
+ run(f.db,"INSERT INTO attendance_schedule_holidays VALUES (?,'Hari libur uji')",day);
+ assert.equal(await status(),null);
+ run(f.db,'DELETE FROM attendance_schedule_holidays WHERE work_date=?',day);
+ run(f.db,"UPDATE positions SET code='BPB_S_P056' WHERE id=?",f.positions.staff.id);
+ assert.equal(await status(),null);
+});
 test('master shift SQLite sama dengan migrasi dan mengikuti jawaban SDM 26 Nov 2026',t=>{
  const f=fixture(t);
  const sql=readFileSync(new URL('../supabase/migrations/20261125132221_attendance_fixed_schedules.sql',import.meta.url),'utf8');

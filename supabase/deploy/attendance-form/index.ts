@@ -328,6 +328,111 @@ Content-Type: ${mime}\r
   };
 }
 
+// supabase/functions/_shared/portal/attendance-schedule.mjs
+async function scheduleTablesReady(db) {
+  if (typeof db.query === "function") {
+    return Boolean((await one(db, "SELECT to_regclass('portal.attendance_schedule_units') IS NOT NULL AS ready"))?.ready);
+  }
+  return Boolean(await one(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='attendance_schedule_units'"));
+}
+var shiftFields = `s.code, s.name,
+  substr(CAST(s.start_time AS TEXT),1,5) AS start_time,
+  substr(CAST(s.end_time AS TEXT),1,5) AS end_time,
+  substr(CAST(s.late_time AS TEXT),1,5) AS late_time, s.end_day_offset`;
+var positionShiftGroups = [{
+  positions: ["BPB_S_P056"],
+  shifts: ["50001", "50002"]
+}, {
+  positions: ["BPB_OP_P044", "BPB_OP_P069"],
+  shifts: ["20001", "20002", "20003", "20004"]
+}, {
+  positions: ["BPB_OP_P045", "BPB_OP_P070"],
+  shifts: ["21001", "21002", "21003"]
+}, {
+  positions: ["BPB_OP_P041", "BPB_OP_P042", "BPB_OP_P043", "BPB_OP_P066", "BPB_OP_P067", "BPB_OP_P068"],
+  shifts: ["22001", "22002", "22003", "22004"]
+}, {
+  positions: ["BPB_PLK_P048", "BPB_PLK_P049", "BPB_PLK_P074", "BPB_PLK_P075", "BPB_PLK_P076", "BPB_PLK_P077"],
+  shifts: ["30001", "30002", "30003", "70000", "70001", "70002", "70003", "71000", "71002", "71003", "72001", "73000"]
+}, {
+  positions: ["BPB_PLK_P051", "BPB_PLK_P079"],
+  shifts: ["40001", "40002"]
+}, {
+  positions: ["BPB_PLK_P052", "BPB_PLK_P080_STAF", "BPB_PLK_P080_THL"],
+  shifts: ["60001", "60002"]
+}, {
+  positions: ["BPB_PLK_PAR_KOORD"],
+  shifts: ["61001", "61002"]
+}, {
+  positions: ["BPB_PLK_P054", "BPB_PLK_P082_STAF", "BPB_PLK_P082_THL"],
+  shifts: ["62001", "62002"]
+}, {
+  positions: ["BPB_PLK_P053", "BPB_PLK_P081_STAF", "BPB_PLK_P081_THL"],
+  shifts: ["63001", "63002", "63003", "63004", "63005", "63006"]
+}];
+var positionShiftPairs = positionShiftGroups.flatMap(({ positions, shifts }) => positions.flatMap((position) => shifts.map((shift) => [position, shift])));
+var rotatingPositions = new Set(positionShiftPairs.map(([code]) => code));
+async function loadFixedSchedules(db, from, to, employeeId = null) {
+  if (!await scheduleTablesReady(db)) return null;
+  const placements = await all(db, `SELECT ep.employee_id, CAST(ep.valid_from AS TEXT) AS valid_from,
+  CAST(ep.valid_to AS TEXT) AS valid_to, p.code, CAST(u.starts_on AS TEXT) AS starts_on, u.org_unit_id
+  FROM employee_placements ep JOIN positions p ON p.id=ep.position_id
+  LEFT JOIN (SELECT s.org_unit_id, s.starts_on FROM attendance_schedule_units s
+   JOIN org_units o ON o.id=s.org_unit_id WHERE o.is_active=1) u ON u.org_unit_id=p.org_unit_id
+  WHERE ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)
+  ${employeeId ? "AND ep.employee_id=?" : ""}`, to, from, ...employeeId ? [employeeId] : []);
+  const byEmployee = /* @__PURE__ */ new Map();
+  for (const row of placements) {
+    if (!byEmployee.has(row.employee_id)) byEmployee.set(row.employee_id, []);
+    byEmployee.get(row.employee_id).push(row);
+  }
+  const weekdays = /* @__PURE__ */ new Map();
+  for (const { org_unit_id, weekday_no, ...shift } of await all(db, `SELECT w.org_unit_id,w.weekday_no,${shiftFields}
+  FROM attendance_schedule_weekdays w JOIN attendance_schedule_shifts s ON s.code=w.shift_code`)) {
+    weekdays.set(`${org_unit_id}/${weekday_no}`, shift);
+  }
+  const holidays = /* @__PURE__ */ new Map(), years = /* @__PURE__ */ new Set();
+  for (const row of await all(db, "SELECT CAST(work_date AS TEXT) AS day,name FROM attendance_schedule_holidays WHERE work_date>=? AND work_date<=?", from.slice(0, 4) + "-01-01", to.slice(0, 4) + "-12-31")) {
+    holidays.set(row.day, row.name);
+    years.add(row.day.slice(0, 4));
+  }
+  return {
+    byEmployee,
+    weekdays,
+    holidays,
+    years
+  };
+}
+function fixedScheduleOn(calendar, employeeId, day) {
+  const matches = calendar?.byEmployee.get(employeeId)?.filter((p) => p.valid_from <= day && (!p.valid_to || p.valid_to >= day));
+  if (matches?.length !== 1) return null;
+  const placement = matches[0];
+  if (!placement.org_unit_id || placement.starts_on > day || rotatingPositions.has(placement.code)) return null;
+  const weekday = (/* @__PURE__ */ new Date(day + "T00:00:00Z")).getUTCDay() || 7;
+  const shift = calendar.weekdays.get(`${placement.org_unit_id}/${weekday}`);
+  const holiday = calendar.holidays.get(day);
+  const day_type = holiday ? "HOLIDAY" : !shift ? "WEEKLY_OFF" : calendar.years.has(day.slice(0, 4)) ? "WORK" : "CALENDAR_PENDING";
+  return {
+    day_type,
+    holiday_name: holiday || null,
+    shift: day_type === "WORK" ? shift : null
+  };
+}
+function arrivalTiming(calendar, employeeId, day, inAt) {
+  if (!inAt) return null;
+  const shift = fixedScheduleOn(calendar, employeeId, day)?.shift;
+  if (!shift) return null;
+  const arrival = Math.floor(Date.parse(inAt) / 6e4);
+  const atMinute = (time) => Date.parse(`${day}T${time}:00+08:00`) / 6e4;
+  const late = arrival >= atMinute(shift.late_time);
+  return {
+    late,
+    minutes: late ? Math.max(0, arrival - atMinute(shift.start_time)) : 0,
+    start_time: shift.start_time,
+    late_time: shift.late_time
+  };
+}
+
 // supabase/functions/_shared/portal/attendance-form.mjs
 import { Buffer as Buffer3 } from "node:buffer";
 import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
@@ -799,6 +904,10 @@ async function openIn(db, employeeId, nowMs) {
   AND NOT EXISTS(SELECT 1 FROM attendance_corrections c WHERE c.void_event_id=e.id AND c.revoked_at IS NULL)
   ORDER BY e.recorded_at DESC LIMIT 1`, employeeId, new Date(nowMs - attendanceRules.sessionHours * HOUR).toISOString()) || null;
 }
+var firstCheckInSql = (employee, day) => `SELECT i.id FROM attendance_events i
+ WHERE i.employee_id=${employee} AND i.work_date=${day} AND i.kind='IN'
+ AND NOT EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.void_event_id=i.id AND c.revoked_at IS NULL)
+ ORDER BY i.recorded_at,i.id LIMIT 1`;
 async function deviceContext(db, deviceId, nowMs = Date.now()) {
   const d = await one(db, "SELECT * FROM attendance_devices WHERE id=?", deviceId);
   assert(d, unknownDevice, 401);
@@ -833,10 +942,16 @@ async function deviceContext(db, deviceId, nowMs = Date.now()) {
     const units = new Set(await unitTree(db, unit));
     for (const p of everyone.values()) if (people.length < 120 && units.has(p.org_unit_id)) add(p, "unit");
   }
-  const history = d.kind === "PERSONAL" ? (await all(db, `SELECT kind,recorded_at,work_date,point_name,within_point FROM attendance_events WHERE employee_id=? AND recorded_at>=? ORDER BY recorded_at DESC LIMIT 80`, d.owner_employee_id, since)).map((r) => ({
+  const history = d.kind === "PERSONAL" ? (await all(db, `SELECT e.kind,e.recorded_at,e.work_date,e.point_name,e.within_point,
+ CASE WHEN e.kind='IN' AND e.id=(${firstCheckInSql("e.employee_id", "e.work_date")}) THEN 1 ELSE 0 END AS first_in
+ FROM attendance_events e WHERE e.employee_id=? AND e.recorded_at>=? ORDER BY e.recorded_at DESC LIMIT 80`, d.owner_employee_id, since)).map((r) => ({
     ...r,
     within_point: Number(r.within_point) === 1
   })) : [];
+  if (history.some((event) => event.kind === "IN")) {
+    const calendar = await loadFixedSchedules(db, witaDate(Date.parse(since)), witaDate(nowMs), d.owner_employee_id);
+    for (const event of history) if (Number(event.first_in) === 1) event.timing = arrivalTiming(calendar, d.owner_employee_id, event.work_date, event.recorded_at);
+  }
   const points = Number((await one(db, "SELECT count(*) n FROM attendance_points WHERE is_active=1"))?.n || 0);
   return {
     ...base,
@@ -924,11 +1039,14 @@ async function outsideOfficePolicy(db, lock = false) {
 }
 async function receiptOf(db, e, duplicate = false) {
   const person = await one(db, "SELECT full_name FROM employees WHERE id=?", e.employee_id);
+  const first = e.kind === "IN" && (await one(db, firstCheckInSql("?", "?"), e.employee_id, e.work_date))?.id === e.id;
+  const timing = first ? arrivalTiming(await loadFixedSchedules(db, e.work_date, e.work_date, e.employee_id), e.employee_id, e.work_date, e.recorded_at) : null;
   return {
     event_id: e.id,
     kind: e.kind,
     recorded_at: e.recorded_at,
     work_date: e.work_date,
+    timing,
     employee: {
       id: e.employee_id,
       name: person?.full_name || ""

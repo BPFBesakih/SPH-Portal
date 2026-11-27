@@ -212,6 +212,13 @@ try{
     assert.equal(friday.rows.length,42);
     assert(friday.rows.every(row=>row.employee.unit_id===unit.id&&row.day_type==='WORK'));
     assert.deepEqual(friday.rows[0].shift,{code:'10000',name:'Sekretariat Senin-Jumat',start_time:'08:00',end_time:'16:00',late_time:'08:16',end_day_offset:0});
+    const period='from=2026-11-27&to=2026-11-27';
+    const correction=await insert(db,'attendance_corrections',{employee_id:employees[0].id,work_date:'2026-11-27',in_at:'2026-11-27T00:16:00.000Z',reason:'Uji batas WITA',created_by:manager.id});
+    const detail=await portal(self,`attendance/recap/${employees[0].id}`,'GET',{},period);
+    assert.deepEqual(detail.days[0].timing,{late:true,minutes:16,start_time:'08:00',late_time:'08:16'});
+    const exportRows=await portal(self,'attendance/recap','GET',{},period+'&detail=1');
+    assert.deepEqual(exportRows.employees[0].days[0].timing,detail.days[0].timing);
+    await run(db,'UPDATE attendance_corrections SET revoked_at=?,revoked_by=? WHERE id=?',now(),manager.id,correction.id);
     const saturday=await schedule(manager,'2026-11-28');
     assert.equal(saturday.rows.length,42);
     assert(saturday.rows.every(row=>row.shift?.code==='10001'&&row.shift?.end_time==='13:00'&&row.shift?.late_time==='08:16'));
