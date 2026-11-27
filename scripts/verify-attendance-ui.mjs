@@ -21,6 +21,16 @@ import {createApp} from '../server.mjs';
 const {chromium}=createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE||'playwright');
 const shots=process.argv[2]?resolve(process.argv[2]):null;if(shots)mkdirSync(shots,{recursive:true});
 const freePort=()=>new Promise(r=>{const probe=createServer().listen(0,'127.0.0.1',()=>{const {port}=probe.address();probe.close(()=>r(port));});});
+// Ekspor Excel memakai ZIP "store" (tanpa kompresi), jadi XML tiap sheet terbaca langsung dari berkas.
+// Hasilnya baris data sebagai objek {judul kolom: nilai}; angka menjadi Number.
+function xlsxRows(file,index){
+ const text=readFileSync(file,'utf8'),from=text.indexOf(`xl/worksheets/sheet${index}.xml<?xml`);
+ assert(from>=0,`sheet ${index} tidak ditemukan`);
+ const sheet=text.slice(from,text.indexOf('</worksheet>',from));
+ const [head,...body]=[...sheet.matchAll(/<row r="\d+"[^>]*>(.*?)<\/row>/g)].map(([,row])=>Object.fromEntries(
+  [...row.matchAll(/<c r="([A-Z]+)\d+"[^>]*>(?:<is><t[^>]*>(.*?)<\/t><\/is>|<v>(.*?)<\/v>)<\/c>/g)].map(([,column,text,value])=>[column,text??Number(value)])));
+ return body.map(row=>Object.fromEntries(Object.entries(head).map(([column,header])=>[header,row[column]])));
+}
 const db=openDb(':memory:');seedPermissions(db);
 const office=insert(db,'org_units',{code:'BPB_S',name:'Kantor Uji',is_active:1}),post=insert(db,'org_units',{code:'UJI-U1',name:'Pos Uji',parent_id:office.id,is_active:1});
 const position=(code,name,unit)=>insert(db,'positions',{code,name,org_unit_id:unit.id,is_active:1});
@@ -186,7 +196,11 @@ try{
   await hp.getByRole('button',{name:'Mulai absen'}).click();await screen('Siapa yang absen?');
   assert.deepEqual(await hp.locator('[data-lists] .group').allTextContents(),['Unit Pos Uji']);
   await shot(hp,'hp-pilih-nama');
+  const headerHeight=()=>hp.locator('header.top').evaluate(el=>Math.round(el.getBoundingClientRect().height));
+  assert(await hp.locator('#back').isHidden());const plainHeader=await headerHeight();
   await hp.locator('[data-action=choose]',{hasText:'Pekerja Harian Uji'}).click();await screen('Absen sebagai');
+  assert(await hp.locator('#back').isVisible());
+  assert.equal(await headerHeight(),plainHeader,'kepala halaman tidak berubah tinggi saat tombol Kembali tampil');
   await hp.getByRole('button',{name:'Ya, benar'}).click();
   await hp.locator('.status',{hasText:'Belum absen masuk hari ini.'}).waitFor();
   assert.match(await hp.locator('#device-label').textContent(),/HP bersama · HP Pos Uji/);
@@ -195,11 +209,51 @@ try{
   await hp.locator('[data-action=shoot]:not([disabled])').waitFor({timeout:15000});
   await hp.locator('[data-location]',{hasText:'Lokasi didapat'}).waitFor({timeout:15000});
   await hp.locator('[data-action=shoot]').click();
+  await screen('Periksa foto absen MASUK');
+  assert(await hp.getByAltText('Selfie yang akan dikirim').evaluate(img=>img.decode().then(()=>img.naturalWidth>0)));
+  assert.equal(one(db,'SELECT count(*) n FROM attendance_events').n,0);
+  // Ambil ulang dan Kembali dari pratinjau langsung membuka kamera: lokasi tidak dicari dan radius tidak dicek ulang.
+  let locationChecks=0;const countCheck=req=>{if(req.url().endsWith('/api/attendance-form/check-location'))locationChecks++;};
+  hp.on('request',countCheck);
+  await hp.getByRole('button',{name:'Ambil ulang foto'}).click();
+  await screen('Selfie untuk absen MASUK');assert.match(await hp.locator('[data-location]').textContent(),/^Lokasi didapat/);
+  await hp.locator('[data-action=shoot]:enabled').click();
+  await screen('Periksa foto absen MASUK');
+  await hp.locator('header').getByRole('button',{name:'Kembali'}).click();
+  await screen('Selfie untuk absen MASUK');
+  hp.off('request',countCheck);assert.equal(locationChecks,0);
+  assert.equal(one(db,'SELECT count(*) n FROM attendance_events').n,0);
+  await hp.locator('[data-action=shoot]:enabled').click();
+  const preview=await hp.getByAltText('Selfie yang akan dikirim').getAttribute('src');
+  // Selama pratinjau GPS masih berjalan. Titik baru yang lebih kasar dan jauh (±500 m, 2 km ke timur)
+  // tidak menggantikan titik akurat dalam 30 detik terakhir. Lalu kiriman ditolak sesudah foto
+  // dikonfirmasi (titik absen dipindah sementara 0,01° ke utara): jarak di pesan dihitung dari titik
+  // akurat (±1,1 km, bukan ±2,5 km), dan "Cek lokasi lagi" mengirim ulang foto yang sama dengan
+  // kunci kiriman yang sama, tanpa membuka kamera lagi.
+  await phone.setGeolocation({latitude:-8.37412,longitude:115.47121,accuracy:500});await hp.waitForTimeout(1000);
+  const sentKeys=[];const keepKey=req=>{if(req.url().endsWith('/api/attendance-form/submit'))sentKeys.push(JSON.parse(JSON.parse(req.postData()).payload).client_key);};
+  hp.on('request',keepKey);
+  await hp.evaluate(()=>{window.__resendCameraCalls=0;const devices=navigator.mediaDevices,open=devices.getUserMedia.bind(devices);window.__realGetUserMedia=open;devices.getUserMedia=constraints=>{window.__resendCameraCalls++;return open(constraints);};});
+  run(db,'UPDATE attendance_points SET latitude=latitude+0.01');
+  await hp.getByRole('button',{name:'Kirim absen'}).click();await screen('Absen ditolak');
+  const rejected=await hp.locator('.status.bad').textContent();
+  assert.match(rejected,/di luar radius absen/);
+  const distance=Number(rejected.match(/Lokasi Anda (\d+) m/)?.[1]);assert(distance>1000&&distance<1500,`jarak dari titik akurat: ${rejected}`);
+  assert.match(await hp.locator('#app').innerText(),/Foto tadi dikirim ulang\./);
+  assert.equal(one(db,'SELECT count(*) n FROM attendance_events').n,0);
+  run(db,'UPDATE attendance_points SET latitude=latitude-0.01');
+  await phone.setGeolocation({latitude:-8.37412,longitude:115.45121,accuracy:8});
+  await hp.getByRole('button',{name:'Cek lokasi lagi'}).click();
   await hp.locator('.success .kind',{hasText:'MASUK TERCATAT'}).waitFor({timeout:20000});
+  hp.off('request',keepKey);
+  assert.equal(sentKeys.length,2);assert.equal(sentKeys[0],sentKeys[1]);
+  assert.equal(await hp.evaluate(()=>window.__resendCameraCalls),0);
+  await hp.evaluate(()=>{navigator.mediaDevices.getUserMedia=window.__realGetUserMedia;});
   assert.match(await hp.locator('.success .where').textContent(),/^Kantor Uji \(\d+ m\)$/);
   assert.equal(await hp.locator('.success .who').textContent(),'Pekerja Harian Uji');
   await shot(hp,'hp-tercatat');
   const row=one(db,'SELECT * FROM attendance_events WHERE employee_id=?',helper.id);
+  assert.deepEqual(readFileSync(resolve(dataDir,'attendance',row.photo_storage_key)),Buffer.from(preview.split(',')[1],'base64'));
   assert.equal(row.kind,'IN');assert.equal(row.within_point,1);assert(row.photo_size>1000&&row.photo_size<=300*1024);
   assert.deepEqual(readdirSync(resolve(dataDir,'attendance')),[row.photo_storage_key]);
   assert.deepEqual(readFileSync(resolve(dataDir,'attendance',row.photo_storage_key)).subarray(0,3),Buffer.from([0xff,0xd8,0xff]));
@@ -232,6 +286,9 @@ try{
   await hp.getByRole('button',{name:'Kembali'}).click();
   await hp.locator('[data-action=kind][data-kind=IN]').click();await screen('Selfie untuk absen MASUK');
   await hp.locator('[data-action=shoot]:not([disabled])').click();
+  await screen('Periksa foto absen MASUK');
+  assert.equal(submissions,0);
+  await hp.getByRole('button',{name:'Kirim absen'}).click();
   await hp.locator('.success .where',{hasText:'Di luar titik'}).waitFor({timeout:20000});
   const row=one(db,'SELECT * FROM attendance_events WHERE employee_id=?',guard.id);
   assert.deepEqual([row.within_point,row.outside_reason,row.outside_note,JSON.parse(row.flags).includes('DI_LUAR_TITIK')],[0,'IZIN_LUAR_AREA',null,true]);
@@ -334,6 +391,23 @@ try{
   assert.match(download.suggestedFilename(),/^absensi-\d{4}-\d{2}-\d{2}-sd-\d{4}-\d{2}-\d{2}\.xlsx$/);
   const file=await download.path();assert.equal(readFileSync(file).subarray(0,2).toString(),'PK');
   assert.equal(one(db,"SELECT count(*) n FROM audit_events WHERE action='EXPORT'").n,1);
+  // Ringkasan menghitung hari dan menit terlambat. Kepala Uji (jadwal tetap Kantor Uji, 08.00, terlambat
+  // mulai 08.16) masuk Senin 23 Nov 08.20 dan Selasa 24 Nov 09.05 WITA: 2 hari, 20 + 65 = 85 menit.
+  const device=one(db,'SELECT id FROM attendance_devices ORDER BY created_at LIMIT 1'),point=one(db,'SELECT id,name FROM attendance_points ORDER BY created_at LIMIT 1');
+  for(const [who,day,at] of [[head,'2026-11-23','2026-11-23T00:20:00.000Z'],[head,'2026-11-24','2026-11-24T01:05:00.000Z'],
+   [guard,'2026-11-23','2026-11-23T00:20:00.000Z']])
+   insert(db,'attendance_events',{employee_id:who.id,kind:'IN',recorded_at:at,work_date:day,device_id:device.id,client_key:crypto.randomUUID(),latitude:-8.3741,longitude:115.4512,accuracy_m:8,
+    point_id:point.id,point_name:point.name,distance_m:0,within_point:1,photo_mime:'image/jpeg',photo_size:1000,photo_checksum:'0'.repeat(64),photo_deleted_at:at,flags:'[]'});
+  await portal.locator('[data-att-field=from]').fill('2026-11-23');await portal.locator('[data-att-field=to]').fill('2026-11-24');
+  await Promise.all([portal.waitForResponse(r=>r.url().includes('attendance/recap?from=2026-11-23&to=2026-11-24')),portal.locator('[data-att=apply]').click()]);
+  const [lateDownload]=await Promise.all([portal.waitForEvent('download'),portal.locator('[data-att=export]').click()]);
+  const lateFile=await lateDownload.path();
+  const summaries=xlsxRows(lateFile,1),summaryFor=name=>summaries.find(r=>r.Nama===name);
+  const counts=row=>[row['Penilaian jam masuk'],row['Hari terlambat'],row['Menit terlambat']];
+  assert.deepEqual(counts(summaryFor('Kepala Uji')),['2 dari 2 hari dinilai',2,85]);
+  assert.deepEqual(counts(summaryFor('Petugas Uji Satu')),['Belum dapat dinilai',undefined,undefined]);
+  assert.deepEqual(xlsxRows(lateFile,2).filter(r=>r.Nama==='Kepala Uji').map(r=>r['Ketepatan masuk']).sort(),
+   ['Terlambat 1 jam 5 menit dari jam masuk 08.00 WITA','Terlambat 20 menit dari jam masuk 08.00 WITA']);
   assert.deepEqual(await portal.evaluate(()=>window.__csp),[],'tanpa pelanggaran CSP (Leaflet, QR, selfie blob)');
   assert.deepEqual(errors,[]);
  });

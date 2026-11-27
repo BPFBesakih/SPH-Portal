@@ -97,12 +97,24 @@ function afterRender(){
 }
 
 /* ---------- Hari ini ---------- */
+// Jam ditulis 08.00 seperti jam lain di portal; 60 menit ke atas ditulis dalam jam dan menit.
+function durationLabel(minutes){
+ const hours=Math.floor(minutes/60),rest=minutes%60;
+ return hours?`${hours} jam${rest?` ${rest} menit`:''}`:`${rest} menit`;
+}
+function timingLabel(timing){
+ if(!timing)return '';
+ return timing.late?`Terlambat ${durationLabel(timing.minutes)} dari jam masuk ${String(timing.start_time||'').replace(':','.')} WITA`:'Tepat waktu';
+}
+function checkInCell(inAt,timing){
+ return time(inAt)+(timing?`<br>${pill(timingLabel(timing),timing.late?'warm':'positive')}`:'');
+}
 function todayTab(){
  const rows=A.today.rows.filter(r=>!A.query||r.employee.name.toLowerCase().includes(A.query.toLowerCase()));
  const count=s=>A.today.rows.filter(r=>s.includes(r.status)).length;
  return `<div class="stats-grid">${stat('Hadir',count(['HADIR','BELUM_PULANG','TANPA_PULANG','TANPA_MASUK']))}${stat('Belum pulang',count(['BELUM_PULANG']))}${stat('Belum ada catatan',count(['TIDAK_ADA_CATATAN']))}${stat('Cuti / izin / sakit / dinas',count(['CUTI','IZIN','SAKIT','DINAS_LUAR']))}${stat('Ditandai',A.today.rows.filter(r=>r.flags.length).length)}</div>
  <div class="toolbar"><label class="field"><span>Unit</span><select data-att-field="unit">${unitOptions(A.unit)}</select></label><label class="field"><span>Cari nama</span><input type="search" data-att-field="query" value="${esc(A.query)}"></label>${btn('Terapkan','apply','filter','outlined')}</div>
- ${card(`Absen ${day(A.today.date)}`,'Status dihitung dari absen hari ini, koreksi, keterangan, dan cuti yang disetujui.',table(['Pegawai','Status','Masuk','Pulang','Titik terakhir','Tanda',''],rows.map(r=>`<tr><td>${person(r.employee)}</td><td>${pill(statusLabel[r.status],statusTone[r.status])}${r.note?`<br><span class="muted text-small">${esc(noteLabel[r.note.kind])}</span>`:''}</td><td>${time(r.in_at)}</td><td>${time(r.out_at)}</td><td>${where(r.last_event)}${r.last_event?`<br><span class="muted text-small">lewat ${esc(r.last_event.device.label)}${r.last_event.device.borrowed?' (menumpang)':''}</span>`:''}</td><td>${flags(r.flags)}</td><td><button type="button" class="button text" data-att="detail" data-id="${esc(r.employee.id)}">Rincian</button></td></tr>`),'Tidak ada pegawai pada saringan ini.'))}`;
+ ${card(`Absen ${day(A.today.date)}`,'Status dihitung dari absen hari ini, koreksi, keterangan, dan cuti yang disetujui.',table(['Pegawai','Status','Masuk','Pulang','Titik terakhir','Tanda',''],rows.map(r=>`<tr><td>${person(r.employee)}</td><td>${pill(statusLabel[r.status],statusTone[r.status])}${r.note?`<br><span class="muted text-small">${esc(noteLabel[r.note.kind])}</span>`:''}</td><td>${checkInCell(r.in_at,r.timing)}</td><td>${time(r.out_at)}</td><td>${where(r.last_event)}${r.last_event?`<br><span class="muted text-small">lewat ${esc(r.last_event.device.label)}${r.last_event.device.borrowed?' (menumpang)':''}</span>`:''}</td><td>${flags(r.flags)}</td><td><button type="button" class="button text" data-att="detail" data-id="${esc(r.employee.id)}">Rincian</button></td></tr>`),'Tidak ada pegawai pada saringan ini.'))}`;
 }
 
 /* ---------- Jadwal kerja ---------- */
@@ -146,14 +158,25 @@ function recapTab(){
 async function exportRecap(){
  const unit=A.unit?`&unit=${encodeURIComponent(A.unit)}`:'';
  const data=await api(`attendance/recap?from=${A.from}&to=${A.to}&detail=1${unit}`);
- const summary=data.employees.map(r=>({nama:r.employee.name,nomor:r.employee.employee_no,jabatan:r.employee.position,unit:r.employee.unit,...r.summary,jam:Math.round(r.summary.menit/6)/10}));
+ // Hari dan menit terlambat dihitung dari keterangan ketepatan masuk per hari (sama dengan lembar Rincian harian).
+ const summary=data.employees.map(r=>{
+  const checkIns=r.days.filter(day=>day.in_at);
+  const assessed=checkIns.filter(day=>day.timing!=null);
+  const late=assessed.filter(day=>day.timing.late);
+  const unassessed=checkIns.length>0&&assessed.length===0;
+  let assessment='Tidak ada jam masuk';
+  if(checkIns.length)assessment=unassessed?'Belum dapat dinilai':`${assessed.length} dari ${checkIns.length} hari dinilai`;
+  return {nama:r.employee.name,nomor:r.employee.employee_no,jabatan:r.employee.position,unit:r.employee.unit,...r.summary,
+   penilaian:assessment,hari_terlambat:unassessed?null:late.length,
+   menit_terlambat:unassessed?null:late.reduce((total,day)=>total+day.timing.minutes,0),jam:Math.round(r.summary.menit/6)/10};
+ });
  const detail=[];
- for(const r of data.employees)for(const d of r.days)detail.push({tanggal:d.date,nama:r.employee.name,nomor:r.employee.employee_no,unit:r.employee.unit,status:statusLabel[d.status],masuk:d.in_at,pulang:d.out_at,menit:d.minutes,tanda:d.flags.map(f=>flagLabel[f]||f).join(', '),keterangan:d.note?`${noteLabel[d.note.kind]}${d.note.note?': '+d.note.note:''}`:'',koreksi:d.corrected?'Ya':''});
+ for(const r of data.employees)for(const d of r.days)detail.push({tanggal:d.date,nama:r.employee.name,nomor:r.employee.employee_no,unit:r.employee.unit,status:statusLabel[d.status],masuk:d.in_at,ketepatan:timingLabel(d.timing),pulang:d.out_at,menit:d.minutes,tanda:d.flags.map(f=>flagLabel[f]||f).join(', '),keterangan:d.note?`${noteLabel[d.note.kind]}${d.note.note?': '+d.note.note:''}`:'',koreksi:d.corrected?'Ya':''});
  await post('attendance/exports',{kind:'detail',from:data.from,to:data.to,rows:detail.length});
  const col=(header,key,kind='text',width)=>({header,key,kind,width});
  download(createXlsx([
-  {name:'Ringkasan',columns:[col('Nama','nama','text',30),col('Nomor pegawai','nomor'),col('Jabatan','jabatan','text',28),col('Unit','unit','text',24),col('Hadir','hadir','number'),col('Tanpa pulang','tanpa_pulang','number'),col('Tanpa masuk','tanpa_masuk','number'),col('Cuti','cuti','number'),col('Izin','izin','number'),col('Sakit','sakit','number'),col('Dinas luar','dinas_luar','number'),col('Tidak ada catatan','tanpa_catatan','number'),col('Hari ditandai','ditandai','number'),col('Jam kerja','jam','number')],rows:summary},
-  {name:'Rincian harian',columns:[col('Tanggal','tanggal','date'),col('Nama','nama','text',30),col('Nomor pegawai','nomor'),col('Unit','unit','text',24),col('Status','status','text',22),col('Masuk','masuk','datetime'),col('Pulang','pulang','datetime'),col('Menit kerja','menit','number'),col('Tanda','tanda','notes',30),col('Keterangan','keterangan','notes',30),col('Dikoreksi','koreksi')],rows:detail}
+  {name:'Ringkasan',columns:[col('Nama','nama','text',30),col('Nomor pegawai','nomor'),col('Jabatan','jabatan','text',28),col('Unit','unit','text',24),col('Hadir','hadir','number'),col('Penilaian jam masuk','penilaian','text',25),col('Hari terlambat','hari_terlambat','number'),col('Menit terlambat','menit_terlambat','number'),col('Tanpa pulang','tanpa_pulang','number'),col('Tanpa masuk','tanpa_masuk','number'),col('Cuti','cuti','number'),col('Izin','izin','number'),col('Sakit','sakit','number'),col('Dinas luar','dinas_luar','number'),col('Tidak ada catatan','tanpa_catatan','number'),col('Hari ditandai','ditandai','number'),col('Jam kerja','jam','number')],rows:summary},
+  {name:'Rincian harian',columns:[col('Tanggal','tanggal','date'),col('Nama','nama','text',30),col('Nomor pegawai','nomor'),col('Unit','unit','text',24),col('Status','status','text',22),col('Masuk','masuk','datetime'),col('Ketepatan masuk','ketepatan','text',36),col('Pulang','pulang','datetime'),col('Menit kerja','menit','number'),col('Tanda','tanda','notes',30),col('Keterangan','keterangan','notes',30),col('Dikoreksi','koreksi')],rows:detail}
  ]),`absensi-${data.from}-sd-${data.to}.xlsx`);
 }
 
@@ -162,7 +185,7 @@ function daysTable(d){
  const byDay=new Map(d.days.map(x=>[x.date,x])),rows=[];
  for(let x=d.to;x>=d.from;x=shift(x,-1)){
   const v=byDay.get(x);
-  rows.push(`<tr><td>${day(x)}</td><td>${v?pill(statusLabel[v.status],statusTone[v.status]):pill('Tidak ada catatan')}${v?.leave_type?`<br><span class="muted text-small">${esc(leaveLabel[v.leave_type]||'Cuti khusus')}</span>`:''}${v?.corrected?'<br><span class="muted text-small">Dikoreksi</span>':''}</td><td>${time(v?.in_at)}</td><td>${time(v?.out_at)}</td><td>${hours(v?.minutes)}</td><td>${flags(v?.flags)}</td><td>${v?.note?`${esc(noteLabel[v.note.kind])}${v.note.note?`: ${esc(v.note.note)}`:''}`:''}</td></tr>`);
+  rows.push(`<tr><td>${day(x)}</td><td>${v?pill(statusLabel[v.status],statusTone[v.status]):pill('Tidak ada catatan')}${v?.leave_type?`<br><span class="muted text-small">${esc(leaveLabel[v.leave_type]||'Cuti khusus')}</span>`:''}${v?.corrected?'<br><span class="muted text-small">Dikoreksi</span>':''}</td><td>${checkInCell(v?.in_at,v?.timing)}</td><td>${time(v?.out_at)}</td><td>${hours(v?.minutes)}</td><td>${flags(v?.flags)}</td><td>${v?.note?`${esc(noteLabel[v.note.kind])}${v.note.note?`: ${esc(v.note.note)}`:''}`:''}</td></tr>`);
  }
  return table(['Tanggal','Status','Masuk','Pulang','Durasi','Tanda','Keterangan'],rows);
 }

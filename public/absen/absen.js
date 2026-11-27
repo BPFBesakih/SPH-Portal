@@ -1,4 +1,4 @@
-import {loadDevice,saveDevice,forgetDevice,loadPending,savePending,clearPending,persistStorage,newKeys,publicKeyOf,request,signedRequest,replacementProof,serverNow,syncClock,uuid,FormError} from './absen-core.js';
+import {createGpsWindow,loadDevice,saveDevice,forgetDevice,loadPending,savePending,clearPending,persistStorage,newKeys,publicKeyOf,request,signedRequest,replacementProof,serverNow,syncClock,uuid,FormError} from './absen-core.js';
 
 // Halaman absen BP Besakih. Alur harian dibuat sesingkat mungkin untuk pegawai yang
 // belum terbiasa memakai HP: buka ikon → (pilih nama) → MASUK/PULANG → selfie.
@@ -13,7 +13,11 @@ const kindLabel={IN:'MASUK',OUT:'PULANG'};
 const isIos=/iPhone|iPad|iPod/.test(navigator.userAgent);
 const standalone=()=>matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
 function say(text){live.textContent='';setTimeout(()=>{live.textContent=text;},30);}
-function show(html,focus=true){clearTimers();app.innerHTML=html;if(focus)app.focus({preventScroll:true});window.scrollTo(0,0);}
+const backButton=document.querySelector('#back');
+function show(html,focus=true,back=null){
+ backButton.hidden=!back;
+ backButton.onclick=back?()=>Promise.resolve().then(back).catch(error=>failure(error,null)):null;
+ clearTimers();app.innerHTML=html;if(focus)app.focus({preventScroll:true});window.scrollTo(0,0);}
 function later(fn,ms){const id=setTimeout(()=>{S.timers.delete(id);fn();},ms);S.timers.add(id);return id;}
 function clearTimers(){for(const id of S.timers)clearTimeout(id);S.timers.clear();}
 function setLabel(text){document.querySelector('#device-label').textContent=text;}
@@ -23,8 +27,8 @@ window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();S.i
 if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
 
 /* ---------- Layar umum ---------- */
-function message(title,text,{tone='',actions=''}={}){
- show(`<section class="screen"><h1>${esc(title)}</h1>${text?`<div class="status ${tone}">${esc(text)}</div>`:''}${actions}</section>`);
+function message(title,text,{tone='',actions='',back=null}={}){
+ show(`<section class="screen"><h1>${esc(title)}</h1>${text?`<div class="status ${tone}">${esc(text)}</div>`:''}${actions}</section>`,true,back);
 }
 function pasteBox(){
  return `<form class="card screen" data-paste><label class="field">Tempel tautan pendaftaran dari SDM<input type="url" name="link" inputmode="url" autocomplete="off" placeholder="https://bpbesakih.com/absen/#daftar=…" required></label><button class="primary wide" type="submit">Buka tautan</button></form>`;
@@ -42,7 +46,7 @@ function unregistered(note=''){
 }
 function failure(error,retry){
  const text=error instanceof FormError?error.message:'Terjadi gangguan. Coba lagi.';
- message('Belum berhasil',text,{tone:'bad',actions:`<div class="row">${retry?'<button class="primary" data-action="retry">Coba lagi</button>':''}<button class="secondary" data-action="home">Kembali</button></div>`});
+ message('Belum berhasil',text,{tone:'bad',back:home,actions:retry?'<button class="primary" data-action="retry">Coba lagi</button>':''});
  S.retry=retry||null;
 }
 
@@ -63,8 +67,7 @@ async function registration(link){
     <div class="card"><p class="lead">HP ini akan didaftarkan sebagai:</p><p class="lead">${who}</p></div>
     ${replaceNote()}
     <button class="primary wide" data-action="register" data-token="${link.token}">Ya, daftarkan</button>
-    <button class="ghost" data-action="home">Batal</button>
-   </section>`);
+   </section>`,true,home);
    return;
   }
   const preview=await request('session',{token:link.token});
@@ -89,7 +92,7 @@ function sessionPicker(){
   <p class="muted">Sesi pendaftaran ${esc(S.session.preview.unit?.name||'')}. Pilih nama <strong>pemilik HP ini</strong>.</p>
   <label class="field">Cari nama<input type="search" data-session-search autocomplete="off"></label>
   <div data-session-list>${sessionList('')}</div>
- </section>`,false);
+ </section>`,false,home);
 }
 function sessionConfirm(person){
  show(`<section class="screen">
@@ -97,8 +100,7 @@ function sessionConfirm(person){
   <div class="card person"><span class="name">${esc(person.name)}</span><span class="role">${esc([person.position,person.unit].filter(Boolean).join(' · '))}</span></div>
   ${replaceNote()}
   <button class="primary wide" data-action="session-register" data-id="${esc(person.id)}">Ya, ini HP saya</button>
-  <button class="secondary wide" data-action="session-back">Bukan, pilih lagi</button>
- </section>`);
+ </section>`,true,sessionPicker);
 }
 async function register(action,body){
  show('<section class="screen center"><div class="spinner"></div><p class="lead">Mendaftarkan HP…</p></section>');
@@ -226,7 +228,7 @@ async function personHome(){
   </div>
   ${d.kind==='PERSONAL'&&ownerHere?'<button class="ghost" data-action="history">Riwayat absen saya (30 hari)</button>':''}
   ${standalone()?'':`<button class="ghost" data-action="install" data-install ${S.install?'':'hidden'}>Pasang ikon di layar utama</button>`}
- </section>`);
+ </section>`,true,ownerHere?null:picker);
 }
 function pickerLists(query){
  const people=S.context.people,q=query.trim().toLowerCase();
@@ -242,8 +244,7 @@ function picker(){
   <label class="field">Cari nama<input type="search" data-search autocomplete="off" placeholder="Ketik nama"></label>
   <div data-search-results></div>
   <div data-lists>${pickerLists('')}</div>
-  ${S.person?'<button class="ghost" data-action="home">Kembali</button>':''}
- </section>`,false);
+ </section>`,false,S.person?home:null);
 }
 async function searchPeople(query){
  const box=app.querySelector('[data-search-results]');if(!box)return;
@@ -261,15 +262,24 @@ function confirmPerson(person){
   <div class="card person"><span class="name">${esc(person.name)}</span><span class="role">${esc([person.position,person.unit].filter(Boolean).join(' · '))}</span></div>
   <p class="lead">Benar?</p>
   <button class="primary wide" data-action="confirm-person" data-id="${esc(person.id)}">Ya, benar</button>
-  <button class="secondary wide" data-action="pick">Bukan, pilih lagi</button>
- </section>`);
+ </section>`,true,picker);
  S.candidate=person;
+}
+// Jam ditulis 08.00 seperti jam lain di halaman ini; 60 menit ke atas ditulis dalam jam dan menit.
+const clockText=value=>String(value||'').replace(':','.');
+function durationText(minutes){
+ const hours=Math.floor(minutes/60),rest=minutes%60;
+ return hours?`${hours} jam${rest?` ${rest} menit`:''}`:`${rest} menit`;
+}
+function timingText(timing){
+ if(!timing)return '';
+ return timing.late?`Terlambat ${durationText(timing.minutes)} dari jam masuk ${clockText(timing.start_time)} WITA`:'Tepat waktu';
 }
 function historyScreen(){
  const items=S.context.history||[];
  show(`<section class="screen"><h1>Riwayat absen saya</h1><p class="muted">30 hari terakhir dari HP ini dan HP lain.</p>
-  <div class="history">${items.map(e=>`<div><span>${esc(new Intl.DateTimeFormat('id-ID',{weekday:'short',day:'numeric',month:'short',timeZone:'Asia/Makassar'}).format(new Date(e.recorded_at)))}</span><strong>${kindLabel[e.kind]} ${witaTime(Date.parse(e.recorded_at))}</strong><span class="muted">${esc(e.point_name||'')}${e.within_point?'':' (di luar titik)'}</span></div>`).join('')||'<p class="muted">Belum ada absen.</p>'}</div>
-  <button class="secondary wide" data-action="home">Kembali</button></section>`);
+  <div class="history">${items.map(e=>`<div><span>${esc(new Intl.DateTimeFormat('id-ID',{weekday:'short',day:'numeric',month:'short',timeZone:'Asia/Makassar'}).format(new Date(e.recorded_at)))}</span><strong>${kindLabel[e.kind]} ${witaTime(Date.parse(e.recorded_at))}${e.timing?`<small>${esc(timingText(e.timing))}</small>`:''}</strong><span class="muted">${esc(e.point_name||'')}${e.within_point?'':' (di luar titik)'}</span></div>`).join('')||'<p class="muted">Belum ada absen.</p>'}</div>
+  </section>`,true,home);
 }
 
 /* ---------- Absen: kamera depan + lokasi ---------- */
@@ -285,41 +295,41 @@ function chooseKind(kind){
   const text=kind==='OUT'?'Anda belum absen masuk. Tetap absen PULANG?':open?`Anda sudah absen masuk pukul ${witaTime(Date.parse(open))}. Tetap absen MASUK lagi?`:'Anda sudah absen masuk. Tetap absen MASUK lagi?';
   show(`<section class="screen"><h1>Yakin?</h1><div class="status warn">${esc(text)}</div>
    <button class="primary wide" data-action="kind-confirmed" data-kind="${kind}">Ya, absen ${kindLabel[kind]}</button>
-   <button class="secondary wide" data-action="home">Kembali</button></section>`);
+   </section>`,true,home);
   return;
  }
  capture(kind,false);
 }
 async function capture(kind,confirmed){
- S.attempt={client_key:uuid(),kind,confirmed,employee:S.status.employee,photo:null};
+ S.attempt={client_key:uuid(),kind,confirmed,employee:S.status.employee,photo:null,photoConfirmed:false};
  await locateAttempt();
 }
 const locationPayload=fix=>({latitude:fix.latitude,longitude:fix.longitude,accuracy:fix.accuracy,age_ms:Math.max(0,Date.now()-fix.at)});
-const gpsLabel=fix=>`Lokasi didapat · akurasi ±${Math.round(fix.accuracy)} m`;
+const gpsLabel=fix=>fix?`Lokasi didapat · akurasi ±${Math.round(fix.accuracy)} m`:'Menunggu lokasi terbaru.';
 async function locateAttempt(){
  stopCapture();
  const attempt=S.attempt;if(!attempt)return;
- if(!navigator.geolocation){message('Lokasi tidak tersedia','HP ini tidak mendukung lokasi untuk absen.',{tone:'bad',actions:'<button class="primary wide" data-action="home">Kembali</button>'});return;}
- show('<section class="screen center"><h1>Memeriksa lokasi</h1><div class="spinner"></div><p class="lead" data-location>Mencari lokasi HP.</p><button class="ghost" data-action="home">Batal</button></section>');
- const camera={stream:null,watch:null,position:null,denied:false};S.camera=camera;
+ if(!navigator.geolocation){message('Lokasi tidak tersedia','HP ini tidak mendukung lokasi untuk absen.',{tone:'bad',back:home});return;}
+ show('<section class="screen center"><h1>Memeriksa lokasi</h1><div class="spinner"></div><p class="lead" data-location>Mencari lokasi HP.</p></section>',true,home);
+ const camera={stream:null,watch:null,gps:createGpsWindow(),denied:false};S.camera=camera;
  const deadline=Date.now()+20000;
  camera.watch=navigator.geolocation.watchPosition(position=>{
   if(S.camera!==camera)return;
   const at=Number.isFinite(position.timestamp)?Math.min(position.timestamp,Date.now()):Date.now();
-  if(camera.position&&at<camera.position.at)return;
-  camera.position={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy,at};
-  const label=app.querySelector('[data-location]');if(label)label.textContent=gpsLabel(camera.position);
+  const fix=camera.gps.add({latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy,at});
+  const label=app.querySelector('[data-location]');if(label)label.textContent=gpsLabel(fix);
  },error=>{if(error.code===1)camera.denied=true;},{enableHighAccuracy:true,maximumAge:0,timeout:20000});
- while(S.camera===camera&&!camera.denied&&(!camera.position||camera.position.accuracy>100)&&Date.now()<deadline)await new Promise(r=>setTimeout(r,200));
+ while(S.camera===camera&&!camera.denied&&((camera.gps.best()?.accuracy??Infinity)>100)&&Date.now()<deadline)await new Promise(r=>setTimeout(r,200));
  if(S.camera!==camera)return;
- if(camera.denied||!camera.position||Date.now()-camera.position.at>120000){
+ const fix=camera.gps.best();
+ if(camera.denied||!fix){
   stopCapture();
-  message('Lokasi belum didapat',camera.denied?'Izinkan akses lokasi untuk halaman absen, lalu coba lagi.':'Nyalakan Lokasi (GPS) di HP, lalu coba lagi.',{tone:'bad',actions:'<button class="primary wide" data-action="retry-location">Coba lagi</button><button class="secondary wide" data-action="home">Batal</button>'});return;
+  message('Lokasi belum didapat',camera.denied?'Izinkan akses lokasi untuk halaman absen, lalu coba lagi.':'Nyalakan Lokasi (GPS) di HP, lalu coba lagi.',{tone:'bad',back:home,actions:'<button class="primary wide" data-action="retry-location">Coba lagi</button>'});return;
  }
  // Kiriman ulang memakai selfie dan kunci kiriman yang sama agar balasan yang hilang bisa dipulihkan.
- if(attempt.photo){await submit();return;}
+ if(attempt.photoConfirmed){await submit();return;}
  try{
-  const result=await signedRequest(S.device,'check-location',{employee_id:attempt.employee.id,location:locationPayload(camera.position)});
+  const result=await signedRequest(S.device,'check-location',{employee_id:attempt.employee.id,location:locationPayload(fix)});
   if(S.camera!==camera)return;
   if(result.allowed!==true)throw new FormError('Lokasi belum dapat dikonfirmasi. Coba lagi.',503);
  }catch(error){if(S.camera===camera)captureFailure(error);return;}
@@ -327,20 +337,24 @@ async function locateAttempt(){
 }
 function captureFailure(error){
  stopCapture();
- if(error.status===403&&['OUTSIDE_FORBIDDEN','NO_ACTIVE_POINT'].includes(error.details?.code)){
-  S.attempt=null;
-  message('Absen ditolak',error.message,{tone:'bad',actions:'<button class="primary wide" data-action="home">Kembali</button>'});return;
+ const code=error.details?.code;
+ if(error.status===403&&['OUTSIDE_FORBIDDEN','NO_ACTIVE_POINT'].includes(code)){
+  // Di luar radius bisa karena GPS melenceng sesaat. Pegawai boleh mengecek lokasi lagi tanpa
+  // mengulang dari awal; selfie yang sudah dikonfirmasi dikirim ulang dengan kunci yang sama.
+  const again=code==='OUTSIDE_FORBIDDEN'&&S.attempt?S.attempt:null;
+  if(!again)S.attempt=null;
+  const hint=again?`<p class="muted small">Bila Anda sudah berada di area kantor, tunggu sebentar lalu tekan Cek lokasi lagi.${again.photoConfirmed?' Foto tadi dikirim ulang.':''}</p><button class="primary wide" data-action="retry-location">Cek lokasi lagi</button>`:'';
+  message('Absen ditolak',error.message,{tone:'bad',back:home,actions:hint});return;
  }
  failure(error,error.status===0||error.status===503?locateAttempt:null);
 }
 async function openSelfie(camera,kind){
  show(`<section class="screen">
   <h1>Selfie untuk absen ${kindLabel[kind]}</h1>
-  <div class="camera"><video playsinline muted autoplay></video><p class="hint" data-location>${gpsLabel(camera.position)}</p></div>
+  <div class="camera"><video playsinline muted autoplay></video><p class="hint" data-location>${gpsLabel(camera.gps.best())}</p></div>
   <button class="capture" data-action="shoot" aria-label="Ambil foto" disabled></button>
   <p class="center muted small" data-camera>Menyalakan kamera depan…</p>
-  <button class="ghost" data-action="home">Batal</button>
- </section>`);
+ </section>`,true,home);
  const cameraText=app.querySelector('[data-camera]');
  try{
   if(!navigator.mediaDevices?.getUserMedia)throw new Error('Kamera tidak tersedia di browser ini.');
@@ -354,31 +368,48 @@ async function openSelfie(camera,kind){
   if(S.camera!==camera)return;
   stopCapture();
   message('Kamera belum bisa dipakai',error?.name==='NotAllowedError'?'Izin kamera ditolak. Buka pengaturan browser, izinkan Kamera untuk halaman ini, lalu coba lagi.':'Kamera depan tidak dapat dinyalakan. Tutup aplikasi lain yang memakai kamera, lalu coba lagi.',
-   {tone:'bad',actions:'<button class="primary wide" data-action="home">Kembali</button>'});
+   {tone:'bad',back:home});
  }
 }
 async function shoot(){
  const camera=S.camera,attempt=S.attempt;
- const video=app.querySelector('video');if(!video?.videoWidth)return;
+ const video=app.querySelector('video');if(!video?.videoWidth){const button=app.querySelector('[data-action=shoot]');if(button)button.disabled=false;return;}
+ const takenAt=Date.now();
  const scale=Math.min(1,640/Math.max(video.videoWidth,video.videoHeight)),canvas=document.createElement('canvas');
  canvas.width=Math.round(video.videoWidth*scale);canvas.height=Math.round(video.videoHeight*scale);
  canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
  let blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.7));
  if(blob&&blob.size>290*1024)blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.5));
  if(S.camera!==camera||S.attempt!==attempt)return;
- if(!blob){failure(new FormError('Foto belum bisa diambil. Coba lagi.'),()=>capture(attempt.kind,attempt.confirmed));return;}
+ if(!blob){stopCapture();failure(new FormError('Foto belum bisa diambil. Coba lagi.'),()=>capture(attempt.kind,attempt.confirmed));return;}
  const data=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]);r.onerror=()=>reject(r.error);r.readAsDataURL(blob);});
  if(S.camera!==camera||S.attempt!==attempt)return;
  camera.stream?.getTracks().forEach(t=>t.stop());
- attempt.photo={data,at:Date.now()};
- await submit();
+ camera.stream=null;
+ attempt.photo={data,at:takenAt};
+ show(`<section class="screen">
+  <h1>Periksa foto absen ${kindLabel[attempt.kind]}</h1>
+  <img class="selfie-preview" src="data:image/jpeg;base64,${data}" alt="Selfie yang akan dikirim">
+  <button class="primary wide" data-action="submit-photo">Kirim absen</button>
+  <button class="secondary wide" data-action="retake">Ambil ulang foto</button>
+ </section>`,true,retake);
+}
+function retake(){
+ const attempt=S.attempt,camera=S.camera;if(!attempt)return;
+ attempt.photo=null;
+ attempt.photoConfirmed=false;
+ // Lokasi sudah didapat dan radius sudah dicek sebelum selfie pertama, dan GPS tetap berjalan.
+ // Kamera langsung dibuka lagi tanpa mencari lokasi ulang; server tetap memeriksa lokasi saat
+ // absen dicatat. Bila GPS sudah berhenti (misalnya sesudah gangguan), lokasi dicari dari awal.
+ if(camera&&camera.watch!=null&&!camera.denied)return openSelfie(camera,attempt.kind);
+ return locateAttempt();
 }
 async function submit(){
  const a=S.attempt,camera=S.camera;
- if(!a?.photo)return;
- if(Date.now()-a.photo.at>4.5*60000){message('Selfie sudah lama','Ambil selfie lagi supaya absen bisa dikirim.',{tone:'warn',actions:'<button class="primary wide" data-action="retake">Ambil selfie lagi</button>'});return;}
- const fix=camera?.position;
- if(!fix||camera.denied||Date.now()-fix.at>120000){await locateAttempt();return;}
+ if(!a?.photo || !a.photoConfirmed)return;
+ if(Date.now()-a.photo.at>4.5*60000){message('Selfie sudah lama','Ambil selfie lagi supaya absen bisa dikirim.',{tone:'warn',back:home,actions:'<button class="primary wide" data-action="retake">Ambil selfie lagi</button>'});return;}
+ const fix=camera?.gps.best();
+ if(!fix||camera.denied){await locateAttempt();return;}
  show(`<section class="screen center"><div class="spinner"></div><p class="lead">Mengirim absen ${kindLabel[a.kind]}…</p></section>`,false);
  const payload={client_key:a.client_key,employee_id:a.employee.id,kind:a.kind,confirmed_order:a.confirmed,
   location:locationPayload(fix),
@@ -396,15 +427,16 @@ function success(receipt){
  show(`<section class="screen">
   <div class="success"><div class="kind">${kindLabel[receipt.kind]} TERCATAT</div><div class="time">${witaTime(Date.parse(receipt.recorded_at))}</div>
    <div class="who">${esc(receipt.employee.name)}</div>${where?`<div class="where">${esc(where)}</div>`:''}</div>
+  ${receipt.timing?`<div class="status ${receipt.timing.late?'warn':'ok'}">${esc(timingText(receipt.timing))}</div>`:''}
   <button class="primary wide" data-action="done">Selesai</button>
- </section>`);
+ </section>`,true,done);
  later(done,8000);
 }
 function done(){
  const d=S.context?.device;
  // Sesudah absen untuk orang lain, kembali ke pemilik HP (HP pribadi) atau ke daftar nama (HP bersama).
  S.person=d?.kind==='PERSONAL'&&d.owner?d.owner:null;S.status=null;
- home();
+ return home();
 }
 
 /* ---------- Tindakan ---------- */
@@ -417,7 +449,6 @@ app.addEventListener('click',async event=>{
   if(action==='install'){if(S.install){S.install.prompt();await S.install.userChoice.catch(()=>{});S.install=null;el.hidden=true;}return;}
   if(action==='register'){el.disabled=true;await registerAndContinue('register',{token:el.dataset.token});return;}
   if(action==='session-person'){sessionConfirm(S.session.preview.people.find(p=>p.id===el.dataset.id));return;}
-  if(action==='session-back'){sessionPicker();return;}
   if(action==='session-register'){el.disabled=true;await registerAndContinue('session-register',{token:S.session.token,employee_id:el.dataset.id});return;}
   if(action==='forget'){await forgetDevice();S.device=null;S.context=null;S.person=null;unregistered();return;}
   if(action==='pick'){picker();return;}
@@ -432,7 +463,8 @@ app.addEventListener('click',async event=>{
   if(action==='kind'){chooseKind(el.dataset.kind);return;}
   if(action==='kind-confirmed'){await capture(el.dataset.kind,true);return;}
   if(action==='shoot'){el.disabled=true;await shoot();return;}
-  if(action==='retake'){await capture(S.attempt.kind,S.attempt.confirmed);return;}
+  if(action==='submit-photo'){el.disabled=true;S.attempt.photoConfirmed=true;await submit();return;}
+  if(action==='retake'){await retake();return;}
   if(action==='retry-location'){await locateAttempt();return;}
   if(action==='done'){done();return;}
  }catch(error){failure(error,null);}

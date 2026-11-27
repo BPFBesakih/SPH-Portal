@@ -6,9 +6,9 @@ import { createHash as __visits_createHash2, randomUUID as __visits_randomUUID2 
 import { Buffer as __archives_Buffer } from "node:buffer";
 import { randomUUID as __archives_randomUUID } from "node:crypto";
 import { createHash as __archives_createHash } from "node:crypto";
+import { randomUUID as __attendance_randomUUID } from "node:crypto";
 import { Buffer as __attendance_Buffer3 } from "node:buffer";
 import { randomBytes as __attendance_randomBytes } from "node:crypto";
-import { randomUUID as __attendance_randomUUID } from "node:crypto";
 import { createHash as __attendance_createHash } from "node:crypto";
 import { Buffer as __attendance_Buffer } from "node:buffer";
 import { createHash as __attendance_createHash2, webcrypto as __attendance_webcrypto } from "node:crypto";
@@ -9668,9 +9668,9 @@ async function visitsSheetRequest(client, identity, storage, b, env, authorize) 
 }
 // --- Modul Absensi, dibangkitkan dari lib/attendance*.mjs (build-attendance-deploy.mjs) ---
 const __attendance = (() => {
+  const randomUUID = __attendance_randomUUID;
   const Buffer3 = __attendance_Buffer3;
   const randomBytes = __attendance_randomBytes;
-  const randomUUID = __attendance_randomUUID;
   const createHash = __attendance_createHash;
   const Buffer = __attendance_Buffer;
   const createHash2 = __attendance_createHash2;
@@ -9688,8 +9688,6 @@ async function asyncSome(items, fn) {
   for (let i = 0; i < items.length; i++) if (await fn(items[i], i, items)) return true;
   return false;
 }
-
-// supabase/functions/_shared/portal/attendance.mjs
 
 // supabase/functions/_shared/portal/db.mjs
 var now = () => (/* @__PURE__ */ new Date()).toISOString();
@@ -9760,6 +9758,113 @@ function instant(v) {
   assert(typeof v === "string" && /(Z|[+-]\d\d:\d\d)$/.test(v) && !isNaN(Date.parse(v)), "Waktu harus menyertakan zona waktu.");
   return new Date(v).toISOString();
 }
+
+// supabase/functions/_shared/portal/attendance-schedule.mjs
+async function scheduleTablesReady(db) {
+  if (typeof db.query === "function") {
+    return Boolean((await one(db, "SELECT to_regclass('portal.attendance_schedule_units') IS NOT NULL AS ready"))?.ready);
+  }
+  return Boolean(await one(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='attendance_schedule_units'"));
+}
+var shiftFields = `s.code, s.name,
+  substr(CAST(s.start_time AS TEXT),1,5) AS start_time,
+  substr(CAST(s.end_time AS TEXT),1,5) AS end_time,
+  substr(CAST(s.late_time AS TEXT),1,5) AS late_time, s.end_day_offset`;
+var positionShiftGroups = [{
+  positions: ["BPB_S_P056"],
+  shifts: ["50001", "50002"]
+}, {
+  positions: ["BPB_OP_P044", "BPB_OP_P069"],
+  shifts: ["20001", "20002", "20003", "20004"]
+}, {
+  positions: ["BPB_OP_P045", "BPB_OP_P070"],
+  shifts: ["21001", "21002", "21003"]
+}, {
+  positions: ["BPB_OP_P041", "BPB_OP_P042", "BPB_OP_P043", "BPB_OP_P066", "BPB_OP_P067", "BPB_OP_P068"],
+  shifts: ["22001", "22002", "22003", "22004"]
+}, {
+  positions: ["BPB_PLK_P048", "BPB_PLK_P049", "BPB_PLK_P074", "BPB_PLK_P075", "BPB_PLK_P076", "BPB_PLK_P077"],
+  shifts: ["30001", "30002", "30003", "70000", "70001", "70002", "70003", "71000", "71002", "71003", "72001", "73000"]
+}, {
+  positions: ["BPB_PLK_P051", "BPB_PLK_P079"],
+  shifts: ["40001", "40002"]
+}, {
+  positions: ["BPB_PLK_P052", "BPB_PLK_P080_STAF", "BPB_PLK_P080_THL"],
+  shifts: ["60001", "60002"]
+}, {
+  positions: ["BPB_PLK_PAR_KOORD"],
+  shifts: ["61001", "61002"]
+}, {
+  positions: ["BPB_PLK_P054", "BPB_PLK_P082_STAF", "BPB_PLK_P082_THL"],
+  shifts: ["62001", "62002"]
+}, {
+  positions: ["BPB_PLK_P053", "BPB_PLK_P081_STAF", "BPB_PLK_P081_THL"],
+  shifts: ["63001", "63002", "63003", "63004", "63005", "63006"]
+}];
+var positionShiftPairs = positionShiftGroups.flatMap(({ positions, shifts }) => positions.flatMap((position) => shifts.map((shift) => [position, shift])));
+var rotatingPositions = new Set(positionShiftPairs.map(([code]) => code));
+async function loadFixedSchedules(db, from, to, employeeId = null) {
+  if (!await scheduleTablesReady(db)) return null;
+  const placements = await all(db, `SELECT ep.employee_id, CAST(ep.valid_from AS TEXT) AS valid_from,
+  CAST(ep.valid_to AS TEXT) AS valid_to, p.code, CAST(u.starts_on AS TEXT) AS starts_on, u.org_unit_id
+  FROM employee_placements ep JOIN positions p ON p.id=ep.position_id
+  LEFT JOIN (SELECT s.org_unit_id, s.starts_on FROM attendance_schedule_units s
+   JOIN org_units o ON o.id=s.org_unit_id WHERE o.is_active=1) u ON u.org_unit_id=p.org_unit_id
+  WHERE ep.is_primary=1 AND ep.valid_from<=? AND (ep.valid_to IS NULL OR ep.valid_to>=?)
+  ${employeeId ? "AND ep.employee_id=?" : ""}`, to, from, ...employeeId ? [employeeId] : []);
+  const byEmployee = /* @__PURE__ */ new Map();
+  for (const row of placements) {
+    if (!byEmployee.has(row.employee_id)) byEmployee.set(row.employee_id, []);
+    byEmployee.get(row.employee_id).push(row);
+  }
+  const weekdays = /* @__PURE__ */ new Map();
+  for (const { org_unit_id, weekday_no, ...shift } of await all(db, `SELECT w.org_unit_id,w.weekday_no,${shiftFields}
+  FROM attendance_schedule_weekdays w JOIN attendance_schedule_shifts s ON s.code=w.shift_code`)) {
+    weekdays.set(`${org_unit_id}/${weekday_no}`, shift);
+  }
+  const holidays = /* @__PURE__ */ new Map(), years = /* @__PURE__ */ new Set();
+  for (const row of await all(db, "SELECT CAST(work_date AS TEXT) AS day,name FROM attendance_schedule_holidays WHERE work_date>=? AND work_date<=?", from.slice(0, 4) + "-01-01", to.slice(0, 4) + "-12-31")) {
+    holidays.set(row.day, row.name);
+    years.add(row.day.slice(0, 4));
+  }
+  return {
+    byEmployee,
+    weekdays,
+    holidays,
+    years
+  };
+}
+function fixedScheduleOn(calendar, employeeId, day) {
+  const matches = calendar?.byEmployee.get(employeeId)?.filter((p) => p.valid_from <= day && (!p.valid_to || p.valid_to >= day));
+  if (matches?.length !== 1) return null;
+  const placement = matches[0];
+  if (!placement.org_unit_id || placement.starts_on > day || rotatingPositions.has(placement.code)) return null;
+  const weekday = (/* @__PURE__ */ new Date(day + "T00:00:00Z")).getUTCDay() || 7;
+  const shift = calendar.weekdays.get(`${placement.org_unit_id}/${weekday}`);
+  const holiday = calendar.holidays.get(day);
+  const day_type = holiday ? "HOLIDAY" : !shift ? "WEEKLY_OFF" : calendar.years.has(day.slice(0, 4)) ? "WORK" : "CALENDAR_PENDING";
+  return {
+    day_type,
+    holiday_name: holiday || null,
+    shift: day_type === "WORK" ? shift : null
+  };
+}
+function arrivalTiming(calendar, employeeId, day, inAt) {
+  if (!inAt) return null;
+  const shift = fixedScheduleOn(calendar, employeeId, day)?.shift;
+  if (!shift) return null;
+  const arrival = Math.floor(Date.parse(inAt) / 6e4);
+  const atMinute = (time) => Date.parse(`${day}T${time}:00+08:00`) / 6e4;
+  const late = arrival >= atMinute(shift.late_time);
+  return {
+    late,
+    minutes: late ? Math.max(0, arrival - atMinute(shift.start_time)) : 0,
+    start_time: shift.start_time,
+    late_time: shift.late_time
+  };
+}
+
+// supabase/functions/_shared/portal/attendance.mjs
 
 // supabase/functions/_shared/portal/auth.mjs
 var digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -10424,48 +10529,6 @@ async function reviewItems(db, scope, from, to, nowMs) {
     missing_reference: missing
   };
 }
-async function scheduleTablesReady(db) {
-  if (typeof db.query === "function") {
-    return Boolean((await one(db, "SELECT to_regclass('portal.attendance_schedule_units') IS NOT NULL AS ready"))?.ready);
-  }
-  return Boolean(await one(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='attendance_schedule_units'"));
-}
-var shiftFields = `s.code, s.name,
-  substr(CAST(s.start_time AS TEXT),1,5) AS start_time,
-  substr(CAST(s.end_time AS TEXT),1,5) AS end_time,
-  substr(CAST(s.late_time AS TEXT),1,5) AS late_time, s.end_day_offset`;
-var positionShiftGroups = [{
-  positions: ["BPB_S_P056"],
-  shifts: ["50001", "50002"]
-}, {
-  positions: ["BPB_OP_P044", "BPB_OP_P069"],
-  shifts: ["20001", "20002", "20003", "20004"]
-}, {
-  positions: ["BPB_OP_P045", "BPB_OP_P070"],
-  shifts: ["21001", "21002", "21003"]
-}, {
-  positions: ["BPB_OP_P041", "BPB_OP_P042", "BPB_OP_P043", "BPB_OP_P066", "BPB_OP_P067", "BPB_OP_P068"],
-  shifts: ["22001", "22002", "22003", "22004"]
-}, {
-  positions: ["BPB_PLK_P048", "BPB_PLK_P049", "BPB_PLK_P074", "BPB_PLK_P075", "BPB_PLK_P076", "BPB_PLK_P077"],
-  shifts: ["30001", "30002", "30003", "70000", "70001", "70002", "70003", "71000", "71002", "71003", "72001", "73000"]
-}, {
-  positions: ["BPB_PLK_P051", "BPB_PLK_P079"],
-  shifts: ["40001", "40002"]
-}, {
-  positions: ["BPB_PLK_P052", "BPB_PLK_P080_STAF", "BPB_PLK_P080_THL"],
-  shifts: ["60001", "60002"]
-}, {
-  positions: ["BPB_PLK_PAR_KOORD"],
-  shifts: ["61001", "61002"]
-}, {
-  positions: ["BPB_PLK_P054", "BPB_PLK_P082_STAF", "BPB_PLK_P082_THL"],
-  shifts: ["62001", "62002"]
-}, {
-  positions: ["BPB_PLK_P053", "BPB_PLK_P081_STAF", "BPB_PLK_P081_THL"],
-  shifts: ["63001", "63002", "63003", "63004", "63005", "63006"]
-}];
-var positionShiftPairs = positionShiftGroups.flatMap(({ positions, shifts }) => positions.flatMap((position) => shifts.map((shift) => [position, shift])));
 var shiftReferenceSql = `WITH options(position_code,shift_code) AS (VALUES ${positionShiftPairs.map(() => "(?,?)").join(",")})
  SELECT p.id AS position_id, p.code AS position_code, p.name AS position_name, p.org_unit_id, ${shiftFields}
  FROM options o JOIN positions p ON p.code=o.position_code JOIN org_units u ON u.id=p.org_unit_id
@@ -10505,30 +10568,17 @@ async function scheduledPeople(db, scope, units2, people = scope.people) {
   return people.filter((person) => person.is_active && !person.ambiguous && scope.readable.has(person.id) && units2.has(person.org_unit_id) && !shiftPositions.has(person.position_id));
 }
 async function scheduleForDate(db, scope, day, todayDate) {
-  const units2 = await activeScheduleUnits(db, day);
-  const people = await scheduledPeople(db, scope, units2, day === todayDate ? scope.people : await directory(db, null, day));
-  if (!people.length) return {
-    date: day,
-    rows: []
-  };
-  const weekday = (/* @__PURE__ */ new Date(day + "T00:00:00Z")).getUTCDay() || 7;
-  const shifts = await all(db, `SELECT w.org_unit_id, ${shiftFields}
-  FROM attendance_schedule_weekdays w JOIN attendance_schedule_shifts s ON s.code=w.shift_code
-  WHERE w.weekday_no=?`, weekday);
-  const shiftByUnit = new Map(shifts.map(({ org_unit_id, ...shift }) => [org_unit_id, shift]));
-  const holiday = await one(db, "SELECT name FROM attendance_schedule_holidays WHERE work_date=?", day);
-  const knownYear = holiday || await one(db, `SELECT 1 AS present FROM attendance_schedule_holidays
-  WHERE work_date>=? AND work_date<=? LIMIT 1`, day.slice(0, 4) + "-01-01", day.slice(0, 4) + "-12-31");
-  const rows = people.map((person) => {
-    const shift = shiftByUnit.get(person.org_unit_id);
-    const dayType = holiday ? "HOLIDAY" : !shift ? "WEEKLY_OFF" : knownYear ? "WORK" : "CALENDAR_PENDING";
-    return {
+  const calendar = await loadFixedSchedules(db, day, day);
+  const people = day === todayDate ? scope.people : await directory(db, null, day);
+  const rows = [];
+  for (const person of people) {
+    if (!person.is_active || !scope.readable.has(person.id)) continue;
+    const schedule = fixedScheduleOn(calendar, person.id, day);
+    if (schedule) rows.push({
       employee: view(person),
-      day_type: dayType,
-      holiday_name: holiday?.name || null,
-      shift: dayType === "WORK" ? shift : null
-    };
-  });
+      ...schedule
+    });
+  }
   rows.sort((a, b) => a.employee.name.localeCompare(b.employee.name, "id"));
   return {
     date: day,
@@ -10586,6 +10636,7 @@ async function attendanceRoutes({ db, user, p, method, body: b = {}, url }, deps
   if (p[1] === "today" && p.length === 2 && method === "GET") {
     const scope = await scopeOf(db, user, deps);
     const day = today(), ids = await filterUnit(db, scope, url), data = await loadRange(db, day, day, ids), owners = await ownerNames(db, data.events);
+    const calendar = await loadFixedSchedules(db, day, day);
     const rows = [];
     for (const id of ids) {
       const person = scope.byId.get(id);
@@ -10601,6 +10652,7 @@ async function attendanceRoutes({ db, user, p, method, body: b = {}, url }, deps
       rows.push({
         employee: view(person),
         ...result,
+        timing: arrivalTiming(calendar, id, day, result.in_at),
         last_event: last ? eventView(last, owners) : null,
         can_manage: writeAccess(scope, id).allowed,
         self: id === user.employee_id
@@ -10625,6 +10677,10 @@ async function attendanceRoutes({ db, user, p, method, body: b = {}, url }, deps
       nowMs
     });
     const detail = url?.searchParams.get("detail") === "1";
+    if (detail) {
+      const calendar = await loadFixedSchedules(db, r.from, r.to);
+      for (const person of recap) for (const day of person.days) day.timing = arrivalTiming(calendar, person.employee_id, day.date, day.in_at);
+    }
     return {
       from: r.from,
       to: r.to,
@@ -10649,6 +10705,8 @@ async function attendanceRoutes({ db, user, p, method, body: b = {}, url }, deps
       to: r.to,
       nowMs
     });
+    const calendar = await loadFixedSchedules(db, r.from, r.to, id);
+    for (const day of recap.days) day.timing = arrivalTiming(calendar, id, day.date, day.in_at);
     const access = writeAccess(scope, id), names = /* @__PURE__ */ new Map();
     for (const uid2 of new Set([...data.corrections, ...data.notes].map((x) => x.created_by))) names.set(uid2, (await one(db, "SELECT username FROM users WHERE id=?", uid2))?.username || "");
     const reference = await one(db, "SELECT event_id,set_at FROM attendance_reference_photos WHERE employee_id=?", id);

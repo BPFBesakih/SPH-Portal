@@ -4,6 +4,21 @@
 //  - Setiap permintaan ke /api/attendance-form/* (kecuali pendaftaran) ditandatangani
 //    bersama jam yang sudah disesuaikan ke jam server, jadi jam HP yang salah tidak masalah.
 //  - Tidak ada data pegawai, selfie, atau riwayat yang disimpan di HP.
+// Satu jendela per percobaan absen. Baca ulang saat mengirim meskipun GPS tidak memberi pembaruan.
+export function createGpsWindow(now=Date.now){
+ let fixes=[];
+ function best(){
+  const cutoff=now()-30000;
+  fixes=fixes.filter(fix=>fix.at>=cutoff);
+  let selected=null;
+  for(const fix of fixes){
+   if(!selected||fix.accuracy<selected.accuracy||(fix.accuracy===selected.accuracy&&fix.at>selected.at))selected=fix;
+  }
+  return selected;
+ }
+ return {best,add(fix){fixes.push(fix);return best();}};
+}
+
 const DB_NAME='sph-absen',STORE='device',KEY='current',PENDING='pending';
 function openStore(){
  return new Promise((resolve,reject)=>{

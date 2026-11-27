@@ -12,6 +12,7 @@ import {attendanceRoutes} from '../lib/attendance.mjs';
 import {attendanceFormRequest,attendanceFormLimits,runAttendanceRetention,attendanceSubmitted,attendanceRetentionDue} from '../lib/attendance-form.mjs';
 import {localAttendancePhotos} from '../lib/attendance-photos.mjs';
 import {attendanceRules,witaDate,shiftDay,distanceMeters,matchPoint,jumped,dayStatus,buildRecap,signatureMessage,cleanPublicKey,keyThumbprint,verifySignature,parseFlags} from '../lib/attendance-rules.mjs';
+import {createGpsWindow} from '../public/absen/absen-core.js';
 import {createApp} from '../server.mjs';
 
 // Semua nama, nomor, dan koordinat di sini fiktif.
@@ -86,6 +87,22 @@ const addPoint=(f,extra={})=>f.route(f.users.manager,'points','POST',{name:'Titi
 const errorWith=(status,code)=>e=>e.status===status&&(!code||e.details?.code===code);
 
 /* ---------- Aturan murni ---------- */
+test('GPS memilih titik terbaik yang masih berumur maksimal 30 detik saat dibaca',()=>{
+ let time=100000;
+ const gps=createGpsWindow(()=>time);
+ const first={at:time,accuracy:5};
+ const second={at:time+20000,accuracy:12};
+ assert.equal(gps.add(first),first);
+ time+=20000;assert.equal(gps.add(second),first);
+ time+=10000;assert.equal(gps.best(),first);
+ time+=1000;assert.equal(gps.add({at:time,accuracy:350}),second);
+ const newest={at:time,accuracy:12};
+ assert.equal(gps.add(newest),newest);
+ assert.equal(gps.add({at:time-5000,accuracy:12}),newest);
+ time+=30001;assert.equal(gps.best(),null);
+ assert.equal(gps.add(first),null);
+});
+
 test('rules: distance, point matching, jumps, WITA dates and flag parsing',()=>{
  assert(Math.abs(distanceMeters(-8.3741,115.4512,-8.3741,115.4512))<0.001);
  const north=distanceMeters(-8.3741,115.4512,-8.3732,115.4512);assert(north>99&&north<101,String(north));
@@ -332,6 +349,34 @@ test('Sekretariat 07:30 WITA is accepted inside the point and uses actual time f
  assert.deepEqual([start.work_date,end.work_date,Date.parse(start.recorded_at),Date.parse(end.recorded_at)],[day,day,wita(day,'07:30'),wita(day,'16:00')]);
  const recap=await f.route(f.users.staff,`recap/${f.e.staff.id}`,'GET',{},`from=${day}&to=${day}`);
  assert.deepEqual([recap.days[0].status,recap.days[0].minutes],['HADIR',510]);
+});
+test('keterangan telat mengikuti batas WITA, jam masuk efektif dan jadwal pada tanggal absen',async t=>{
+ const f=fixture(t),staff=f.e.staff,device=await registerDevice(f,{owner:staff});
+ await addPoint(f);
+ const day='2026-11-24',query=`from=${day}&to=${day}`;
+ run(f.db,'INSERT INTO attendance_schedule_units VALUES (?,?)',f.units.office.id,day);
+ run(f.db,"INSERT INTO attendance_schedule_weekdays VALUES (?,2,'10000')",f.units.office.id);
+ const input=submission(staff),arrival=wita(day,'08:16');
+ const late={late:true,minutes:16,start_time:'08:00',late_time:'08:16'};
+ assert.deepEqual((await submit(f,device,input,arrival)).timing,late);
+ assert.deepEqual((await submit(f,device,input,arrival+60000)).timing,late);
+ const status=async()=> (await f.route(f.users.staff,`recap/${staff.id}`,'GET',{},query)).days[0].timing;
+ assert.deepEqual(await status(),late);
+ const context=await f.form('context',await sign(device,'context',{},arrival),{nowMs:arrival});
+ assert.deepEqual(context.history[0].timing,late);
+ const repeated=submission(staff,'IN',{confirmed_order:true});
+ assert.equal((await submit(f,device,repeated,arrival+3600000)).timing,null);
+ await f.route(f.users.manager,'corrections','POST',{employee_id:staff.id,work_date:day,
+  in_at:new Date(wita(day,'08:15')+59000).toISOString(),reason:'Jam masuk dikonfirmasi'});
+ assert.equal((await status()).late,false);
+ const exported=await f.route(f.users.manager,'recap','GET',{},query+'&detail=1');
+ assert.deepEqual(exported.employees.find(row=>row.employee.id===staff.id).days[0].timing,await status());
+ assert.equal((await submit(f,device,submission(staff,'OUT'),wita(day,'16:00'))).timing,null);
+ run(f.db,"INSERT INTO attendance_schedule_holidays VALUES (?,'Hari libur uji')",day);
+ assert.equal(await status(),null);
+ run(f.db,'DELETE FROM attendance_schedule_holidays WHERE work_date=?',day);
+ run(f.db,"UPDATE positions SET code='BPB_S_P056' WHERE id=?",f.positions.staff.id);
+ assert.equal(await status(),null);
 });
 test('master shift SQLite sama dengan migrasi dan mengikuti jawaban SDM 26 Nov 2026',t=>{
  const f=fixture(t);
