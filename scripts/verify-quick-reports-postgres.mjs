@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync,readdirSync} from 'node:fs';
+import {migrationNames,migrationSql} from './pglite-migrations.mjs';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
@@ -13,7 +14,7 @@ let checks=0;
 const check=async(name,fn)=>{await fn();checks++;console.log(`PASS ${name}`);};
 try{
  await pg.exec(`CREATE ROLE anon NOLOGIN;CREATE ROLE authenticated NOLOGIN;CREATE ROLE service_role NOLOGIN BYPASSRLS;CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,email_confirmed_at timestamptz,encrypted_password text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid REFERENCES auth.users(id));CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;GRANT USAGE ON SCHEMA auth TO authenticated;`);
- const migrations=new URL('../supabase/migrations/',import.meta.url);for(const name of readdirSync(migrations).filter(n=>n.endsWith('.sql')).sort())await pg.exec(readFileSync(new URL(name,migrations),'utf8'));
+ const migrations=new URL('../supabase/migrations/',import.meta.url);for(const name of migrationNames(migrations))await pg.exec(migrationSql(migrations,name));
  const migration=readFileSync(new URL('20261022212406_quick_report_links.sql',migrations),'utf8');await pg.exec(migration);const placeMigration=readdirSync(migrations).find(n=>n.endsWith('_quick_report_location_name.sql'));await pg.exec(readFileSync(new URL(placeMigration,migrations),'utf8'));await pg.exec('SET search_path=portal,pg_catalog');
  const db={inTransaction:true,query:async(statement,args=[])=>{const r=await pg.query(statement,args);return Object.assign(r.rows,{count:r.affectedRows??r.rows.length});}};
  const atomic=async work=>{await pg.exec('BEGIN');try{const result=await work();await pg.exec('COMMIT');return result;}catch(e){await pg.exec('ROLLBACK');throw e;}};

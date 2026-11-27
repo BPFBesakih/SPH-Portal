@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync,readdirSync} from 'node:fs';
+import {migrationNames,migrationSql} from './pglite-migrations.mjs';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {randomUUID,createHash} from 'node:crypto';
@@ -10,7 +11,7 @@ const pg=new PGlite(),drive=driveFixture(),realFetch=globalThis.fetch,priorDeno=
 const check=async(name,work)=>{await work();console.log('PASS '+name);checks++;};
 try{
  await pg.exec(`CREATE ROLE anon NOLOGIN;CREATE ROLE authenticated NOLOGIN;CREATE ROLE service_role NOLOGIN BYPASSRLS;CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text,email_confirmed_at timestamptz,encrypted_password text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid REFERENCES auth.users(id));CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;GRANT USAGE ON SCHEMA auth TO authenticated;`);
- const directory=new URL('../supabase/migrations/',import.meta.url);for(const name of readdirSync(directory).filter(n=>n.endsWith('.sql')).sort())await pg.exec(readFileSync(new URL(name,directory),'utf8'));
+ const directory=new URL('../supabase/migrations/',import.meta.url);for(const name of migrationNames(directory))await pg.exec(migrationSql(directory,name));
  await pg.exec('SET search_path=portal,pg_catalog');
  const db={inTransaction:true,query:async(statement,args=[])=>{const r=await pg.query(statement,args);return Object.assign(r.rows,{count:r.affectedRows??r.rows.length});}};
  const atomic=async work=>{await pg.exec('BEGIN');try{const result=await work();await pg.exec('COMMIT');return result;}catch(error){await pg.exec('ROLLBACK');throw error;}};
