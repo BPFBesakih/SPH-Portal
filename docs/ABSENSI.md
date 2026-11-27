@@ -114,15 +114,15 @@ Tanpa migrasi dan tanpa mengubah data. Prasyarat: PR #47 sudah dirilis (Edge `9c
    - HP bersama yang masih aktif atau menunggu. Sesudah rilis HP itu tidak bisa dipakai absen: siapkan tautan HP pribadi untuk pemegangnya, atau nonaktifkan.
    - Absen 30 hari terakhir di HP pribadi orang lain yang bukan atasan langsungnya. Absen seperti ini ditolak sesudah rilis, jadi beri tahu pegawai dan pemilik HP tersebut.
    - Pegawai aktif tanpa atasan langsung yang pasti. Bila pegawai itu tidak punya HP, rapikan atasannya di Data Pegawai lebih dulu.
-2. Edge `attendance-form` → SHA-256 `ac664fa078bdc1db9f117d601acf36c6d9c8886a8e7aedc4f0f188ffbc36e40e`, `verify_jwt` tetap mati. Mulai saat ini server menerapkan aturan baru, juga untuk HP yang masih memuat halaman lama.
+2. Edge `attendance-form` → SHA-256 `39e2f958f186204e9e397f6b28934ee9534b537c477681ce05ccd2a7c9fe0ac2`, `verify_jwt` tetap mati. Mulai saat ini server menerapkan aturan baru, juga untuk HP yang masih memuat halaman lama.
 3. `portal-api`: snapshot dasar `62c82e42…` (master `2e69b61`) → `66d01d558d53ffc50f1fe9951cf1055920e651d5f22984bca7cfe0c9ceb23d6c`. Hanya rute HP Absen yang berubah: HP bersama tidak bisa didaftarkan dan tidak mendapat tautan baru, dan daftar HP menandainya **Tidak dipakai lagi**.
-4. Merge PR: cache `/absen/` `sph-absen-v1.5.0`, bundel `/app/` `portal-15dc4ab7e63d.js` + `portal-28cfaa1eaf72.css`.
+4. Merge PR: cache `/absen/` `sph-absen-v1.5.1`, bundel `/app/` `portal-15dc4ab7e63d.js` + `portal-28cfaa1eaf72.css`.
 5. Uji di HP sungguhan:
    - HP pribadi atasan: **Absen untuk bawahan** hanya menampilkan bawahan langsungnya, lalu absen satu bawahan sampai tercatat;
    - HP pegawai tanpa bawahan: tidak ada tombol untuk orang lain;
    - HP bersama lama: tampil layar **HP bersama tidak dipakai lagi**; tempel tautan HP pribadi pemegangnya, lalu pastikan HP itu kembali bisa dipakai dan baris HP bersama berubah **Nonaktif**.
 
-Urutan Edge → Pages dianjurkan, tetapi tidak kritis. Halaman HP lama dengan Edge baru hanya bisa mencari nama bawahan langsung. Halaman HP baru dengan Edge lama sudah tidak menampilkan nama lain dan menampilkan layar HP bersama, tetapi penolakan di server baru berlaku sesudah langkah 2.
+Deploy Edge sebelum Pages agar atasan tetap bisa mengabsenkan bawahan sepanjang pembaruan. Dengan Edge baru, halaman lama tetap menampilkan pemilik HP dan bawahan langsungnya di pemilih nama.
 
 ## Riwayat pemasangan awal Tahap 1 (November 2026)
 

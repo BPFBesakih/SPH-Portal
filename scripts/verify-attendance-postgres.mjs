@@ -112,9 +112,13 @@ try{
     const again=await invoke('register',{token:created.token,public_key:device.public_key,client_info:'Android fiktif'});
     assert.deepEqual([again.status,again.data.result.device_id,again.data.result.recovered],[200,device.id,true]);
     assert.equal((await invoke('register',{token:created.token,public_key:(await keysFor()).public_key})).status,404);
-    const ctx=await invoke('context',await sign(device,'context',{}));assert.equal(ctx.status,200);
+    const ctx=await invoke('context',await sign(device,'context',{people_format:'direct-reports'}));assert.equal(ctx.status,200);
     assert.deepEqual(ctx.data.result.people.map(p=>[p.name,p.group]),[['Atasan Fiktif','owner'],['Pekerja Harian Fiktif','team'],['Petugas Fiktif','team']]);
     assert.equal(background.length,1,'membuka halaman absen di HP aktif juga menjadwalkan retensi');await Promise.all(background.splice(0));
+    const oldClient=await invoke('context',await sign(device,'context',{}));
+    assert.equal(oldClient.status,200);
+    assert.deepEqual(oldClient.data.result.people.map(p=>[p.name,p.group]),[['Atasan Fiktif','owner'],['Pekerja Harian Fiktif','unit'],['Petugas Fiktif','unit']]);
+    await Promise.all(background.splice(0));
     const person=await invoke('person',await sign(device,'person',{employee_id:people.guard.id}));
     assert.deepEqual([person.data.result.state,person.data.result.open_since,person.data.result.last_today],['NONE',null,null],'atasan tanpa jam bawahannya');
     assert.equal(background.length,0);
@@ -438,12 +442,29 @@ try{
   });
   await check('read-only release check lists retired shared phones and check-ins that the direct-supervisor rule refuses',async()=>{
     const sql=readFileSync(new URL('../supabase/checks/check-attendance-direct-supervisor.sql',import.meta.url),'utf8');
+    const namesakes=[];
+    for(const suffix of ['A','B']){
+      namesakes.push(await insert(db,'employees',{employee_no:'ABS-NAMA-'+suffix,full_name:'Nama Sama Uji',employment_status:'Tetap',is_active:1,joined_on:'2020-01-01'}));
+    }
+    const link=await route(manager,'devices','POST',{kind:'PERSONAL',owner_employee_id:people.boss.id});
+    const secondPhone=await invoke('register',{token:link.token,public_key:(await keysFor()).public_key});
+    assert.equal(secondPhone.status,200);
+    const recordedAt=now();
+    for(const [employee,deviceId] of [[namesakes[0],device.id],[namesakes[0],device.id],[namesakes[1],device.id],[namesakes[0],secondPhone.data.result.device_id]]){
+      await insert(db,'attendance_events',{employee_id:employee.id,device_id:deviceId,kind:'IN',recorded_at:recordedAt,work_date:witaDate(Date.parse(recordedAt)),
+        client_key:randomUUID(),...POINT,accuracy_m:10,within_point:1,photo_mime:'image/jpeg',photo_size:jpeg.length,photo_checksum:'0'.repeat(64),photo_deleted_at:recordedAt});
+    }
     const before=(await one(db,'SELECT count(*)::int n FROM attendance_events')).n;
     const rows=(await pg.exec(sql)).find(r=>r.rows?.length&&'bagian' in r.rows[0]).rows;
     const summary=Object.fromEntries(rows.filter(r=>r.bagian.startsWith('0.')).map(r=>[r.item,r.hasil]));
     assert.equal(summary['HP bersama aktif/menunggu'],'1');
     assert.deepEqual(rows.filter(r=>r.bagian.startsWith('1.')).map(r=>r.item),['HP Pos Lama · Pos Fiktif']);
-    assert.equal(summary['Pasangan pegawai · HP pribadi orang lain yang sesudah rilis ditolak (30 hari)'],'0','semua absen orang lain dilakukan atasan langsungnya');
+    assert.equal(summary['Pasangan pegawai · HP pribadi orang lain yang sesudah rilis ditolak (30 hari)'],'3');
+    const refusedRows=rows.filter(r=>r.bagian.startsWith('2.'));
+    assert.equal(new Set(refusedRows.map(r=>r.item)).size,3);
+    assert.equal(refusedRows.filter(r=>r.item.includes('ABS-NAMA-A')).length,2);
+    assert.equal(refusedRows.filter(r=>r.item.includes('ABS-NAMA-B')).length,1);
+    assert.equal(refusedRows.filter(r=>r.hasil.startsWith('2 absen')).length,1);
     assert(rows.some(r=>r.bagian.startsWith('3.')&&r.item.endsWith('Atasan Fiktif')),'pucuk organisasi tampil tanpa atasan');
     assert.equal((await one(db,'SELECT count(*)::int n FROM attendance_events')).n,before);
   });

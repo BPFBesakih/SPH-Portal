@@ -226,7 +226,7 @@ test('signed requests: unknown devices, bad signatures and clock skew are refuse
 });
 test('names on a personal phone: the owner, then only the owner’s direct reports; search stays inside that list',async t=>{
  const f=fixture(t),guardPhone=await registerDevice(f,{owner:f.e.guard}),staffPhone=await registerDevice(f,{owner:f.e.staff}),bossPhone=await registerDevice(f,{owner:f.e.boss});
- const context=async device=>f.form('context',await sign(device,'context',{}));
+ const context=async (device,payload={people_format:'direct-reports'})=>f.form('context',await sign(device,'context',payload));
  const names=result=>result.people.map(p=>[p.name,p.group]);
  const mine=await context(guardPhone);
  assert.deepEqual(mine.people,[{id:f.e.guard.id,name:'Petugas Fiktif',position:'Petugas Fiktif',unit:'Pos Fiktif',group:'owner'}],'tanpa bawahan: hanya pemilik');
@@ -234,6 +234,7 @@ test('names on a personal phone: the owner, then only the owner’s direct repor
  assert.equal(mine.points_ready,false);
  assert.deepEqual(names(await context(staffPhone)),[['Staf Fiktif','owner'],['Pekerja Harian Fiktif','team'],['Petugas Dua Fiktif','team'],['Petugas Fiktif','team']]);
  assert.deepEqual(names(await context(bossPhone)),[['Atasan Fiktif','owner'],['Staf Fiktif','team']],'bawahan tidak langsung tidak ikut');
+ assert.deepEqual(names(await context(staffPhone,{})),[['Staf Fiktif','owner'],['Pekerja Harian Fiktif','unit'],['Petugas Dua Fiktif','unit'],['Petugas Fiktif','unit']],'pemilih lama hanya merender grup owner, recent, dan unit');
  // Pencarian (dipakai HP versi lama) hanya mengembalikan nama dari daftar itu.
  await assert.rejects(f.form('search',await sign(staffPhone,'search',{query:'pe'})),errorWith(422));
  assert.deepEqual((await f.form('search',await sign(staffPhone,'search',{query:'fiktif'}))).people.map(p=>p.name),['Pekerja Harian Fiktif','Petugas Dua Fiktif','Petugas Fiktif','Staf Fiktif']);

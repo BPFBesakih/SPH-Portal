@@ -34,7 +34,8 @@ shared AS (
  WHERE dv.kind='SHARED' AND dv.status IN ('ACTIVE','PENDING')
  GROUP BY dv.id,dv.label,u.name,dv.status,dv.last_seen_at),
 refused AS (
- SELECT concat_ws(' · ',who.full_name,'HP pribadi '||owner.full_name) AS item,
+ SELECT format('%s (%s) · HP pribadi %s (%s) · %s',
+   who.full_name,who.employee_no,owner.full_name,owner.employee_no,dv.id) AS item,
   format('%s absen dalam 30 hari; atasan langsung saat ini: %s',count(*),
    CASE WHEN coalesce(l.primaries,0)<>1 THEN format('tidak pasti (penempatan utama aktif: %s)',coalesce(l.primaries,0))
         ELSE coalesce(boss.full_name,'tidak ada') END) AS hasil
@@ -46,7 +47,8 @@ refused AS (
  LEFT JOIN portal.employees boss ON boss.id=l.supervisor_id
  WHERE ev.recorded_at>=d.since AND ev.employee_id<>dv.owner_employee_id
   AND NOT (coalesce(l.primaries,0)=1 AND l.supervisor_id IS NOT DISTINCT FROM dv.owner_employee_id)
- GROUP BY who.full_name,owner.full_name,boss.full_name,l.primaries),
+ GROUP BY ev.employee_id,dv.id,who.full_name,who.employee_no,
+  owner.full_name,owner.employee_no,boss.full_name,l.primaries),
 unclear AS (
  SELECT concat_ws(' · ',l.employee_no,l.full_name) AS item,
   CASE WHEN l.primaries=0 THEN 'tanpa penempatan utama aktif'

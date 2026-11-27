@@ -164,7 +164,7 @@ async function waitApproval(){
  </section>`);
  const poll=async()=>{
   try{
-   const context=await signedRequest(S.device,'context',{});
+   const context=await signedRequest(S.device,'context',{people_format:'direct-reports'});
    if(context.device.status==='ACTIVE'){S.context=context;installScreen();return;}
    if(context.device.status!=='PENDING'){inactive(context.device.status);return;}
   }catch(error){if(error.status===401){unregistered('Pendaftaran HP ini tidak ditemukan. Minta tautan baru.');return;}}
@@ -208,7 +208,7 @@ async function home(){
  stopCapture();S.attempt=null;
  if(!S.device?.device_id){unregistered();return;}
  show('<section class="screen center"><div class="spinner"></div><p class="lead">Memuat…</p></section>',false);
- try{S.context=await signedRequest(S.device,'context',{});}
+ try{S.context=await signedRequest(S.device,'context',{people_format:'direct-reports'});}
  catch(error){if(error.status===401&&!error.details?.code){unregistered('Pendaftaran HP ini tidak dikenali lagi. Minta tautan baru kepada SDM.');return;}failure(error,home);return;}
  const d=S.context.device;
  if(d.status==='PENDING'){await waitApproval();return;}

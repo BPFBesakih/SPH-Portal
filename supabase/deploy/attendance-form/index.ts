@@ -927,7 +927,7 @@ var firstCheckInSql = (employee, day) => `SELECT i.id FROM attendance_events i
  WHERE i.employee_id=${employee} AND i.work_date=${day} AND i.kind='IN'
  AND NOT EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.void_event_id=i.id AND c.revoked_at IS NULL)
  ORDER BY i.recorded_at,i.id LIMIT 1`;
-async function deviceContext(db, deviceId, nowMs = Date.now()) {
+async function deviceContext(db, deviceId, nowMs = Date.now(), peopleFormat) {
   const d = await one(db, "SELECT * FROM attendance_devices WHERE id=?", deviceId);
   assert(d, unknownDevice, 401);
   const view = await deviceView(db, d), base = {
@@ -951,12 +951,13 @@ async function deviceContext(db, deviceId, nowMs = Date.now()) {
       status: "REVOKED"
     }
   };
+  const reportGroup = peopleFormat === "direct-reports" ? "team" : "unit";
   const people = [{
     ...personView(owner),
     group: "owner"
   }, ...everyone.filter((p) => p.id !== owner.id && mayRecordFor(d, p)).map((p) => ({
     ...personView(p),
-    group: "team"
+    group: reportGroup
   }))];
   const since = new Date(nowMs - 30 * 24 * HOUR).toISOString();
   const history = (await all(db, `SELECT e.kind,e.recorded_at,e.work_date,e.point_name,e.within_point,
@@ -1196,7 +1197,7 @@ async function attendanceFormRequest({ action, body, clientIp, runTx, photos, no
   const auth = parseSignedRequest(body), device = await runTx(async (db) => await signingDevice(db, auth.deviceId));
   await verifySignedRequest(action, auth, device, nowMs);
   assert((await runTx(async (db) => await admitDeviceAction(db, action, auth.deviceId))).allowed, "Terlalu banyak permintaan dari HP ini. Coba lagi beberapa menit kemudian.", 429);
-  if (action === "context") return await runTx(async (db) => await deviceContext(db, auth.deviceId, nowMs));
+  if (action === "context") return await runTx(async (db) => await deviceContext(db, auth.deviceId, nowMs, auth.payload.people_format));
   if (action === "search") return await runTx(async (db) => await searchPeople(db, auth.deviceId, auth.payload.query));
   if (action === "person") return await runTx(async (db) => await personStatus(db, auth.deviceId, auth.payload.employee_id, nowMs));
   if (action === "check-location") return await runTx(async (db) => await checkCaptureLocation(db, auth.deviceId, auth.payload));
