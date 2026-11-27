@@ -70,7 +70,11 @@ try{
  const portal=await portalContext.newPage();
  const errors=[];portal.on('pageerror',e=>errors.push(e.message));
  const dialog=()=>portal.locator('dialog[open]').last();
- const tab=async name=>{await portal.locator('[data-att=tab]',{hasText:name}).click();await portal.locator('[data-att=tab].active',{hasText:name}).waitFor();};
+ const menu=portal.getByRole('navigation',{name:'Menu absensi'});
+ const tab=async name=>{
+  await menu.getByRole('link',{name,exact:true}).click();
+  await menu.getByRole('link',{name,exact:true}).and(menu.locator('[aria-current=page]')).waitFor();
+ };
 
  await check('release gate: without the attendance routes on the server the Absensi menu stays hidden',async()=>{
   const context=await browser.newContext({viewport:{width:1366,height:900}});await watch(context);
@@ -109,7 +113,20 @@ try{
   await portal.goto(base+'/');await portal.fill('#login-form [name=username]','absensi.uji');await portal.fill('#login-form [name=password]','UjiAbsensi!2026');await portal.click('#login-form [type=submit]');
   await portal.locator('.nav-link',{hasText:'Absensi'}).click();
   await portal.getByRole('heading',{name:'Absensi',exact:true}).waitFor();
-  assert.deepEqual(await portal.locator('[data-att=tab]').allTextContents(),['Hari ini','Rekap','Perlu dicek','HP Absen','Titik Absen','Absen saya','Jadwal Kerja','Acuan Shift']);
+  const labels=['Hari ini','Rekap','Perlu dicek','Absen saya','Jadwal Kerja','Acuan Shift','HP Absen','Titik Absen'];
+  assert.deepEqual(await menu.getByRole('link').allTextContents(),labels);
+  await portal.setViewportSize({width:390,height:844});
+  const picker=menu.getByRole('combobox',{name:'Menu absensi'});
+  await picker.waitFor();
+  assert.deepEqual(await picker.locator('option').allTextContents(),labels);
+  assert.equal(await menu.getByRole('link').count(),0);
+  assert(await portal.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+  await picker.selectOption('schedule');
+  await portal.locator('[data-att-schedule-form]').waitFor();
+  await portal.goBack();
+  await portal.locator('.attendance-today').waitFor();
+  assert.equal(await picker.inputValue(),'today');
+  await portal.setViewportSize({width:1366,height:900});
  });
  await check('portal: Jadwal Kerja shows the unit shift and holidays for the selected date',async()=>{
   await tab('Jadwal Kerja');

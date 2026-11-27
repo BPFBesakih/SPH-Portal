@@ -46,6 +46,24 @@ function tabs(){
  if(o.shift_references)list.push(['shift-options','Acuan Shift']);
  return list;
 }
+const navGroups=[
+ {label:'Kehadiran',icon:'people',keys:['today','recap','review','mine']},
+ {label:'Jadwal',icon:'calendar',keys:['schedule','shift-options']},
+ {label:'Perangkat & lokasi',icon:'location',keys:['devices','points']}
+];
+function attendanceNav(list){
+ const labels=new Map(list);
+ const groups=navGroups.map(group=>({...group,keys:group.keys.filter(key=>labels.has(key))})).filter(group=>group.keys.length);
+ return `<nav class="attendance-nav" aria-label="Menu absensi">
+  <div class="attendance-nav-groups">${groups.map(group=>`<div class="attendance-nav-group" role="group" aria-label="${esc(group.label)}">
+   <span class="attendance-nav-label" aria-hidden="true">${icon(group.icon)}${esc(group.label)}</span>
+   <div class="attendance-nav-links">${group.keys.map(key=>`<a href="#attendance?tab=${key}" ${key===A.tab?'aria-current="page"':''}>${esc(labels.get(key))}</a>`).join('')}</div>
+  </div>`).join('')}</div>
+  <label class="attendance-nav-picker"><span>Menu absensi</span><select data-att-nav>
+   ${groups.map(group=>`<optgroup label="${esc(group.label)}">${group.keys.map(key=>`<option value="${key}" ${key===A.tab?'selected':''}>${esc(labels.get(key))}</option>`).join('')}</optgroup>`).join('')}
+  </select>${icon('down')}</label>
+ </nav>`;
+}
 function stopPolling(){if(A.poll){clearInterval(A.poll);A.poll=null;}}
 // Peta Leaflet dilepas tanpa animasi yang masih berjalan (mencegah galat _leaflet_pos).
 function dispose(map){if(!map)return;try{map.stop();map.remove();}catch{}}
@@ -56,8 +74,7 @@ export async function loadAttendancePage(){
  stopPolling();dispose(A.map);A.map=null;
  A.overview=await api('attendance/overview');
  const list=tabs(),requested=new URLSearchParams(location.hash.split('?')[1]||'').get('tab');
- if(requested&&list.some(([key])=>key===requested))A.tab=requested;
- if(!list.some(([key])=>key===A.tab))A.tab=list[0]?.[0]||null;
+ A.tab=list.some(([key])=>key===requested)?requested:(list[0]?.[0]||null);
  A.from=A.from||monthStart();A.to=A.to||localToday();
  A.scheduleDate=A.scheduleDate||A.overview.today;
  A.reviewFrom=A.reviewFrom||shift(localToday(),-13);A.reviewTo=A.reviewTo||localToday();
@@ -80,7 +97,7 @@ function render(){
  if(!list.length)return `${head('Absensi','Absen harian pegawai dengan selfie dan lokasi.')}<div class="notice">${icon('people')}<div><strong>Belum ada data absensi untuk akun ini</strong><p>Akun ini belum terhubung dengan profil pegawai dan tidak memegang izin Absensi. Hubungi SDM bila perlu.</p></div></div>`;
  const body={today:todayTab,recap:recapTab,schedule:scheduleTab,'shift-options':shiftOptionsTab,review:reviewTab,devices:devicesTab,points:pointsTab,mine:mineTab}[A.tab]();
  return `${head('Absensi','Absen harian lewat HP terdaftar dengan GPS dan selfie.',headerActions())}
- <div class="leave-tabs" role="tablist" aria-label="Bagian absensi">${list.map(([key,label])=>`<button role="tab" aria-selected="${A.tab===key}" class="chip ${A.tab===key?'active':''}" data-att="tab" data-tab="${key}">${esc(label)}</button>`).join('')}</div>
+ ${attendanceNav(list)}
  <div id="attendance-content">${body}</div>
  <footer class="page-footer"><span>SPH Portal · Absensi</span><span>Waktu operasional WITA</span></footer>`;
 }
@@ -112,9 +129,9 @@ function checkInCell(inAt,timing){
 function todayTab(){
  const rows=A.today.rows.filter(r=>!A.query||r.employee.name.toLowerCase().includes(A.query.toLowerCase()));
  const count=s=>A.today.rows.filter(r=>s.includes(r.status)).length;
- return `<div class="stats-grid">${stat('Hadir',count(['HADIR','BELUM_PULANG','TANPA_PULANG','TANPA_MASUK']))}${stat('Belum pulang',count(['BELUM_PULANG']))}${stat('Belum ada catatan',count(['TIDAK_ADA_CATATAN']))}${stat('Cuti / izin / sakit / dinas',count(['CUTI','IZIN','SAKIT','DINAS_LUAR']))}${stat('Ditandai',A.today.rows.filter(r=>r.flags.length).length)}</div>
- <div class="toolbar"><label class="field"><span>Unit</span><select data-att-field="unit">${unitOptions(A.unit)}</select></label><label class="field"><span>Cari nama</span><input type="search" data-att-field="query" value="${esc(A.query)}"></label>${btn('Terapkan','apply','filter','outlined')}</div>
- ${card(`Absen ${day(A.today.date)}`,'Status dihitung dari absen hari ini, koreksi, keterangan, dan cuti yang disetujui.',table(['Pegawai','Status','Masuk','Pulang','Titik terakhir','Tanda',''],rows.map(r=>`<tr><td>${person(r.employee)}</td><td>${pill(statusLabel[r.status],statusTone[r.status])}${r.note?`<br><span class="muted text-small">${esc(noteLabel[r.note.kind])}</span>`:''}</td><td>${checkInCell(r.in_at,r.timing)}</td><td>${time(r.out_at)}</td><td>${where(r.last_event)}${r.last_event?`<br><span class="muted text-small">lewat ${esc(r.last_event.device.label)}${r.last_event.device.borrowed?' (menumpang)':''}</span>`:''}</td><td>${flags(r.flags)}</td><td><button type="button" class="button text" data-att="detail" data-id="${esc(r.employee.id)}">Rincian</button></td></tr>`),'Tidak ada pegawai pada saringan ini.'))}`;
+ return `<div class="attendance-today"><div class="attendance-summary">${stat('Hadir',count(['HADIR','BELUM_PULANG','TANPA_PULANG','TANPA_MASUK']))}${stat('Belum pulang',count(['BELUM_PULANG']))}${stat('Belum ada catatan',count(['TIDAK_ADA_CATATAN']))}${stat('Cuti / izin / sakit / dinas',count(['CUTI','IZIN','SAKIT','DINAS_LUAR']))}${stat('Ditandai',A.today.rows.filter(r=>r.flags.length).length)}</div>
+ <div class="toolbar attendance-filter"><label class="field"><span>Unit</span><select data-att-field="unit">${unitOptions(A.unit)}</select></label><label class="field"><span>Cari nama</span><input type="search" data-att-field="query" value="${esc(A.query)}"></label>${btn('Terapkan','apply','filter','outlined')}</div>
+ ${card(`Absen ${day(A.today.date)}`,'Status dihitung dari absen hari ini, koreksi, keterangan, dan cuti yang disetujui.',table(['Pegawai','Status','Masuk','Pulang','Titik terakhir','Tanda',''],rows.map(r=>`<tr><td class="attendance-person">${person(r.employee)}</td><td class="attendance-status">${pill(statusLabel[r.status],statusTone[r.status])}${r.note?`<br><span class="muted text-small">${esc(noteLabel[r.note.kind])}</span>`:''}</td><td data-label="Masuk">${checkInCell(r.in_at,r.timing)}</td><td data-label="Pulang">${time(r.out_at)}</td><td data-label="Titik terakhir" ${r.last_event?'':'data-empty'}>${where(r.last_event)}${r.last_event?`<br><span class="muted text-small">lewat ${esc(r.last_event.device.label)}${r.last_event.device.borrowed?' (menumpang)':''}</span>`:''}</td><td data-label="Tanda" ${r.flags.length?'':'data-empty'}>${flags(r.flags)}</td><td class="attendance-detail"><button type="button" class="button text" data-att="detail" data-id="${esc(r.employee.id)}">Rincian</button></td></tr>`),'Tidak ada pegawai pada saringan ini.'))}</div>`;
 }
 
 /* ---------- Jadwal kerja ---------- */
@@ -483,6 +500,7 @@ export function bindAttendancePage(){
  const root=document.querySelector('#main');if(!root||root.dataset.attendanceBound)return;root.dataset.attendanceBound='1';
  afterRender();
  root.addEventListener('change',event=>{
+  if(event.target.matches('[data-att-nav]')){location.hash=`attendance?tab=${event.target.value}`;return;}
   const key=event.target.dataset?.attField;if(!key)return;
   A[key]=event.target.value;
   if(key==='referencePosition'&&A.tab==='shift-options'){
@@ -507,7 +525,6 @@ export function bindAttendancePage(){
   const el=event.target.closest('[data-att]');if(!el||state.route!=='attendance'||el.closest('dialog'))return;
   const action=el.dataset.att;el.disabled=true;
   try{
-   if(action==='tab'){A.tab=el.dataset.tab;history.replaceState(null,'',`#attendance?tab=${A.tab}`);await rerender();return;}
    if(action==='apply'){
     if(A.from>A.to||A.reviewFrom>A.reviewTo)throw new Error('Tanggal mulai harus sebelum tanggal akhir.');
     await rerender();return;
