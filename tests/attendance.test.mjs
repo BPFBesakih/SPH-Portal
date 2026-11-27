@@ -12,6 +12,7 @@ import {attendanceRoutes} from '../lib/attendance.mjs';
 import {attendanceFormRequest,attendanceFormLimits,runAttendanceRetention,attendanceSubmitted,attendanceRetentionDue} from '../lib/attendance-form.mjs';
 import {localAttendancePhotos} from '../lib/attendance-photos.mjs';
 import {attendanceRules,witaDate,shiftDay,distanceMeters,matchPoint,jumped,dayStatus,buildRecap,signatureMessage,cleanPublicKey,keyThumbprint,verifySignature,parseFlags} from '../lib/attendance-rules.mjs';
+import {createGpsWindow} from '../public/absen/absen-core.js';
 import {createApp} from '../server.mjs';
 
 // Semua nama, nomor, dan koordinat di sini fiktif.
@@ -86,6 +87,22 @@ const addPoint=(f,extra={})=>f.route(f.users.manager,'points','POST',{name:'Titi
 const errorWith=(status,code)=>e=>e.status===status&&(!code||e.details?.code===code);
 
 /* ---------- Aturan murni ---------- */
+test('GPS memilih titik terbaik yang masih berumur maksimal 30 detik saat dibaca',()=>{
+ let time=100000;
+ const gps=createGpsWindow(()=>time);
+ const first={at:time,accuracy:5};
+ const second={at:time+20000,accuracy:12};
+ assert.equal(gps.add(first),first);
+ time+=20000;assert.equal(gps.add(second),first);
+ time+=10000;assert.equal(gps.best(),first);
+ time+=1000;assert.equal(gps.add({at:time,accuracy:350}),second);
+ const newest={at:time,accuracy:12};
+ assert.equal(gps.add(newest),newest);
+ assert.equal(gps.add({at:time-5000,accuracy:12}),newest);
+ time+=30001;assert.equal(gps.best(),null);
+ assert.equal(gps.add(first),null);
+});
+
 test('rules: distance, point matching, jumps, WITA dates and flag parsing',()=>{
  assert(Math.abs(distanceMeters(-8.3741,115.4512,-8.3741,115.4512))<0.001);
  const north=distanceMeters(-8.3741,115.4512,-8.3732,115.4512);assert(north>99&&north<101,String(north));

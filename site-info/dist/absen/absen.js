@@ -1,4 +1,4 @@
-import {loadDevice,saveDevice,forgetDevice,loadPending,savePending,clearPending,persistStorage,newKeys,publicKeyOf,request,signedRequest,replacementProof,serverNow,syncClock,uuid,FormError} from './absen-core.js';
+import {createGpsWindow,loadDevice,saveDevice,forgetDevice,loadPending,savePending,clearPending,persistStorage,newKeys,publicKeyOf,request,signedRequest,replacementProof,serverNow,syncClock,uuid,FormError} from './absen-core.js';
 
 // Halaman absen BP Besakih. Alur harian dibuat sesingkat mungkin untuk pegawai yang
 // belum terbiasa memakai HP: buka ikon → (pilih nama) → MASUK/PULANG → selfie.
@@ -305,36 +305,31 @@ async function capture(kind,confirmed){
  await locateAttempt();
 }
 const locationPayload=fix=>({latitude:fix.latitude,longitude:fix.longitude,accuracy:fix.accuracy,age_ms:Math.max(0,Date.now()-fix.at)});
-const gpsLabel=fix=>`Lokasi didapat · akurasi ±${Math.round(fix.accuracy)} m`;
+const gpsLabel=fix=>fix?`Lokasi didapat · akurasi ±${Math.round(fix.accuracy)} m`:'Menunggu lokasi terbaru.';
 async function locateAttempt(){
  stopCapture();
  const attempt=S.attempt;if(!attempt)return;
  if(!navigator.geolocation){message('Lokasi tidak tersedia','HP ini tidak mendukung lokasi untuk absen.',{tone:'bad',back:home});return;}
  show('<section class="screen center"><h1>Memeriksa lokasi</h1><div class="spinner"></div><p class="lead" data-location>Mencari lokasi HP.</p></section>',true,home);
- const camera={stream:null,watch:null,position:null,denied:false};S.camera=camera;
+ const camera={stream:null,watch:null,gps:createGpsWindow(),denied:false};S.camera=camera;
  const deadline=Date.now()+20000;
  camera.watch=navigator.geolocation.watchPosition(position=>{
   if(S.camera!==camera)return;
   const at=Number.isFinite(position.timestamp)?Math.min(position.timestamp,Date.now()):Date.now();
-  const best=camera.position;
-  if(best&&at<best.at)return;
-  // Simpan titik paling akurat dalam 30 detik terakhir, bukan sekadar yang terbaru. GPS tetap
-  // berjalan selama kamera dan pratinjau terbuka, dan di dalam gedung titik terbaru bisa melenceng
-  // ke luar radius padahal pemeriksaan sebelum selfie sudah lolos.
-  if(best&&position.coords.accuracy>best.accuracy&&at-best.at<=30000)return;
-  camera.position={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy,at};
-  const label=app.querySelector('[data-location]');if(label)label.textContent=gpsLabel(camera.position);
+  const fix=camera.gps.add({latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy,at});
+  const label=app.querySelector('[data-location]');if(label)label.textContent=gpsLabel(fix);
  },error=>{if(error.code===1)camera.denied=true;},{enableHighAccuracy:true,maximumAge:0,timeout:20000});
- while(S.camera===camera&&!camera.denied&&(!camera.position||camera.position.accuracy>100)&&Date.now()<deadline)await new Promise(r=>setTimeout(r,200));
+ while(S.camera===camera&&!camera.denied&&((camera.gps.best()?.accuracy??Infinity)>100)&&Date.now()<deadline)await new Promise(r=>setTimeout(r,200));
  if(S.camera!==camera)return;
- if(camera.denied||!camera.position||Date.now()-camera.position.at>120000){
+ const fix=camera.gps.best();
+ if(camera.denied||!fix){
   stopCapture();
   message('Lokasi belum didapat',camera.denied?'Izinkan akses lokasi untuk halaman absen, lalu coba lagi.':'Nyalakan Lokasi (GPS) di HP, lalu coba lagi.',{tone:'bad',back:home,actions:'<button class="primary wide" data-action="retry-location">Coba lagi</button>'});return;
  }
  // Kiriman ulang memakai selfie dan kunci kiriman yang sama agar balasan yang hilang bisa dipulihkan.
  if(attempt.photoConfirmed){await submit();return;}
  try{
-  const result=await signedRequest(S.device,'check-location',{employee_id:attempt.employee.id,location:locationPayload(camera.position)});
+  const result=await signedRequest(S.device,'check-location',{employee_id:attempt.employee.id,location:locationPayload(fix)});
   if(S.camera!==camera)return;
   if(result.allowed!==true)throw new FormError('Lokasi belum dapat dikonfirmasi. Coba lagi.',503);
  }catch(error){if(S.camera===camera)captureFailure(error);return;}
@@ -356,7 +351,7 @@ function captureFailure(error){
 async function openSelfie(camera,kind){
  show(`<section class="screen">
   <h1>Selfie untuk absen ${kindLabel[kind]}</h1>
-  <div class="camera"><video playsinline muted autoplay></video><p class="hint" data-location>${gpsLabel(camera.position)}</p></div>
+  <div class="camera"><video playsinline muted autoplay></video><p class="hint" data-location>${gpsLabel(camera.gps.best())}</p></div>
   <button class="capture" data-action="shoot" aria-label="Ambil foto" disabled></button>
   <p class="center muted small" data-camera>Menyalakan kamera depan…</p>
  </section>`,true,home);
@@ -406,15 +401,15 @@ function retake(){
  // Lokasi sudah didapat dan radius sudah dicek sebelum selfie pertama, dan GPS tetap berjalan.
  // Kamera langsung dibuka lagi tanpa mencari lokasi ulang; server tetap memeriksa lokasi saat
  // absen dicatat. Bila GPS sudah berhenti (misalnya sesudah gangguan), lokasi dicari dari awal.
- if(camera&&camera.watch!=null&&camera.position&&!camera.denied)return openSelfie(camera,attempt.kind);
+ if(camera&&camera.watch!=null&&!camera.denied)return openSelfie(camera,attempt.kind);
  return locateAttempt();
 }
 async function submit(){
  const a=S.attempt,camera=S.camera;
  if(!a?.photo || !a.photoConfirmed)return;
  if(Date.now()-a.photo.at>4.5*60000){message('Selfie sudah lama','Ambil selfie lagi supaya absen bisa dikirim.',{tone:'warn',back:home,actions:'<button class="primary wide" data-action="retake">Ambil selfie lagi</button>'});return;}
- const fix=camera?.position;
- if(!fix||camera.denied||Date.now()-fix.at>120000){await locateAttempt();return;}
+ const fix=camera?.gps.best();
+ if(!fix||camera.denied){await locateAttempt();return;}
  show(`<section class="screen center"><div class="spinner"></div><p class="lead">Mengirim absen ${kindLabel[a.kind]}…</p></section>`,false);
  const payload={client_key:a.client_key,employee_id:a.employee.id,kind:a.kind,confirmed_order:a.confirmed,
   location:locationPayload(fix),
