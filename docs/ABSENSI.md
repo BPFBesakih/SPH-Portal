@@ -1,6 +1,6 @@
 # Absensi — absen harian lewat HP terdaftar (tahap 1)
 
-**Status (27 November 2026): tahap 1 tayang sejak 11 November (PR #31).** Jadwal pilot Sekretariat dan pemeriksaan radius sebelum selfie masuk lewat PR #46 (di-merge 26 November). Pratinjau selfie dan keterangan ketepatan masuk masuk lewat PR #47 (di-merge 27 November). Aturan **absen untuk orang lain hanya oleh atasan langsung** ada di cabang `claude/absensi-hanya-atasan-langsung` dan belum dirilis. Langkah rilis setiap pembaruan ada di bagian **Rilis pembaruan**, cara kembalinya di bagian **Rollback**. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`); bagian yang diganti keputusan sesudahnya tercatat di **Penyimpangan dari PRD**.
+**Status (27 November 2026): tahap 1 tayang sejak 11 November (PR #31).** Jadwal pilot Sekretariat dan pemeriksaan radius sebelum selfie masuk lewat PR #46 (di-merge 26 November). Pratinjau selfie dan keterangan ketepatan masuk masuk lewat PR #47 (di-merge 27 November). Aturan **absen untuk orang lain hanya oleh atasan langsung** ada di PR #48 (cabang `claude/absensi-hanya-atasan-langsung`) dan belum dirilis. Langkah rilis setiap pembaruan ada di bagian **Rilis pembaruan**, cara kembalinya di bagian **Rollback**. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`); bagian yang diganti keputusan sesudahnya tercatat di **Penyimpangan dari PRD**.
 
 Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari HP, untuk pegawai kantor, petugas shift/lapangan, dan THL (guide tidak ikut). Hasilnya rekap untuk atasan dan SDM, belum untuk gaji atau sanksi. Ketepatan masuk dinilai untuk pegawai dengan jadwal tetap pada hari kerja. Hari tanpa absen tampil sebagai **"Tidak ada catatan"**. Ekspor data aplikasi absen lama ditunda sesuai keputusan pemilik.
 
@@ -106,7 +106,7 @@ Tanpa migrasi. HP dan portal lama mengabaikan field baru `timing`; HP dan portal
 3. Uji di HP sungguhan (Android dan iPhone): pratinjau, **Ambil ulang foto**, **Kembali**, **Cek lokasi lagi**, dan keterangan ketepatan masuk untuk pegawai Sekretariat.
 4. Merge PR: cache `/absen/` `sph-absen-v1.4.3`, bundel `/app/` `portal-17fe45d1dbb7.js` + `portal-28cfaa1eaf72.css`.
 
-### Absen untuk orang lain hanya oleh atasan langsung (cabang `claude/absensi-hanya-atasan-langsung`)
+### PR #48 — absen untuk orang lain hanya oleh atasan langsung
 
 Tanpa migrasi dan tanpa mengubah data. Prasyarat: PR #47 sudah dirilis (Edge `9c3db4bc…`, `portal-api` `62c82e42…`).
 
@@ -152,14 +152,14 @@ Kembalikan per pembaruan, mulai dari yang terakhir dirilis. Migrasi Absensi adit
 
 | Pembaruan | Edge `attendance-form` | `portal-api` | Pages |
 |---|---|---|---|
-| Atasan langsung | `9c3db4bc…` | salinan versi aktif sebelum deploy (`62c82e42…` bila itu yang aktif) | revert PR cabang `claude/absensi-hanya-atasan-langsung` |
-| PR #47 | `7ee11ac2…` | salinan versi aktif sebelum deploy (`d09d5a36…` bila itu yang aktif) | revert PR #47 |
+| PR #48 | `9c3db4bc…` | salinan versi aktif sebelum deploy (`62c82e42…` bila itu yang aktif) | revert PR #48 |
+| PR #47 | `7ee11ac2…` | salinan versi aktif sebelum deploy (`d09d5a36…` bila itu yang aktif) | revert PR #47, sesudah PR #48 di-revert |
 | PR #46 | `5624a7c0…` | salinan versi aktif sebelum deploy (`94eaa33e…` bila itu yang aktif) | revert PR #46, sesudah PR #47 di-revert |
 
 - **Pages** cepat: Cloudflare → Workers & Pages → sph-portal → Deployments → deployment produksi terakhir sebelum merge → *Rollback to this deployment* (sementara; deploy berikutnya dari master menimpanya). Permanen: tombol *Revert* di PR, lalu merge PR revert itu.
 - **Menghentikan absen dari HP sementara** tanpa menyentuh modul lain: hapus Edge `attendance-form`. HP menampilkan pesan gagal saat dibuka, sedangkan data tetap bisa dibaca di portal. Deploy ulang berkas yang sama untuk menyalakannya lagi.
 - **Jadwal retensi** (bila dipasang): `SELECT cron.unschedule('attendance-selfie-retention');`
-- **Atasan langsung**: tidak ada data yang perlu dibatalkan. HP bersama yang sudah didaftarkan ulang sebagai HP pribadi tetap HP pribadi; pendaftaran bersamanya yang lama tetap nonaktif, jadi bila HP bersama ingin dipakai lagi, daftarkan HP baru. HP bersama yang tidak didaftarkan ulang langsung bisa dipakai lagi.
+- **PR #48**: tidak ada data yang perlu dibatalkan. HP bersama yang sudah didaftarkan ulang sebagai HP pribadi tetap HP pribadi; pendaftaran bersamanya yang lama tetap nonaktif, jadi bila HP bersama ingin dipakai lagi, daftarkan HP baru. HP bersama yang tidak didaftarkan ulang langsung bisa dipakai lagi.
 - **Titik kembali sebelum Absensi** (master `187455b`, `portal-api` `e580bd6e…`, 10 November) kini hanya catatan sejarah. Jangan dipakai lagi: mengembalikan Pages atau `portal-api` ke versi itu ikut mencabut semua pembaruan sesudahnya, antara lain E-Arsip Humas, pembaruan Kunjungan, Merchandise, dan Barang Titipan UMKM.
 
 **Sesudah rollback:**
