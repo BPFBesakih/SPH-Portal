@@ -2,10 +2,11 @@ import {createGpsWindow,loadDevice,saveDevice,forgetDevice,loadPending,savePendi
 
 // Halaman absen BP Besakih. Alur harian dibuat sesingkat mungkin untuk pegawai yang
 // belum terbiasa memakai HP: buka ikon → (pilih nama) → MASUK/PULANG → selfie.
-// Yang didaftarkan adalah HP; di HP terdaftar mana pun siapa saja bisa absen dengan
-// memilih namanya (pegawai tanpa HP menumpang di HP teman, koordinator, atau HP pos).
+// Yang didaftarkan adalah HP pribadi. Pemilik HP absen untuk dirinya sendiri; pegawai lain
+// hanya bisa diabsenkan atasan langsungnya dari HP pribadi atasan itu (pegawai tanpa HP absen
+// di HP atasan langsungnya). HP bersama tidak dipakai lagi. Server memeriksa ulang semuanya.
 const app=document.querySelector('#app'),live=document.querySelector('#live');
-const S={device:null,context:null,person:null,status:null,install:null,camera:null,attempt:null,timers:new Set(),searchSeq:0};
+const S={device:null,context:null,person:null,status:null,install:null,camera:null,attempt:null,timers:new Set()};
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const witaTime=ms=>new Intl.DateTimeFormat('id-ID',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Makassar'}).format(new Date(ms));
 const witaDay=ms=>new Intl.DateTimeFormat('id-ID',{weekday:'long',day:'numeric',month:'long',timeZone:'Asia/Makassar'}).format(new Date(ms));
@@ -39,7 +40,7 @@ function unregistered(note=''){
   <h1>HP ini belum terdaftar untuk absen</h1>
   ${note?`<div class="status warn">${esc(note)}</div>`:''}
   <p class="lead">Minta SDM atau koordinator mengirim <strong>tautan pendaftaran</strong> lewat WhatsApp, lalu buka tautan itu di HP ini.</p>
-  <p class="muted small">Pegawai yang tidak punya HP tidak perlu mendaftar. Cukup absen di HP teman atau koordinator yang sudah terdaftar.</p>
+  <p class="muted small">Pegawai yang tidak punya HP tidak perlu mendaftar. Minta atasan langsung Anda mengabsenkan dari HP-nya yang sudah terdaftar.</p>
   ${isIos?`<p class="muted small">Di iPhone: pasang ikon dulu (Bagikan → Tambahkan ke Layar Utama), buka dari ikon itu, lalu tempel tautan pendaftaran di bawah.</p>`:''}
   ${pasteBox()}
  </section>`);
@@ -163,7 +164,7 @@ async function waitApproval(){
  </section>`);
  const poll=async()=>{
   try{
-   const context=await signedRequest(S.device,'context',{});
+   const context=await signedRequest(S.device,'context',{people_format:'direct-reports'});
    if(context.device.status==='ACTIVE'){S.context=context;installScreen();return;}
    if(context.device.status!=='PENDING'){inactive(context.device.status);return;}
   }catch(error){if(error.status===401){unregistered('Pendaftaran HP ini tidak ditemukan. Minta tautan baru.');return;}}
@@ -175,6 +176,19 @@ function inactive(status){
  setLabel('HP tidak aktif');
  message(status==='REJECTED'?'Pendaftaran HP ditolak':'HP ini tidak aktif untuk absen',status==='REJECTED'?'Pendaftaran tidak disetujui atau sesi sudah berakhir. Minta SDM mendaftarkan HP ini lagi.':'HP ini sudah dinonaktifkan atau pemiliknya tidak aktif. Minta SDM mendaftarkan HP ini lagi.',
   {tone:'warn',actions:`${pasteBox()}<button class="ghost" data-action="forget">Hapus pendaftaran lama dari HP ini</button>`});
+}
+// HP bersama tidak dipakai lagi. HP ini bisa didaftarkan ulang sebagai HP pribadi pemegangnya
+// (misalnya koordinator) lewat tautan HP pribadi; pendaftaran lama otomatis diganti.
+function retiredShared(d){
+ S.person=null;
+ setLabel(d?.label?`HP bersama · ${d.label}`:'HP bersama');
+ message('HP bersama tidak dipakai lagi','Absen untuk orang lain kini hanya bisa dilakukan atasan langsung dari HP pribadinya. Absen di HP sendiri, atau minta atasan langsung Anda mengabsenkan dari HP-nya.',
+  {tone:'warn',actions:`<p class="muted small">Bila HP ini dipegang koordinator, minta SDM membuat tautan HP pribadi atas nama koordinator itu, lalu buka tautannya di HP ini.</p>${pasteBox()}<button class="ghost" data-action="forget">Hapus pendaftaran lama dari HP ini</button>`});
+}
+// Nama yang tidak boleh diabsenkan dari HP ini (bukan bawahan langsung pemilik HP).
+function notAllowed(error){
+ S.person=null;S.attempt=null;
+ message('Tidak bisa absen untuk nama ini',error.message,{tone:'warn',back:home,actions:'<button class="primary wide" data-action="home">Kembali</button>'});
 }
 
 /* ---------- Beranda absen ---------- */
@@ -194,73 +208,76 @@ async function home(){
  stopCapture();S.attempt=null;
  if(!S.device?.device_id){unregistered();return;}
  show('<section class="screen center"><div class="spinner"></div><p class="lead">Memuat…</p></section>',false);
- try{S.context=await signedRequest(S.device,'context',{});}
+ try{S.context=await signedRequest(S.device,'context',{people_format:'direct-reports'});}
  catch(error){if(error.status===401&&!error.details?.code){unregistered('Pendaftaran HP ini tidak dikenali lagi. Minta tautan baru kepada SDM.');return;}failure(error,home);return;}
  const d=S.context.device;
  if(d.status==='PENDING'){await waitApproval();return;}
+ // Server lama masih menjawab HP bersama sebagai ACTIVE; layar yang sama tetap dipakai.
+ if(d.retired||d.kind==='SHARED'){retiredShared(d);return;}
  if(d.status!=='ACTIVE'){inactive(d.status);return;}
- setLabel(d.kind==='SHARED'?`HP bersama · ${d.label}`:d.label);
- if(!S.person&&d.kind==='PERSONAL'&&d.owner)S.person=d.owner;
- if(!S.person){picker();return;}
+ setLabel(d.label);
+ if(S.person&&!choices().some(p=>p.id===S.person.id))S.person=null;
+ if(!S.person&&d.owner)S.person=d.owner;
+ if(!S.person){inactive('REVOKED');return;}
  await personHome();
 }
+// Nama yang boleh dipilih di HP ini: pemilik dan bawahan langsungnya (grup "team" dari server).
+const team=()=>(S.context?.people||[]).filter(p=>p.group==='team');
+const choices=()=>{const d=S.context?.device;return [...(d?.owner?[d.owner]:[]),...team()];};
 async function personHome(){
  const d=S.context.device;
  try{S.status=await signedRequest(S.device,'person',{employee_id:S.person.id});}
- catch(error){if(error.status===404){S.person=null;picker();return;}failure(error,personHome);return;}
+ catch(error){
+  const code=error.details?.code;
+  if(error.status===404){S.person=null;await home();return;}
+  if(error.status===403&&code==='NOT_DIRECT_SUPERVISOR'){notAllowed(error);return;}
+  if(error.status===403&&code==='SHARED_RETIRED'){retiredShared(d);return;}
+  failure(error,personHome);return;
+ }
  const p=S.status.employee,suggested=S.status.suggested,open=S.status.open_since,today=S.status.state;
- // Jam hanya dikirim server untuk pemilik HP pribadi di HP-nya sendiri; penumpang melihat keadaannya saja.
+ // Jam hanya dikirim server untuk pemilik HP di HP-nya sendiri; bawahan yang diabsenkan atasan melihat keadaannya saja.
  const done=S.status.last_today?.kind==='OUT'?S.status.last_today:null;
  const statusText=open?`Sudah absen masuk pukul ${witaTime(Date.parse(open))}. Sekarang absen pulang.`
   :today==='OPEN'?'Sudah absen masuk. Sekarang absen pulang.'
   :done?`Sudah absen pulang pukul ${witaTime(Date.parse(done.recorded_at))}.`
   :today==='DONE'?'Sudah absen pulang hari ini.':'Belum absen masuk hari ini.';
- const ownerHere=d.kind==='PERSONAL'&&d.owner?.id===p.id;
+ const ownerHere=d.owner?.id===p.id,canPick=team().length>0;
  show(`<section class="screen">
   <p class="muted">${esc(witaDay(serverNow()))}</p>
-  <div class="card person"><span class="muted small">Absen sebagai</span><span class="name">${esc(p.name)}</span><span class="role">${esc([p.position,p.unit].filter(Boolean).join(' · '))}</span>
-   <button class="ghost" data-action="pick">${ownerHere?'Absen untuk orang lain':'Ganti nama'}</button></div>
+  <div class="card person"><span class="muted small">${ownerHere?'Absen sebagai':'Absen untuk bawahan langsung'}</span><span class="name">${esc(p.name)}</span><span class="role">${esc([p.position,p.unit].filter(Boolean).join(' · '))}</span>
+   ${canPick?`<button class="ghost" data-action="pick">${ownerHere?'Absen untuk bawahan':'Ganti nama'}</button>`:''}</div>
   <div class="status ${open||today==='OPEN'?'ok':''}">${esc(statusText)}</div>
   ${S.context.points_ready?'':'<div class="status warn">Belum ada titik absen aktif. Hubungi Pengelola Absensi jika Anda perlu absen dari kantor.</div>'}
   <div class="big-actions">
    <button class="${suggested==='IN'?'suggested':'other'}" data-action="kind" data-kind="IN">MASUK<small>${suggested==='IN'?'Disarankan':''}</small></button>
    <button class="${suggested==='OUT'?'suggested':'other'}" data-action="kind" data-kind="OUT">PULANG<small>${suggested==='OUT'?'Disarankan':''}</small></button>
   </div>
-  ${d.kind==='PERSONAL'&&ownerHere?'<button class="ghost" data-action="history">Riwayat absen saya (30 hari)</button>':''}
+  ${ownerHere?'<button class="ghost" data-action="history">Riwayat absen saya (30 hari)</button>':''}
   ${standalone()?'':`<button class="ghost" data-action="install" data-install ${S.install?'':'hidden'}>Pasang ikon di layar utama</button>`}
  </section>`,true,ownerHere?null:picker);
 }
+// Daftar nama tidak memanggil pencarian server: semua nama yang boleh dipilih sudah dikirim
+// lewat `context` (pemilik + bawahan langsung), jadi saringan cukup dilakukan di HP.
 function pickerLists(query){
- const people=S.context.people,q=query.trim().toLowerCase();
+ const q=query.trim().toLowerCase(),owner=S.context.device.owner;
  const section=(title,list)=>list.length?`<p class="group">${esc(title)}</p><ul class="list">${list.map(p=>`<li><button data-action="choose" data-id="${esc(p.id)}">${esc(p.name)}<small>${esc([p.position,p.unit].filter(Boolean).join(' · '))}</small></button></li>`).join('')}</ul>`:'';
  const match=p=>!q||p.name.toLowerCase().includes(q);
- const owner=people.filter(p=>p.group==='owner'&&match(p)),recent=people.filter(p=>p.group==='recent'&&match(p)),unit=people.filter(p=>p.group==='unit'&&match(p));
- const html=section('Pemilik HP',owner)+section('Terakhir absen di HP ini',recent)+section(`Unit ${S.context.device.unit?.name||''}`.trim(),unit);
- return html||(q?'':'<p class="muted">Ketik nama untuk mencari.</p>');
+ const html=section('Saya',owner&&match(owner)?[owner]:[])+section('Bawahan langsung',team().filter(match));
+ return html||'<p class="muted">Nama tidak ada di daftar bawahan langsung Anda.</p>';
 }
 function picker(){
  show(`<section class="screen">
-  <h1>Siapa yang absen?</h1>
-  <label class="field">Cari nama<input type="search" data-search autocomplete="off" placeholder="Ketik nama"></label>
-  <div data-search-results></div>
+  <h1>Absen untuk siapa?</h1>
+  <p class="muted small">Dari HP ini Anda bisa absen untuk diri sendiri dan untuk bawahan langsung Anda. Pegawai lain absen di HP sendiri atau di HP atasan langsungnya.</p>
+  ${team().length>6?'<label class="field">Cari nama<input type="search" data-search autocomplete="off" placeholder="Ketik nama"></label>':''}
   <div data-lists>${pickerLists('')}</div>
- </section>`,false,S.person?home:null);
-}
-async function searchPeople(query){
- const box=app.querySelector('[data-search-results]');if(!box)return;
- const q=query.trim();if(q.length<3){box.innerHTML=q?'<p class="muted small">Ketik minimal 3 huruf untuk mencari nama di luar daftar.</p>':'';return;}
- const seq=++S.searchSeq;
- try{
-  const result=await signedRequest(S.device,'search',{query:q});if(seq!==S.searchSeq)return;
-  const known=new Set(S.context.people.map(p=>p.id)),extra=result.people.filter(p=>!known.has(p.id));
-  box.innerHTML=extra.length?`<p class="group">Hasil pencarian</p><ul class="list">${extra.map(p=>`<li><button data-action="choose" data-id="${esc(p.id)}" data-found='${esc(JSON.stringify(p))}'>${esc(p.name)}<small>${esc([p.position,p.unit].filter(Boolean).join(' · '))}</small></button></li>`).join('')}</ul>`:'';
- }catch{}
+ </section>`,false,home);
 }
 function confirmPerson(person){
  show(`<section class="screen">
-  <h1>Absen sebagai</h1>
+  <h1>Absen untuk bawahan langsung</h1>
   <div class="card person"><span class="name">${esc(person.name)}</span><span class="role">${esc([person.position,person.unit].filter(Boolean).join(' · '))}</span></div>
-  <p class="lead">Benar?</p>
+  <p class="lead">Benar? Pastikan orangnya sendiri yang berfoto.</p>
   <button class="primary wide" data-action="confirm-person" data-id="${esc(person.id)}">Ya, benar</button>
  </section>`,true,picker);
  S.candidate=person;
@@ -338,6 +355,8 @@ async function locateAttempt(){
 function captureFailure(error){
  stopCapture();
  const code=error.details?.code;
+ if(error.status===403&&code==='NOT_DIRECT_SUPERVISOR'){notAllowed(error);return;}
+ if(error.status===403&&code==='SHARED_RETIRED'){S.attempt=null;retiredShared(S.context?.device);return;}
  if(error.status===403&&['OUTSIDE_FORBIDDEN','NO_ACTIVE_POINT'].includes(code)){
   // Di luar radius bisa karena GPS melenceng sesaat. Pegawai boleh mengecek lokasi lagi tanpa
   // mengulang dari awal; selfie yang sudah dikonfirmasi dikirim ulang dengan kunci yang sama.
@@ -434,8 +453,9 @@ function success(receipt){
 }
 function done(){
  const d=S.context?.device;
- // Sesudah absen untuk orang lain, kembali ke pemilik HP (HP pribadi) atau ke daftar nama (HP bersama).
- S.person=d?.kind==='PERSONAL'&&d.owner?d.owner:null;S.status=null;
+ // Sesudah atasan mengabsenkan bawahannya, kembali ke pemilik HP supaya absen berikutnya
+ // tidak tercatat atas nama yang salah.
+ S.person=d?.owner||null;S.status=null;
  return home();
 }
 
@@ -453,9 +473,8 @@ app.addEventListener('click',async event=>{
   if(action==='forget'){await forgetDevice();S.device=null;S.context=null;S.person=null;unregistered();return;}
   if(action==='pick'){picker();return;}
   if(action==='choose'){
-   const person=S.context.people.find(p=>p.id===el.dataset.id)||(el.dataset.found?JSON.parse(el.dataset.found):null);if(!person)return;
-   const d=S.context.device;
-   if(d.kind==='PERSONAL'&&d.owner?.id===person.id){S.person=person;await personHome();return;}
+   const person=choices().find(p=>p.id===el.dataset.id);if(!person)return;
+   if(S.context.device.owner?.id===person.id){S.person=person;await personHome();return;}
    confirmPerson(person);return;
   }
   if(action==='confirm-person'){S.person=S.candidate;S.candidate=null;await personHome();return;}
@@ -471,10 +490,7 @@ app.addEventListener('click',async event=>{
 });
 app.addEventListener('input',event=>{
  if(event.target.matches('[data-session-search]')){app.querySelector('[data-session-list]').innerHTML=sessionList(event.target.value);return;}
- if(event.target.matches('[data-search]')){
-  const value=event.target.value;app.querySelector('[data-lists]').innerHTML=pickerLists(value);
-  clearTimeout(S.searchTimer);S.searchTimer=setTimeout(()=>searchPeople(value),400);
- }
+ if(event.target.matches('[data-search]')){app.querySelector('[data-lists]').innerHTML=pickerLists(event.target.value);}
 });
 app.addEventListener('submit',async event=>{
  const form=event.target.closest('[data-paste]');if(!form)return;event.preventDefault();

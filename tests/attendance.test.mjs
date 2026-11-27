@@ -6,7 +6,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {tmpdir} from 'node:os';
 import {resolve,sep} from 'node:path';
 import {openDb,insert,one,all,run,tx,now,today} from '../lib/db.mjs';
-import {seedPermissions,hashPasswordSync,grants,has,can} from '../lib/auth.mjs';
+import {seedPermissions,hashPasswordSync,grants,has,can,digest} from '../lib/auth.mjs';
 import {audit} from '../lib/db.mjs';
 import {attendanceRoutes} from '../lib/attendance.mjs';
 import {attendanceFormRequest,attendanceFormLimits,runAttendanceRetention,attendanceSubmitted,attendanceRetentionDue} from '../lib/attendance-form.mjs';
@@ -74,11 +74,25 @@ async function sign(device,action,payload,ts=Date.now()){
  const bytes=await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},device.keys.privateKey,new TextEncoder().encode(signatureMessage(action,device.id,ts,raw)));
  return {device_id:device.id,ts,sig:Buffer.from(bytes).toString('base64url'),payload:raw};
 }
-async function registerDevice(f,{owner,kind='PERSONAL',unit,label='HP Pos Fiktif',actor=f.users.manager}={}){
- const created=await f.route(actor,'devices','POST',kind==='PERSONAL'?{kind,owner_employee_id:owner.id}:{kind,org_unit_id:unit.id,label});
+async function registerDevice(f,{owner,actor=f.users.manager}={}){
+ const created=await f.route(actor,'devices','POST',{kind:'PERSONAL',owner_employee_id:owner.id});
  const device=await newKeys();
  const r=await f.form('register',{token:created.token,public_key:device.public_key,client_info:'HP fiktif'});
  device.id=r.device_id;device.row=created.device;
+ return device;
+}
+// HP bersama yang terdaftar sebelum 27 Nov 2026 (portal tidak bisa membuatnya lagi):
+// baris aktif dengan kunci HP, atau tautan pendaftaran yang belum dibuka.
+async function legacySharedDevice(f,{unit=f.units.field,label='HP Pos Lama',token=null}={}){
+ if(token){
+  const row=insert(f.db,'attendance_devices',{kind:'SHARED',org_unit_id:unit.id,label,status:'PENDING',registration_token_hash:digest(token),
+   registration_expires_at:new Date(Date.now()+DAY).toISOString(),created_by:null});
+  return {row};
+ }
+ const device=await newKeys(),key=cleanPublicKey(device.public_key);
+ const row=insert(f.db,'attendance_devices',{kind:'SHARED',org_unit_id:unit.id,label,status:'ACTIVE',public_key:JSON.stringify(key),key_thumbprint:keyThumbprint(key),
+  activated_at:now(),created_by:null});
+ device.id=row.id;device.row=row;
  return device;
 }
 const submission=(employee,kind='IN',extra={})=>({client_key:randomUUID(),employee_id:employee.id,kind,location:{...POINT,accuracy:12,age_ms:1500},photo:{mime_type:'image/jpeg',data:jpeg.toString('base64'),age_ms:2000},...extra});
@@ -188,13 +202,15 @@ test('personal phone: single-use WhatsApp link, owner phone for wa.me, coordinat
  assert.equal(second.phone,'','nomor tidak tercatat');
  await assert.rejects(f.form('register',{token:second.token,public_key:keys.public_key}),errorWith(409),'satu kunci untuk satu pendaftaran');
  await assert.rejects(f.form('register',{token:second.token,public_key:{...keys.public_key,x:'bukan'}}),errorWith(422));
- const shared=await f.route(f.users.coordinator,'devices','POST',{kind:'SHARED',org_unit_id:f.units.field.id,label:'HP Pos Fiktif 3'});
- assert.equal(shared.phone,'');await assert.rejects(f.route(f.users.coordinator,'devices','POST',{kind:'SHARED',org_unit_id:f.units.other.id,label:'HP Lain'}),errorWith(403));
+ for(const actor of [f.users.coordinator,f.users.manager,f.users.admin])
+  await assert.rejects(f.route(actor,'devices','POST',{kind:'SHARED',org_unit_id:f.units.field.id,label:'HP Pos Fiktif 3'}),e=>e.status===422&&/HP bersama tidak dipakai lagi/.test(e.message),'HP bersama tidak bisa didaftarkan lagi');
+ await assert.rejects(f.route(f.users.manager,'devices','POST',{kind:'LAIN',owner_employee_id:f.e.guard.id}),errorWith(422));
  const list=await f.route(f.users.coordinator,'devices');
- assert.deepEqual(list.devices.map(d=>d.label).sort(),['HP Pos Fiktif 3','HP pribadi Petugas Fiktif'],'koordinator hanya melihat HP unitnya');
- assert.equal((await f.route(f.users.manager,'devices')).devices.length,3);
+ assert.deepEqual(list.devices.map(d=>d.label).sort(),['HP pribadi Petugas Fiktif'],'koordinator hanya melihat HP unitnya');
+ assert.equal((await f.route(f.users.manager,'devices')).devices.length,2);
  const audits=all(f.db,"SELECT action FROM audit_events WHERE object_type='attendance_devices' ORDER BY occurred_at").map(a=>a.action);
- assert(audits.includes('ACTIVATE')&&audits.filter(a=>a==='CREATE').length===3);
+ assert(audits.includes('ACTIVATE')&&audits.filter(a=>a==='CREATE').length===2);
+ assert.equal(one(f.db,"SELECT count(*) n FROM attendance_devices WHERE kind='SHARED'").n,0);
 });
 test('signed requests: unknown devices, bad signatures and clock skew are refused; CLOCK carries server time',async t=>{
  const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});
@@ -208,17 +224,28 @@ test('signed requests: unknown devices, bad signatures and clock skew are refuse
  const other=await newKeys();other.id=device.id;
  await assert.rejects(f.form('context',await sign(other,'context',{})),errorWith(401),'kunci lain untuk ID yang sama');
 });
-test('shared and personal phones: owner first, recent and unit names, server search from 3 letters',async t=>{
- const f=fixture(t),personal=await registerDevice(f,{owner:f.e.guard}),shared=await registerDevice(f,{kind:'SHARED',unit:f.units.field});
- const mine=await f.form('context',await sign(personal,'context',{}));
- assert.deepEqual(mine.people[0],{id:f.e.guard.id,name:'Petugas Fiktif',position:'Petugas Fiktif',unit:'Pos Fiktif',group:'owner'});
+test('names on a personal phone: the owner, then only the owner’s direct reports; search stays inside that list',async t=>{
+ const f=fixture(t),guardPhone=await registerDevice(f,{owner:f.e.guard}),staffPhone=await registerDevice(f,{owner:f.e.staff}),bossPhone=await registerDevice(f,{owner:f.e.boss});
+ const context=async (device,payload={people_format:'direct-reports'})=>f.form('context',await sign(device,'context',payload));
+ const names=result=>result.people.map(p=>[p.name,p.group]);
+ const mine=await context(guardPhone);
+ assert.deepEqual(mine.people,[{id:f.e.guard.id,name:'Petugas Fiktif',position:'Petugas Fiktif',unit:'Pos Fiktif',group:'owner'}],'tanpa bawahan: hanya pemilik');
  assert(!JSON.stringify(mine).includes('FX-'),'nomor pegawai tidak dikirim ke HP');
- const pos=await f.form('context',await sign(shared,'context',{}));
- assert.deepEqual(pos.people.map(p=>p.name).sort(),['Pekerja Harian Fiktif','Petugas Dua Fiktif','Petugas Fiktif']);assert(pos.people.every(p=>p.group==='unit'));
- assert.equal(pos.points_ready,false);
- await assert.rejects(f.form('search',await sign(shared,'search',{query:'pe'})),errorWith(422));
- const found=await f.form('search',await sign(shared,'search',{query:'lain'}));assert.deepEqual(found.people.map(p=>p.name),['Pegawai Lain Fiktif'],'menumpang di HP unit lain lewat pencarian');
- const status=await f.form('person',await sign(shared,'person',{employee_id:f.e.other.id}));assert.deepEqual([status.suggested,status.open_since],['IN',null]);
+ assert.equal(mine.points_ready,false);
+ assert.deepEqual(names(await context(staffPhone)),[['Staf Fiktif','owner'],['Pekerja Harian Fiktif','team'],['Petugas Dua Fiktif','team'],['Petugas Fiktif','team']]);
+ assert.deepEqual(names(await context(bossPhone)),[['Atasan Fiktif','owner'],['Staf Fiktif','team']],'bawahan tidak langsung tidak ikut');
+ assert.deepEqual(names(await context(staffPhone,{})),[['Staf Fiktif','owner'],['Pekerja Harian Fiktif','unit'],['Petugas Dua Fiktif','unit'],['Petugas Fiktif','unit']],'pemilih lama hanya merender grup owner, recent, dan unit');
+ // Pencarian (dipakai HP versi lama) hanya mengembalikan nama dari daftar itu.
+ await assert.rejects(f.form('search',await sign(staffPhone,'search',{query:'pe'})),errorWith(422));
+ assert.deepEqual((await f.form('search',await sign(staffPhone,'search',{query:'fiktif'}))).people.map(p=>p.name),['Pekerja Harian Fiktif','Petugas Dua Fiktif','Petugas Fiktif','Staf Fiktif']);
+ assert.deepEqual((await f.form('search',await sign(staffPhone,'search',{query:'lain'}))).people,[],'pegawai lain tidak bisa dicari');
+ assert.deepEqual((await f.form('search',await sign(guardPhone,'search',{query:'petugas'}))).people.map(p=>p.name),['Petugas Fiktif'],'rekan satu unit tidak bisa dicari');
+ // Daftar mengikuti penempatan utama yang berlaku: pindah atasan, nonaktif, dan penempatan ganda.
+ run(f.db,'UPDATE employee_placements SET supervisor_employee_id=? WHERE employee_id=?',f.e.boss.id,f.e.guard2.id);
+ run(f.db,'UPDATE employees SET is_active=0 WHERE id=?',f.e.guard.id);
+ insert(f.db,'employee_placements',{employee_id:f.e.thl.id,position_id:f.positions.guard2.id,supervisor_employee_id:f.e.staff.id,valid_from:'2020-01-01',is_primary:1});
+ assert.deepEqual(names(await context(staffPhone)),[['Staf Fiktif','owner']]);
+ assert.deepEqual(names(await context(bossPhone)),[['Atasan Fiktif','owner'],['Petugas Dua Fiktif','team'],['Staf Fiktif','team']]);
 });
 test('registration session: many phones at once, approval by coordinator, duplicates visible, closing rejects the rest',async t=>{
  const f=fixture(t);
@@ -245,7 +272,7 @@ test('registration session: many phones at once, approval by coordinator, duplic
 });
 test('re-registering the same phone revokes the old registration only with proof of the old key',async t=>{
  const f=fixture(t),old=await registerDevice(f,{owner:f.e.guard});
- const next=await f.route(f.users.manager,'devices','POST',{kind:'SHARED',org_unit_id:f.units.field.id,label:'HP Pos Baru'});
+ const next=await f.route(f.users.manager,'devices','POST',{kind:'PERSONAL',owner_employee_id:f.e.staff.id});
  const keys=await newKeys();
  await assert.rejects(f.form('register',{token:next.token,public_key:keys.public_key,replaces:await sign(old,'replace',{token:'0'.repeat(64)})}),errorWith(400),'bukti terikat ke tautan baru');
  const r=await f.form('register',{token:next.token,public_key:keys.public_key,replaces:await sign(old,'replace',{token:next.token})});
@@ -277,36 +304,107 @@ test('lost replies: the same link and the same key give the same phone back; oth
 });
 test('re-registering with proof from a phone the server does not know (restored backup) is allowed; known phones still need their key',async t=>{
  const f=fixture(t),known=await registerDevice(f,{owner:f.e.guard});
- const link=await f.route(f.users.manager,'devices','POST',{kind:'SHARED',org_unit_id:f.units.field.id,label:'HP Pos Pulih'});
+ const link=await f.route(f.users.manager,'devices','POST',{kind:'PERSONAL',owner_employee_id:f.e.staff.id});
  const preview=await f.form('registration',{token:link.token});assert(Number.isFinite(Date.parse(preview.server_time)),'jam server untuk menandatangani bukti');
  const ghost=await newKeys();ghost.id=randomUUID();
  const keys=await newKeys(),r=await f.form('register',{token:link.token,public_key:keys.public_key,replaces:await sign(ghost,'replace',{token:link.token})});
  assert.equal(r.status,'ACTIVE');
- const next=await f.route(f.users.manager,'devices','POST',{kind:'SHARED',org_unit_id:f.units.field.id,label:'HP Pos Lain'});
+ const next=await f.route(f.users.manager,'devices','POST',{kind:'PERSONAL',owner_employee_id:f.e.thl.id});
  const impostor=await newKeys();impostor.id=known.id;
  await assert.rejects(f.form('register',{token:next.token,public_key:(await newKeys()).public_key,replaces:await sign(impostor,'replace',{token:next.token})}),errorWith(401),'ID HP yang dikenal tanpa kuncinya');
  assert.equal(one(f.db,'SELECT status FROM attendance_devices WHERE id=?',known.id).status,'ACTIVE');
  const session=await f.route(f.users.manager,'sessions','POST',{org_unit_id:f.units.field.id,minutes:10});
  assert(Number.isFinite(Date.parse((await f.form('session',{token:session.token})).server_time)));
 });
-test('person status: times only for the owner on their own phone; borrowers and shared phones see the state only',async t=>{
- const f=fixture(t),personal=await registerDevice(f,{owner:f.e.guard}),shared=await registerDevice(f,{kind:'SHARED',unit:f.units.field});await addPoint(f);
+test('person status: times only for the owner on their own phone; a supervisor checking in a direct report sees the state only',async t=>{
+ const f=fixture(t),personal=await registerDevice(f,{owner:f.e.guard}),supervisor=await registerDevice(f,{owner:f.e.staff});await addPoint(f);
  const day=yesterday(),inAt=wita(day,'07:58'),outAt=wita(day,'16:03');
  const status=async(device,employee,nowMs)=>f.form('person',await sign(device,'person',{employee_id:employee.id},nowMs),{nowMs});
- await submit(f,shared,submission(f.e.guard),inAt);
+ await submit(f,supervisor,submission(f.e.guard),inAt);
  const morning=wita(day,'09:00');
  const own=await status(personal,f.e.guard,morning);
  assert.deepEqual([own.suggested,own.state,own.open_since],['OUT','OPEN',new Date(inAt).toISOString()]);
- const borrowed=await status(shared,f.e.guard,morning);
- assert.deepEqual([borrowed.suggested,borrowed.state,borrowed.open_since,borrowed.last_today],['OUT','OPEN',null,null]);
- const friend=await status(personal,f.e.thl,morning);
- assert.deepEqual([friend.suggested,friend.state,friend.open_since,friend.last_today],['IN','NONE',null,null]);
- await submit(f,shared,submission(f.e.guard,'OUT'),outAt);
+ const byBoss=await status(supervisor,f.e.guard,morning);
+ assert.deepEqual([byBoss.suggested,byBoss.state,byBoss.open_since,byBoss.last_today],['OUT','OPEN',null,null]);
+ const team=await status(supervisor,f.e.thl,morning);
+ assert.deepEqual([team.suggested,team.state,team.open_since,team.last_today],['IN','NONE',null,null]);
+ await submit(f,supervisor,submission(f.e.guard,'OUT'),outAt);
  const evening=wita(day,'17:00');
- const after=await status(shared,f.e.guard,evening);
+ const after=await status(supervisor,f.e.guard,evening);
  assert.deepEqual([after.suggested,after.state,after.open_since,after.last_today],['IN','DONE',null,null]);
  const mine=await status(personal,f.e.guard,evening);
  assert.deepEqual([mine.state,mine.last_today.kind,mine.last_today.recorded_at],['DONE','OUT',new Date(outAt).toISOString()]);
+ await assert.rejects(status(personal,f.e.thl,evening),errorWith(403,'NOT_DIRECT_SUPERVISOR'),'rekan kerja tidak bisa mengabsenkan');
+});
+
+/* ---------- Absen untuk orang lain: hanya atasan langsung ---------- */
+test('only the direct supervisor can check someone else in, from the supervisor’s own phone',async t=>{
+ const f=fixture(t),colleague=await registerDevice(f,{owner:f.e.guard}),supervisor=await registerDevice(f,{owner:f.e.staff}),indirect=await registerDevice(f,{owner:f.e.boss});
+ await addPoint(f);
+ const day=yesterday(),at=c=>wita(day,c);
+ const refused=errorWith(403,'NOT_DIRECT_SUPERVISOR');
+ const attempts=async(device,employee)=>{
+  await assert.rejects(f.form('person',await sign(device,'person',{employee_id:employee.id})),refused);
+  await assert.rejects(f.form('check-location',await sign(device,'check-location',{employee_id:employee.id,location:submission(employee).location})),refused);
+  await assert.rejects(submit(f,device,submission(employee),at('08:00')),refused);
+ };
+ await attempts(colleague,f.e.thl);       // rekan satu unit, atasannya sama
+ await attempts(indirect,f.e.guard);      // atasan tidak langsung
+ await attempts(supervisor,f.e.boss);     // atasan dari pemilik HP
+ await attempts(supervisor,f.e.other);    // pegawai unit lain
+ assert.equal(f.photos.log.length,0,'selfie tidak diunggah sebelum hak dicek');
+ assert.equal(one(f.db,'SELECT count(*) n FROM attendance_events').n,0);
+ // Atasan langsung: tercatat atas nama bawahannya, lewat HP atasan.
+ const receipt=await submit(f,supervisor,submission(f.e.thl),at('08:05'));
+ assert.deepEqual([receipt.employee.name,receipt.kind,receipt.duplicate],['Pekerja Harian Fiktif','IN',false]);
+ assert.equal(one(f.db,'SELECT device_id FROM attendance_events WHERE id=?',receipt.event_id).device_id,supervisor.id);
+ // Pemilik HP tetap bisa absen untuk dirinya sendiri, termasuk atasan.
+ assert.equal((await submit(f,supervisor,submission(f.e.staff),at('08:06'))).employee.name,'Staf Fiktif');
+ assert.equal((await submit(f,colleague,submission(f.e.guard),at('08:07'))).employee.name,'Petugas Fiktif');
+ // Penempatan utama ganda: atasan langsung tidak pasti, jadi tidak bisa diabsenkan dari HP orang lain.
+ insert(f.db,'employee_placements',{employee_id:f.e.guard2.id,position_id:f.positions.guard.id,supervisor_employee_id:f.e.staff.id,valid_from:'2020-01-01',is_primary:1});
+ await assert.rejects(submit(f,supervisor,submission(f.e.guard2),at('08:10')),refused);
+ // Hak diperiksa ulang saat absen dicatat: atasan berganti selagi selfie diunggah → ditolak, selfie dibuang.
+ const moving=submission(f.e.guard);
+ f.photos.onPut=()=>{run(f.db,'UPDATE employee_placements SET supervisor_employee_id=? WHERE employee_id=?',f.e.boss.id,f.e.guard.id);};
+ await assert.rejects(submit(f,supervisor,moving,at('08:15')),refused);
+ f.photos.onPut=null;
+ assert.deepEqual(f.photos.log.slice(-2).map(([op])=>op),['put','discard']);
+ assert.equal(one(f.db,'SELECT count(*) n FROM attendance_events').n,3);
+ // Absen yang sudah tercatat tetap dikenali bila kirimannya diulang sesudah atasan berganti.
+ run(f.db,'UPDATE employee_placements SET supervisor_employee_id=? WHERE employee_id=?',f.e.boss.id,f.e.thl.id);
+ const thlIn=one(f.db,'SELECT client_key FROM attendance_events WHERE id=?',receipt.event_id).client_key;
+ const again=await submit(f,supervisor,{...submission(f.e.thl),client_key:thlIn},at('08:20'));
+ assert.deepEqual([again.event_id,again.duplicate],[receipt.event_id,true]);
+ await assert.rejects(submit(f,supervisor,submission(f.e.thl,'OUT'),at('16:00')),refused,'absen baru mengikuti atasan yang berlaku');
+});
+test('shared phones are retired: no use, no new registrations or links; the phone can be re-registered as a personal phone',async t=>{
+ const f=fixture(t),shared=await legacySharedDevice(f);await addPoint(f);
+ const retired=errorWith(403,'SHARED_RETIRED');
+ const context=await f.form('context',await sign(shared,'context',{}));
+ assert.deepEqual([context.device.kind,context.device.status,context.device.retired,context.people],['SHARED','REVOKED',true,undefined]);
+ assert.equal(attendanceRetentionDue('context',context),false);
+ await assert.rejects(f.form('person',await sign(shared,'person',{employee_id:f.e.guard.id})),retired);
+ await assert.rejects(f.form('search',await sign(shared,'search',{query:'fiktif'})),retired);
+ await assert.rejects(f.form('check-location',await sign(shared,'check-location',{employee_id:f.e.guard.id,location:submission(f.e.guard).location})),retired);
+ await assert.rejects(submit(f,shared,submission(f.e.guard)),retired);
+ assert.equal(f.photos.log.length,0);assert.equal(one(f.db,'SELECT count(*) n FROM attendance_events').n,0);
+ // Tautan HP bersama yang dibuat sebelumnya tidak bisa dipakai mendaftar.
+ const token='c'.repeat(64),{row:pending}=await legacySharedDevice(f,{label:'HP Pos Belum Dibuka',token});
+ await assert.rejects(f.form('registration',{token}),e=>e.status===404&&/HP bersama/.test(e.message));
+ await assert.rejects(f.form('register',{token,public_key:(await newKeys()).public_key}),e=>e.status===404&&/HP bersama/.test(e.message));
+ assert.equal(one(f.db,'SELECT status FROM attendance_devices WHERE id=?',pending.id).status,'PENDING');
+ // Portal: tetap tampil (riwayat), ditandai tidak dipakai, tanpa tautan baru, tetap bisa dinonaktifkan.
+ const list=(await f.route(f.users.manager,'devices')).devices,row=id=>list.find(d=>d.id===id);
+ assert.deepEqual([row(shared.id).retired,row(pending.id).retired],[true,true]);
+ await assert.rejects(f.route(f.users.manager,`devices/${pending.id}/link`,'POST',{row_version:row(pending.id).row_version}),e=>e.status===409&&/HP bersama/.test(e.message));
+ await f.route(f.users.manager,`devices/${pending.id}/revoke`,'POST',{row_version:row(pending.id).row_version,reason:'HP bersama tidak dipakai lagi'});
+ // HP yang sama didaftarkan ulang sebagai HP pribadi koordinator: pendaftaran bersama dicabut.
+ const link=await f.route(f.users.manager,'devices','POST',{kind:'PERSONAL',owner_employee_id:f.e.staff.id});
+ const keys=await newKeys(),r=await f.form('register',{token:link.token,public_key:keys.public_key,replaces:await sign(shared,'replace',{token:link.token})});
+ keys.id=r.device_id;
+ assert.equal(one(f.db,'SELECT status FROM attendance_devices WHERE id=?',shared.id).status,'REVOKED');
+ assert.equal((await submit(f,keys,submission(f.e.guard))).employee.name,'Petugas Fiktif','bawahan langsung koordinator');
 });
 
 /* ---------- Absen ---------- */
@@ -329,7 +427,7 @@ test('check-in and check-out: inside the point, paired by the server, selfie sto
  assert.equal(one(f.db,'SELECT last_seen_at FROM attendance_devices WHERE id=?',device.id).last_seen_at,new Date(outAt).toISOString());
 });
 test('night shift: check-out after midnight belongs to the check-in work date',async t=>{
- const f=fixture(t),device=await registerDevice(f,{kind:'SHARED',unit:f.units.field});await addPoint(f);
+ const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});await addPoint(f);
  const day=shiftDay(today(),-2),inAt=wita(day,'21:00'),outAt=wita(shiftDay(day,1),'05:30');
  await submit(f,device,submission(f.e.guard),inAt);const out=await submit(f,device,submission(f.e.guard,'OUT'),outAt);
  assert.equal(out.work_date,day);
@@ -463,7 +561,8 @@ test('Pelayanan Internal: kepala urusan dan koordinator mengikuti kalender Sekre
  ]);
 });
 test('outside access is explicit per employee, applies to both directions, and can be revoked',async t=>{
- const f=fixture(t),device=await registerDevice(f,{owner:f.e.other});await addPoint(f);
+ // HP atasan langsung: izin mengikuti pegawai yang diabsenkan, bukan pemilik HP.
+ const f=fixture(t),device=await registerDevice(f,{owner:f.e.staff});await addPoint(f);
  const far={latitude:-8.3700,longitude:115.4512,accuracy:15,age_ms:1000},outside={reason:'TUGAS_LAPANGAN',note:'Patroli fiktif'};
  const access=(actor,employee,allowed,version)=>f.route(actor,'outside-access/'+employee.id,'PATCH',{allowed,version});
  const check=async(employee,location)=>f.form('check-location',await sign(device,'check-location',{employee_id:employee.id,location}));
@@ -474,7 +573,7 @@ test('outside access is explicit per employee, applies to both directions, and c
  for(const actor of [f.users.guard,f.users.staff,f.users.coordinator,f.users.it]){
   await assert.rejects(access(actor,f.e.guard,true,0),errorWith(403));
  }
- await access(f.users.manager,f.e.other,true,0);
+ await access(f.users.manager,f.e.staff,true,0);
  await assert.rejects(check(f.e.guard,far),errorWith(403,'OUTSIDE_FORBIDDEN'));
  for(const kind of ['IN','OUT']){
   for(const reason of [undefined,{reason:'DINAS_LUAR'},outside,{reason:'LAINNYA',note:'Alasan uji'}]){
@@ -521,8 +620,8 @@ test('existing installations preserve earlier reasons when permitting the system
   assert.equal(upgraded.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
  }finally{upgraded.close();}
 });
-test('flags: no point yet, weak GPS, impossible jump, crowded personal phone, check-out without check-in',async t=>{
- const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});
+test('flags: no point yet, weak GPS, impossible jump, check-out without check-in; a supervisor checking in the team is not flagged as crowded',async t=>{
+ const f=fixture(t),device=await registerDevice(f,{owner:f.e.staff}),own=await registerDevice(f,{owner:f.e.other});
  const day=yesterday(),at=c=>wita(day,c);
  const outside={reason:'DINAS_LUAR'};
  await assert.rejects(submit(f,device,submission(f.e.guard,'IN',{outside})),errorWith(403,'NO_ACTIVE_POINT'));
@@ -534,10 +633,10 @@ test('flags: no point yet, weak GPS, impossible jump, crowded personal phone, ch
  const r2=await submit(f,device,{...submission(f.e.guard,'OUT'),outside,location:{latitude:-8.80,longitude:115.4512,accuracy:20,age_ms:1000}},at('07:10'));
  assert.equal(one(f.db,'SELECT outside_reason FROM attendance_events WHERE id=?',r2.event_id).outside_reason,'IZIN_LUAR_AREA','isian alasan dari klien lama diabaikan');
  assert(parseFlags(one(f.db,'SELECT flags FROM attendance_events WHERE id=?',r2.event_id).flags).includes('LOKASI_MELOMPAT'));
- for(const [i,e] of [f.e.staff,f.e.boss,f.e.guard2].entries())await submit(f,device,submission(e),at(`08:0${i}`));
- const r3=await submit(f,device,submission(f.e.thl),at('08:05'));
- assert(parseFlags(one(f.db,'SELECT flags FROM attendance_events WHERE id=?',r3.event_id).flags).includes('HP_PRIBADI_RAMAI'),'4 orang dalam 10 menit di HP pribadi');
- const r4=await submit(f,device,submission(f.e.other,'OUT'),at('17:00'));
+ // Atasan mengabsenkan dirinya dan tiga bawahan langsung dalam 10 menit: tidak ada tanda ramai.
+ const team=[];for(const [i,e] of [f.e.staff,f.e.guard2,f.e.thl,f.e.guard].entries())team.push(await submit(f,device,submission(e),at(`08:0${i}`)));
+ for(const r of team)assert(!parseFlags(one(f.db,'SELECT flags FROM attendance_events WHERE id=?',r.event_id).flags).includes('HP_PRIBADI_RAMAI'),r.employee.name);
+ const r4=await submit(f,own,submission(f.e.other,'OUT'),at('17:00'));
  assert(parseFlags(one(f.db,'SELECT flags FROM attendance_events WHERE id=?',r4.event_id).flags).includes('TANPA_MASUK'));
 });
 test('submission checks: camera JPEG only, fresh selfie and location, size limit',async t=>{
@@ -587,12 +686,14 @@ test('rate limits per IP and per phone',async t=>{
 });
 
 /* ---------- Portal: cakupan, rekap, koreksi ---------- */
+// Satu hari kerja: atasan langsung (Staf) mengabsenkan dua bawahannya dari HP-nya,
+// pegawai unit lain absen di HP-nya sendiri.
 async function attendanceDay(f){
- const device=await registerDevice(f,{kind:'SHARED',unit:f.units.field});await addPoint(f);
+ const device=await registerDevice(f,{owner:f.e.staff}),own=await registerDevice(f,{owner:f.e.other});await addPoint(f);
  const day=yesterday();
  await submit(f,device,submission(f.e.guard),wita(day,'07:50'));await submit(f,device,submission(f.e.guard,'OUT'),wita(day,'16:10'));
  await submit(f,device,submission(f.e.thl),wita(day,'08:20'));
- await submit(f,device,submission(f.e.other),wita(day,'08:00'));
+ await submit(f,own,submission(f.e.other),wita(day,'08:00'));
  return {device,day};
 }
 test('scope: employees see themselves, supervisors their reporting line, unit readers their units, managers everyone',async t=>{
@@ -615,12 +716,12 @@ test('scope: employees see themselves, supervisors their reporting line, unit re
  assert.equal(detail.employees.find(r=>r.employee.id===f.e.thl.id).days[0].status,'TANPA_PULANG');
  await assert.rejects(f.route(f.users.manager,'recap','GET',{},`from=${shiftDay(day,-70)}&to=${day}`),errorWith(422));
 });
-test('today: live status for the reporting line, borrowed phones visible',async t=>{
- const f=fixture(t),own=await registerDevice(f,{owner:f.e.guard2});await addPoint(f);
- await submit(f,own,submission(f.e.guard));
+test('today: live status for the reporting line, check-ins from the supervisor’s phone visible',async t=>{
+ const f=fixture(t),supervisor=await registerDevice(f,{owner:f.e.staff});await addPoint(f);
+ await submit(f,supervisor,submission(f.e.guard));
  const rows=(await f.route(f.users.staff,'today')).rows;
  const guard=rows.find(r=>r.employee.id===f.e.guard.id);
- assert.equal(guard.status,'BELUM_PULANG');assert.equal(guard.last_event.device.borrowed,true);assert.equal(guard.last_event.device.label,'HP pribadi Petugas Dua Fiktif');
+ assert.equal(guard.status,'BELUM_PULANG');assert.equal(guard.last_event.device.borrowed,true);assert.equal(guard.last_event.device.label,'HP pribadi Staf Fiktif');
  assert.equal(rows.find(r=>r.employee.id===f.e.thl.id).status,'TIDAK_ADA_CATATAN');
  assert.equal(guard.can_manage,true);assert.equal(rows.find(r=>r.employee.id===f.e.staff.id).can_manage,false,'tidak mengoreksi absen sendiri');
 });
@@ -729,7 +830,7 @@ test('retention runs after new check-ins and when the absen page opens on an act
  assert.equal(attendanceRetentionDue('context',{device:{status:'ACTIVE'}}),true);
  for(const status of ['PENDING','REVOKED','REJECTED'])assert.equal(attendanceRetentionDue('context',{device:{status}}),false,status);
  for(const action of ['person','search','registration','register'])assert.equal(attendanceRetentionDue(action,{device:{status:'ACTIVE'},duplicate:false}),false,action);
- const f=fixture(t),device=await registerDevice(f,{kind:'SHARED',unit:f.units.field});await addPoint(f);
+ const f=fixture(t),device=await registerDevice(f,{owner:f.e.guard});await addPoint(f);
  const old=Date.now()-91*DAY;await submit(f,device,submission(f.e.guard),old);
  let overview=await f.route(f.users.manager,'overview');
  assert.deepEqual([overview.retention.due_photos,overview.retention.deleted_photos,overview.retention.last_run_at],[1,0,null]);

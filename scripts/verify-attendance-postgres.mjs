@@ -16,7 +16,7 @@ import {randomUUID} from 'node:crypto';
 import {insert,one,all,run,now,audit} from '../supabase/functions/_shared/portal/db.mjs';
 import {has,can} from '../supabase/functions/_shared/portal/auth.mjs';
 import {attendanceRoutes} from '../supabase/functions/_shared/portal/attendance.mjs';
-import {signatureMessage,witaDate,shiftDay} from '../supabase/functions/_shared/portal/attendance-rules.mjs';
+import {signatureMessage,witaDate,shiftDay,cleanPublicKey,keyThumbprint} from '../supabase/functions/_shared/portal/attendance-rules.mjs';
 import {driveFixture} from '../tests/helpers/drive-fixture.mjs';
 
 const {PGlite}=await import(pathToFileURL(resolve(process.argv[2]||'/tmp/pglite/node_modules/@electric-sql/pglite/dist/index.js')).href);
@@ -101,25 +101,56 @@ try{
   const sign=async(device,action,payload,ts=Date.now())=>{const raw=JSON.stringify(payload);const sig=Buffer.from(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},device.keys.privateKey,new TextEncoder().encode(signatureMessage(action,device.id,ts,raw)))).toString('base64url');return {device_id:device.id,ts,sig,payload:raw};};
   const submission=(employee,kind='IN',extra={})=>({client_key:randomUUID(),employee_id:employee.id,kind,location:{...POINT,accuracy:10,age_ms:1000},photo:{mime_type:'image/jpeg',data:jpeg.toString('base64'),age_ms:1000},...extra});
 
-  const created=await route(coordinator,'devices','POST',{kind:'SHARED',org_unit_id:field.id,label:'HP Pos Fiktif'});
+  // HP pribadi atasan: atasan absen untuk dirinya dan mengabsenkan kedua bawahan langsungnya.
+  const created=await route(manager,'devices','POST',{kind:'PERSONAL',owner_employee_id:people.boss.id});
   const device=await keysFor();
-  await check('registration through the packaged Edge function activates a shared phone once',async()=>{
-    let r=await invoke('registration',{token:created.token});assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.result.label,'HP Pos Fiktif');
+  await check('registration through the packaged Edge function activates the supervisor’s personal phone once',async()=>{
+    let r=await invoke('registration',{token:created.token});assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.result.label,'HP pribadi Atasan Fiktif');
     r=await invoke('register',{token:created.token,public_key:device.public_key,client_info:'Android fiktif'});assert.equal(r.status,200,JSON.stringify(r.data));
     device.id=r.data.result.device_id;assert.equal(r.data.result.status,'ACTIVE');
     // Balasan hilang: kiriman ulang dengan tautan dan kunci yang sama mendapat HP yang sama.
     const again=await invoke('register',{token:created.token,public_key:device.public_key,client_info:'Android fiktif'});
     assert.deepEqual([again.status,again.data.result.device_id,again.data.result.recovered],[200,device.id,true]);
     assert.equal((await invoke('register',{token:created.token,public_key:(await keysFor()).public_key})).status,404);
-    const ctx=await invoke('context',await sign(device,'context',{}));assert.equal(ctx.status,200);
-    assert.deepEqual(ctx.data.result.people.map(p=>p.name).sort(),['Pekerja Harian Fiktif','Petugas Fiktif']);
+    const ctx=await invoke('context',await sign(device,'context',{people_format:'direct-reports'}));assert.equal(ctx.status,200);
+    assert.deepEqual(ctx.data.result.people.map(p=>[p.name,p.group]),[['Atasan Fiktif','owner'],['Pekerja Harian Fiktif','team'],['Petugas Fiktif','team']]);
     assert.equal(background.length,1,'membuka halaman absen di HP aktif juga menjadwalkan retensi');await Promise.all(background.splice(0));
+    const oldClient=await invoke('context',await sign(device,'context',{}));
+    assert.equal(oldClient.status,200);
+    assert.deepEqual(oldClient.data.result.people.map(p=>[p.name,p.group]),[['Atasan Fiktif','owner'],['Pekerja Harian Fiktif','unit'],['Petugas Fiktif','unit']]);
+    await Promise.all(background.splice(0));
     const person=await invoke('person',await sign(device,'person',{employee_id:people.guard.id}));
-    assert.deepEqual([person.data.result.state,person.data.result.open_since,person.data.result.last_today],['NONE',null,null],'HP bersama tanpa jam orang lain');
+    assert.deepEqual([person.data.result.state,person.data.result.open_since,person.data.result.last_today],['NONE',null,null],'atasan tanpa jam bawahannya');
     assert.equal(background.length,0);
     const skew=await invoke('context',await sign(device,'context',{},Date.now()-11*60000));
     assert.equal(skew.status,401);assert.equal(skew.data.details.code,'CLOCK');assert(Number.isFinite(Date.parse(skew.data.details.server_time)));
     assert(!statements.some(s=>s.includes(globalLock)));
+  });
+  await check('packaged Edge: only the direct supervisor checks someone else in; shared phones are refused',async()=>{
+    // HP pribadi rekan kerja (bukan atasan): hanya pemiliknya.
+    const link=await route(coordinator,'devices','POST',{kind:'PERSONAL',owner_employee_id:people.guard.id});
+    const colleague=await keysFor();
+    const r=await invoke('register',{token:link.token,public_key:colleague.public_key});assert.equal(r.status,200,JSON.stringify(r.data));colleague.id=r.data.result.device_id;
+    const own=await invoke('context',await sign(colleague,'context',{}));
+    assert.deepEqual(own.data.result.people.map(p=>[p.name,p.group]),[['Petugas Fiktif','owner']]);
+    await Promise.all(background.splice(0));driveCalls.length=0;
+    for(const [action,payload] of [['person',{employee_id:people.thl.id}],['check-location',{employee_id:people.thl.id,location:submission(people.thl).location}],['submit',submission(people.thl)]]){
+      const refused=await invoke(action,await sign(colleague,action,payload));
+      assert.deepEqual([refused.status,refused.data.details?.code],[403,'NOT_DIRECT_SUPERVISOR'],action);
+    }
+    const search=await invoke('search',await sign(colleague,'search',{query:'fiktif'}));
+    assert.deepEqual(search.data.result.people.map(p=>p.name),['Petugas Fiktif'],'pencarian tidak membuka nama lain');
+    // HP bersama: tidak bisa didaftarkan lagi; yang lama ditolak tanpa unggah selfie.
+    await assert.rejects(route(manager,'devices','POST',{kind:'SHARED',org_unit_id:field.id,label:'HP Pos Fiktif'}),e=>e.status===422);
+    const legacy=await keysFor(),key=cleanPublicKey(legacy.public_key);
+    legacy.id=(await insert(db,'attendance_devices',{kind:'SHARED',org_unit_id:field.id,label:'HP Pos Lama',status:'ACTIVE',public_key:JSON.stringify(key),key_thumbprint:keyThumbprint(key),activated_at:now(),created_by:null})).id;
+    const retired=await invoke('context',await sign(legacy,'context',{}));
+    assert.deepEqual([retired.status,retired.data.result.device.status,retired.data.result.device.retired,retired.data.result.people],[200,'REVOKED',true,undefined]);
+    assert.equal(background.length,0,'HP bersama tidak menjadwalkan retensi');
+    const blocked=await invoke('submit',await sign(legacy,'submit',submission(people.guard)));
+    assert.deepEqual([blocked.status,blocked.data.details?.code],[403,'SHARED_RETIRED']);
+    assert.equal(driveCalls.length,0,'selfie tidak diunggah');
+    assert.equal((await one(db,'SELECT count(*)::int n FROM attendance_events')).n,0);
   });
   await route(manager,'points','POST',{name:'Titik Kantor Fiktif',...POINT,radius_m:100});
   let firstEvent;
@@ -147,11 +178,11 @@ try{
     assert.equal(driveCalls.length,0,'absen yang pasti ditolak tidak mengunggah selfie');
   });
   await check('a failure after upload deletes the Drive file again',async()=>{
-    await pg.exec(`UPDATE portal.employees SET is_active=0 WHERE id='${people.boss.id}'`);
+    await pg.exec(`UPDATE portal.employees SET is_active=0 WHERE id='${people.thl.id}'`);
     const filesBefore=drive.files.size;driveCalls.length=0;
     // Pegawai nonaktif ditolak di pemeriksaan awal (sebelum unggah).
-    assert.equal((await invoke('submit',await sign(device,'submit',submission(people.boss)))).status,404);assert.equal(driveCalls.length,0);
-    await pg.exec(`UPDATE portal.employees SET is_active=1 WHERE id='${people.boss.id}'`);
+    assert.equal((await invoke('submit',await sign(device,'submit',submission(people.thl)))).status,404);assert.equal(driveCalls.length,0);
+    await pg.exec(`UPDATE portal.employees SET is_active=1 WHERE id='${people.thl.id}'`);
     // Benturan saat penyimpanan: pemicu menolak baris; berkas yang sudah diunggah dihapus.
     await pg.exec(`CREATE FUNCTION portal.fixture_reject() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RAISE EXCEPTION 'fixture' USING ERRCODE='40001'; END $f$;
       CREATE TRIGGER fixture_reject BEFORE INSERT ON portal.attendance_events FOR EACH ROW EXECUTE FUNCTION portal.fixture_reject();`);
@@ -180,6 +211,10 @@ try{
     await assert.rejects(portal(coordinator,'attendance/points','POST',{name:'X',...POINT}),e=>e instanceof api.AppError&&e.status===403);
     const personal=await portal(coordinator,'attendance/devices','POST',{kind:'PERSONAL',owner_employee_id:people.guard.id});
     assert.equal(personal.phone,'6281234567890');assert.match(personal.token,/^[a-f0-9]{64}$/);
+    await assert.rejects(portal(manager,'attendance/devices','POST',{kind:'SHARED',org_unit_id:field.id,label:'HP Pos Fiktif'}),e=>e instanceof api.AppError&&e.status===422&&/HP bersama/.test(e.message));
+    const listed=(await portal(manager,'attendance/devices')).devices;
+    assert.deepEqual(listed.filter(d=>d.kind==='SHARED').map(d=>[d.label,d.retired]),[['HP Pos Lama',true]],'HP bersama lama tetap tampil, ditandai tidak dipakai');
+    assert(listed.filter(d=>d.kind==='PERSONAL').every(d=>d.retired===false));
     const overview=await portal(boss,'attendance/overview');assert.deepEqual([overview.self,overview.subordinates,overview.manage],[true,2,true]);
     assert.equal(overview.retention,null);const settings=await portal(manager,'attendance/overview');
     assert.deepEqual([settings.retention.due_photos,typeof settings.retention.deleted_photos],[0,'number'],'jumlah selfie lewat masa simpan dihitung di PostgreSQL');
@@ -404,6 +439,34 @@ try{
     driveCalls.length=0;
     const blocked=await send({...body,client_key:randomUUID(),outside});
     assert.deepEqual([blocked.status,blocked.data.details.code,driveCalls.length],[403,'OUTSIDE_FORBIDDEN',0]);
+  });
+  await check('read-only release check lists retired shared phones and check-ins that the direct-supervisor rule refuses',async()=>{
+    const sql=readFileSync(new URL('../supabase/checks/check-attendance-direct-supervisor.sql',import.meta.url),'utf8');
+    const namesakes=[];
+    for(const suffix of ['A','B']){
+      namesakes.push(await insert(db,'employees',{employee_no:'ABS-NAMA-'+suffix,full_name:'Nama Sama Uji',employment_status:'Tetap',is_active:1,joined_on:'2020-01-01'}));
+    }
+    const link=await route(manager,'devices','POST',{kind:'PERSONAL',owner_employee_id:people.boss.id});
+    const secondPhone=await invoke('register',{token:link.token,public_key:(await keysFor()).public_key});
+    assert.equal(secondPhone.status,200);
+    const recordedAt=now();
+    for(const [employee,deviceId] of [[namesakes[0],device.id],[namesakes[0],device.id],[namesakes[1],device.id],[namesakes[0],secondPhone.data.result.device_id]]){
+      await insert(db,'attendance_events',{employee_id:employee.id,device_id:deviceId,kind:'IN',recorded_at:recordedAt,work_date:witaDate(Date.parse(recordedAt)),
+        client_key:randomUUID(),...POINT,accuracy_m:10,within_point:1,photo_mime:'image/jpeg',photo_size:jpeg.length,photo_checksum:'0'.repeat(64),photo_deleted_at:recordedAt});
+    }
+    const before=(await one(db,'SELECT count(*)::int n FROM attendance_events')).n;
+    const rows=(await pg.exec(sql)).find(r=>r.rows?.length&&'bagian' in r.rows[0]).rows;
+    const summary=Object.fromEntries(rows.filter(r=>r.bagian.startsWith('0.')).map(r=>[r.item,r.hasil]));
+    assert.equal(summary['HP bersama aktif/menunggu'],'1');
+    assert.deepEqual(rows.filter(r=>r.bagian.startsWith('1.')).map(r=>r.item),['HP Pos Lama · Pos Fiktif']);
+    assert.equal(summary['Pasangan pegawai · HP pribadi orang lain yang sesudah rilis ditolak (30 hari)'],'3');
+    const refusedRows=rows.filter(r=>r.bagian.startsWith('2.'));
+    assert.equal(new Set(refusedRows.map(r=>r.item)).size,3);
+    assert.equal(refusedRows.filter(r=>r.item.includes('ABS-NAMA-A')).length,2);
+    assert.equal(refusedRows.filter(r=>r.item.includes('ABS-NAMA-B')).length,1);
+    assert.equal(refusedRows.filter(r=>r.hasil.startsWith('2 absen')).length,1);
+    assert(rows.some(r=>r.bagian.startsWith('3.')&&r.item.endsWith('Atasan Fiktif')),'pucuk organisasi tampil tanpa atasan');
+    assert.equal((await one(db,'SELECT count(*)::int n FROM attendance_events')).n,before);
   });
   console.log(`${checks} attendance PostgreSQL checks passed.`);
 }finally{globalThis.fetch=realFetch;globalThis.Deno=priorDeno;globalThis.EdgeRuntime=priorRuntime;delete globalThis.__attendanceFixture;await pg.close();}

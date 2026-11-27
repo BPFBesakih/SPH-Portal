@@ -39,6 +39,9 @@ export const attendanceFormLimits = Object.freeze({
 export const invalidRegistration = 'Tautan pendaftaran tidak aktif atau sudah dipakai. Minta tautan baru kepada SDM atau koordinator.';
 export const invalidSession = 'Sesi pendaftaran sudah ditutup. Minta tautan sesi yang baru kepada SDM.';
 export const unknownDevice = 'HP ini belum terdaftar untuk absen. Minta SDM atau koordinator mendaftarkannya.';
+export const sharedRetired = 'HP bersama tidak dipakai lagi untuk absen. Absen di HP sendiri, atau minta atasan langsung mengabsenkan Anda dari HP pribadinya.';
+export const sharedRetiredLink = 'Tautan ini untuk HP bersama, yang tidak dipakai lagi untuk absen. Minta SDM atau koordinator membuat tautan HP pribadi.';
+export const notDirectSupervisor = 'Absen untuk orang lain hanya bisa dilakukan atasan langsungnya. Pegawai ini perlu absen di HP sendiri atau di HP atasan langsungnya.';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const tokenPattern = /^[a-f0-9]{64}$/;
 const HOUR = 3600000;
@@ -86,6 +89,19 @@ export const personView = p => p && ({
   position: p.position_name || '',
   unit: p.unit_name || ''
 });
+export function mayRecordFor(device, person) {
+  if (!device || device.kind !== 'PERSONAL' || !person || !device.owner_employee_id) return false;
+  if (person.id === device.owner_employee_id) return true;
+  return !person.ambiguous && person.supervisor_employee_id === device.owner_employee_id;
+}
+async function recordablePerson(db, device, employeeId) {
+  const person = (await attendancePeople(db, 'e.id=?', employeeId))[0];
+  assert(person, 'Nama tidak ditemukan atau pegawai tidak aktif.', 404);
+  if (!mayRecordFor(device, person)) throw new AppError(403, notDirectSupervisor, {
+    code: 'NOT_DIRECT_SUPERVISOR'
+  });
+  return person;
+}
 export async function unitTree(db, unitId) {
   return (await all(db, 'WITH RECURSIVE tree(id) AS (SELECT id FROM org_units WHERE id=? UNION ALL SELECT o.id FROM org_units o JOIN tree t ON o.parent_id=t.id) SELECT id FROM tree', unitId)).map(r => r.id);
 }
@@ -125,6 +141,7 @@ async function pendingByToken(db, token) {
 }
 export async function registrationPreview(db, b) {
   const d = await pendingByToken(db, b?.token), view = await deviceView(db, d);
+  assert(d.kind !== 'SHARED', sharedRetiredLink, 404);
   if (view.kind === 'PERSONAL') assert(view.owner && (await attendancePeople(db, 'e.id=?', view.owner.id)).length, 'Pemilik HP ini tidak aktif. Minta tautan baru kepada SDM.', 409);
   return {
     kind: view.kind,
@@ -163,6 +180,7 @@ export async function activateDevice(db, b, key, replacedId, requestId) {
   };
   const d = await pendingByToken(db, b.token);
   assert(!d.public_key, invalidRegistration, 404);
+  assert(d.kind !== 'SHARED', sharedRetiredLink, 404);
   assert(!await one(db, 'SELECT id FROM attendance_devices WHERE key_thumbprint=?', key.thumbprint), 'HP ini sudah terdaftar. Muat ulang halaman absen.', 409);
   if (d.kind === 'PERSONAL') assert((await attendancePeople(db, 'e.id=?', d.owner_employee_id)).length, 'Pemilik HP ini tidak aktif. Minta tautan baru kepada SDM.', 409);
   const stamp = now();
@@ -280,7 +298,10 @@ async function activeDevice(db, deviceId) {
   const d = await one(db, 'SELECT * FROM attendance_devices WHERE id=?', deviceId);
   assert(d, unknownDevice, 401);
   assert(d.status === 'ACTIVE', d.status === 'PENDING' ? 'HP ini menunggu persetujuan SDM.' : 'HP ini sudah tidak aktif untuk absen. Minta SDM mendaftarkannya lagi.', 403);
-  if (d.kind === 'PERSONAL') assert((await attendancePeople(db, 'e.id=?', d.owner_employee_id)).length, 'Pemilik HP ini tidak aktif. Minta SDM mendaftarkan HP ini lagi.', 403);
+  if (d.kind === 'SHARED') throw new AppError(403, sharedRetired, {
+    code: 'SHARED_RETIRED'
+  });
+  assert((await attendancePeople(db, 'e.id=?', d.owner_employee_id)).length, 'Pemilik HP ini tidak aktif. Minta SDM mendaftarkan HP ini lagi.', 403);
   return d;
 }
 export async function admitDeviceAction(db, action, deviceId) {
@@ -300,7 +321,7 @@ const firstCheckInSql = (employee, day) => `SELECT i.id FROM attendance_events i
  WHERE i.employee_id=${employee} AND i.work_date=${day} AND i.kind='IN'
  AND NOT EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.void_event_id=i.id AND c.revoked_at IS NULL)
  ORDER BY i.recorded_at,i.id LIMIT 1`;
-export async function deviceContext(db, deviceId, nowMs = Date.now()) {
+export async function deviceContext(db, deviceId, nowMs = Date.now(), peopleFormat) {
   const d = await one(db, 'SELECT * FROM attendance_devices WHERE id=?', deviceId);
   assert(d, unknownDevice, 401);
   const view = await deviceView(db, d), base = {
@@ -308,38 +329,37 @@ export async function deviceContext(db, deviceId, nowMs = Date.now()) {
     device: view
   };
   if (d.status !== 'ACTIVE') return base;
-  if (d.kind === 'PERSONAL' && !(await attendancePeople(db, 'e.id=?', d.owner_employee_id)).length) return {
+  if (d.kind === 'SHARED') return {
+    ...base,
+    device: {
+      ...view,
+      status: 'REVOKED',
+      retired: true
+    }
+  };
+  const everyone = await attendancePeople(db), owner = everyone.find(p => p.id === d.owner_employee_id);
+  if (!owner) return {
     ...base,
     device: {
       ...view,
       status: 'REVOKED'
     }
   };
+  const reportGroup = peopleFormat === 'direct-reports' ? 'team' : 'unit';
+  const people = [{
+    ...personView(owner),
+    group: 'owner'
+  }, ...everyone.filter(p => p.id !== owner.id && mayRecordFor(d, p)).map(p => ({
+    ...personView(p),
+    group: reportGroup
+  }))];
   const since = new Date(nowMs - 30 * 24 * HOUR).toISOString();
-  const recentIds = (await all(db, 'SELECT employee_id,max(recorded_at) last_at FROM attendance_events WHERE device_id=? AND recorded_at>=? GROUP BY employee_id ORDER BY last_at DESC LIMIT 15', d.id, since)).map(r => r.employee_id);
-  const everyone = new Map((await attendancePeople(db)).map(p => [p.id, p]));
-  const people = [], seen = new Set(), add = (p, group) => {
-    if (p && !seen.has(p.id)) {
-      seen.add(p.id);
-      people.push({
-        ...personView(p),
-        group
-      });
-    }
-  };
-  if (d.kind === 'PERSONAL') add(everyone.get(d.owner_employee_id), 'owner');
-  for (const id of recentIds) add(everyone.get(id), 'recent');
-  const unit = view.unit?.id;
-  if (unit) {
-    const units = new Set(await unitTree(db, unit));
-    for (const p of everyone.values()) if (people.length < 120 && units.has(p.org_unit_id)) add(p, 'unit');
-  }
-  const history = d.kind === 'PERSONAL' ? (await all(db, `SELECT e.kind,e.recorded_at,e.work_date,e.point_name,e.within_point,
+  const history = (await all(db, `SELECT e.kind,e.recorded_at,e.work_date,e.point_name,e.within_point,
  CASE WHEN e.kind='IN' AND e.id=(${firstCheckInSql('e.employee_id', 'e.work_date')}) THEN 1 ELSE 0 END AS first_in
  FROM attendance_events e WHERE e.employee_id=? AND e.recorded_at>=? ORDER BY e.recorded_at DESC LIMIT 80`, d.owner_employee_id, since)).map(r => ({
     ...r,
     within_point: Number(r.within_point) === 1
-  })) : [];
+  }));
   if (history.some(event => event.kind === 'IN')) {
     const calendar = await loadFixedSchedules(db, witaDate(Date.parse(since)), witaDate(nowMs), d.owner_employee_id);
     for (const event of history) if (Number(event.first_in) === 1) event.timing = arrivalTiming(calendar, d.owner_employee_id, event.work_date, event.recorded_at);
@@ -353,21 +373,20 @@ export async function deviceContext(db, deviceId, nowMs = Date.now()) {
   };
 }
 export async function searchPeople(db, deviceId, query) {
-  await activeDevice(db, deviceId);
+  const d = await activeDevice(db, deviceId);
   const q = typeof query === 'string' ? query.toLowerCase().replace(/[%_\\]/g, ' ').replace(/\s+/g, ' ').trim() : '';
   assert(q.length >= 3 && q.length <= 40, 'Ketik minimal 3 huruf nama.', 422);
   return {
-    people: (await attendancePeople(db, 'lower(e.full_name) LIKE ?', `%${q}%`)).slice(0, 15).map(personView)
+    people: (await attendancePeople(db, 'lower(e.full_name) LIKE ?', `%${q}%`)).filter(p => mayRecordFor(d, p)).slice(0, 15).map(personView)
   };
 }
 export async function personStatus(db, deviceId, employeeId, nowMs = Date.now()) {
   const d = await activeDevice(db, deviceId);
   assert(typeof employeeId === 'string' && employeeId.length <= 100, 'Pilih nama terlebih dahulu.', 422);
-  const person = (await attendancePeople(db, 'e.id=?', employeeId))[0];
-  assert(person, 'Nama tidak ditemukan atau pegawai tidak aktif.', 404);
+  const person = await recordablePerson(db, d, employeeId);
   const open = await openIn(db, employeeId, nowMs);
   const last = await one(db, 'SELECT kind,recorded_at FROM attendance_events WHERE employee_id=? AND work_date=? ORDER BY recorded_at DESC LIMIT 1', employeeId, witaDate(nowMs));
-  const own = d.kind === 'PERSONAL' && d.owner_employee_id === person.id;
+  const own = d.owner_employee_id === person.id;
   const state = open ? 'OPEN' : last?.kind === 'OUT' ? 'DONE' : 'NONE';
   return {
     employee: personView(person),
@@ -467,10 +486,10 @@ async function checkAttendanceArea(db, input, lock = false) {
   return match;
 }
 async function checkCaptureLocation(db, deviceId, payload) {
-  await activeDevice(db, deviceId);
+  const d = await activeDevice(db, deviceId);
   const employeeId = payload.employee_id;
   assert(typeof employeeId === 'string' && employeeId.length > 0 && employeeId.length <= 100, 'Pilih nama terlebih dahulu.', 422);
-  assert((await attendancePeople(db, 'e.id=?', employeeId)).length, 'Nama tidak ditemukan atau pegawai tidak aktif.', 404);
+  await recordablePerson(db, d, employeeId);
   await checkAttendanceArea(db, {
     employee_id: employeeId,
     location: checkedAttendanceLocation(payload.location)
@@ -480,7 +499,7 @@ async function checkCaptureLocation(db, deviceId, payload) {
   };
 }
 export async function prepareSubmission(db, deviceId, input, nowMs = Date.now()) {
-  await activeDevice(db, deviceId);
+  const d = await activeDevice(db, deviceId);
   const dup = await one(db, 'SELECT * FROM attendance_events WHERE device_id=? AND client_key=?', deviceId, input.client_key);
   if (dup) {
     assert(dup.employee_id === input.employee_id && dup.kind === input.kind, 'Kiriman bentrok dengan absen sebelumnya. Muat ulang halaman.', 409);
@@ -489,7 +508,7 @@ export async function prepareSubmission(db, deviceId, input, nowMs = Date.now())
       receipt: await receiptOf(db, dup, true)
     };
   }
-  assert((await attendancePeople(db, 'e.id=?', input.employee_id)).length, 'Nama tidak ditemukan atau pegawai tidak aktif.', 404);
+  await recordablePerson(db, d, input.employee_id);
   await checkAttendanceArea(db, input);
   return {
     duplicate: false
@@ -502,8 +521,7 @@ export async function recordSubmission(db, deviceId, input, stored, nowMs = Date
     assert(dup.employee_id === input.employee_id && dup.kind === input.kind, 'Kiriman bentrok dengan absen sebelumnya. Muat ulang halaman.', 409);
     return await receiptOf(db, dup, true);
   }
-  const person = (await attendancePeople(db, 'e.id=?', input.employee_id))[0];
-  assert(person, 'Nama tidak ditemukan atau pegawai tidak aktif.', 404);
+  const person = await recordablePerson(db, d, input.employee_id);
   const match = await checkAttendanceArea(db, input, true);
   const recordedAt = new Date(nowMs).toISOString(), open = await openIn(db, person.id, nowMs);
   const current = {
@@ -518,10 +536,6 @@ export async function recordSubmission(db, deviceId, input, stored, nowMs = Date
   if (input.location.accuracy > attendanceRules.accuracyLimit) flags.push('GPS_KURANG_AKURAT');
   if (jumped(previous, current)) flags.push('LOKASI_MELOMPAT');
   if (input.kind === 'OUT' && !open) flags.push('TANPA_MASUK');
-  if (d.kind === 'PERSONAL') {
-    const others = (await all(db, 'SELECT DISTINCT employee_id FROM attendance_events WHERE device_id=? AND recorded_at>=? AND employee_id<>?', d.id, new Date(nowMs - attendanceRules.crowdedMinutes * 60000).toISOString(), person.id)).length;
-    if (others + 1 >= attendanceRules.crowdedPeople) flags.push('HP_PRIBADI_RAMAI');
-  }
   if (!await one(db, 'SELECT id FROM attendance_reference_photos WHERE employee_id=?', person.id) && !await one(db, 'SELECT id FROM attendance_events WHERE employee_id=? LIMIT 1', person.id)) flags.push('TANPA_FOTO_ACUAN');
   const row = await insert(db, 'attendance_events', {
     employee_id: person.id,
@@ -576,7 +590,7 @@ export async function attendanceFormRequest({action, body, clientIp, runTx, phot
   const auth = parseSignedRequest(body), device = await runTx(async db => await signingDevice(db, auth.deviceId));
   await verifySignedRequest(action, auth, device, nowMs);
   assert((await runTx(async db => await admitDeviceAction(db, action, auth.deviceId))).allowed, 'Terlalu banyak permintaan dari HP ini. Coba lagi beberapa menit kemudian.', 429);
-  if (action === 'context') return await runTx(async db => await deviceContext(db, auth.deviceId, nowMs));
+  if (action === 'context') return await runTx(async db => await deviceContext(db, auth.deviceId, nowMs, auth.payload.people_format));
   if (action === 'search') return await runTx(async db => await searchPeople(db, auth.deviceId, auth.payload.query));
   if (action === 'person') return await runTx(async db => await personStatus(db, auth.deviceId, auth.payload.employee_id, nowMs));
   if (action === 'check-location') return await runTx(async db => await checkCaptureLocation(db, auth.deviceId, auth.payload));

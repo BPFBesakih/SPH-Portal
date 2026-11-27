@@ -9927,8 +9927,6 @@ var attendanceRules = Object.freeze({
   radiusMin: 20,
   radiusMax: 1e3,
   accuracyLimit: 100,
-  crowdedPeople: 4,
-  crowdedMinutes: 10,
   jumpKmh: 120,
   jumpMinMeters: 1e3,
   jumpWindowHours: 12,
@@ -10391,6 +10389,7 @@ function tokenPair() {
     hash: digest(token)
   };
 }
+var sharedDeviceRetired = "HP bersama tidak dipakai lagi untuk absen. Daftarkan HP itu sebagai HP pribadi pemegangnya (misalnya koordinator); bawahan langsungnya bisa diabsenkan dari HP tersebut.";
 var units = async (db) => await all(db, "SELECT id,name FROM org_units WHERE is_active=1 ORDER BY name,id");
 async function deviceScope(db, user, deps, device, byId = null) {
   const { can: can2 } = deps;
@@ -10446,6 +10445,7 @@ async function deviceRow(db, d, stats) {
     last_seen_at: d.last_seen_at || null,
     created_at: d.created_at,
     owner_active: ownerActive,
+    retired: d.kind === "SHARED",
     events_7d: usage.events,
     people_7d: usage.people
   };
@@ -11071,36 +11071,20 @@ async function attendanceRoutes({ db, user, p, method, body: b = {}, url }, deps
       };
     }
     if (p[1] === "devices" && p.length === 2 && method === "POST") {
-      assert(["PERSONAL", "SHARED"].includes(b.kind), "Pilih HP pribadi atau HP bersama.");
-      let values;
-      if (b.kind === "PERSONAL") {
-        const [owner] = typeof b.owner_employee_id === "string" ? await directory(db, b.owner_employee_id) : [];
-        assert(owner && owner.is_active, "Pilih pemilik HP dari pegawai aktif.", 422);
-        assert(await can2(db, user, "hr.attendance.devices", {
-          employee_id: owner.id,
-          org_unit_id: owner.org_unit_id
-        }), "Pegawai ini di luar cakupan unit Anda.", 403);
-        values = {
-          kind: "PERSONAL",
-          owner_employee_id: owner.id,
-          org_unit_id: null,
-          label: null
-        };
-      } else {
-        const unit = await one(db, "SELECT id FROM org_units WHERE id=? AND is_active=1", typeof b.org_unit_id === "string" ? b.org_unit_id : "");
-        assert(unit, "Pilih unit HP bersama.", 422);
-        assert(await can2(db, user, "hr.attendance.devices", {
-          org_unit_id: unit.id
-        }), "Unit ini di luar cakupan Anda.", 403);
-        const label = typeof b.label === "string" ? b.label.trim().replace(/\s+/g, " ") : "";
-        assert(label.length >= 3 && label.length <= 80, 'Beri label HP bersama, misalnya "HP Koordinator Pos 3".');
-        values = {
-          kind: "SHARED",
-          owner_employee_id: null,
-          org_unit_id: unit.id,
-          label
-        };
-      }
+      assert(b.kind !== "SHARED", sharedDeviceRetired, 422);
+      assert(b.kind === "PERSONAL", "Pilih HP pribadi.");
+      const [owner] = typeof b.owner_employee_id === "string" ? await directory(db, b.owner_employee_id) : [];
+      assert(owner && owner.is_active, "Pilih pemilik HP dari pegawai aktif.", 422);
+      assert(await can2(db, user, "hr.attendance.devices", {
+        employee_id: owner.id,
+        org_unit_id: owner.org_unit_id
+      }), "Pegawai ini di luar cakupan unit Anda.", 403);
+      const values = {
+        kind: "PERSONAL",
+        owner_employee_id: owner.id,
+        org_unit_id: null,
+        label: null
+      };
       const { token, hash } = tokenPair(), expires = new Date(nowMs + attendanceRules.registrationDays * DAY2).toISOString();
       return await tx(db, async () => {
         const row = await insert(db, "attendance_devices", {
@@ -11129,6 +11113,7 @@ async function attendanceRoutes({ db, user, p, method, body: b = {}, url }, deps
       assert(await deviceScope(db, user, deps, d), "HP ini di luar cakupan unit Anda.", 403);
       assert(b.row_version === d.row_version, "Data HP sudah berubah. Muat ulang halaman HP Absen.", 409);
       if (p[3] === "link") {
+        assert(d.kind !== "SHARED", sharedDeviceRetired, 409);
         assert(d.status === "PENDING" && !d.public_key && !d.session_id, "Tautan baru hanya untuk HP yang belum mendaftar.", 409);
         const { token, hash } = tokenPair(), expires = new Date(nowMs + attendanceRules.registrationDays * DAY2).toISOString();
         return await tx(db, async () => {
