@@ -1,6 +1,6 @@
 # Absensi — absen harian lewat HP terdaftar (tahap 1)
 
-**Status (10 November 2026): dipasang ulang di cabang `claude/absensi-pasang-ulang` di atas master `187455b`, siap di-merge, belum dirilis.** PR #23 sempat di-merge 7 November lalu dibatalkan lewat PR #28 sebelum langkah server dijalankan. Cabang ini membalik pembatalan itu dan menambah enam perbaikan hasil review 10 November. Pemilik repo menguji lokal, lalu merge dan merilis sendiri. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`); review kesiapan deploy ada di Project `claude/kesiapan-deploy-absensi.md`.
+**Status (27 November 2026): tahap 1 tayang sejak 11 November (PR #31).** Jadwal pilot Sekretariat dan pemeriksaan radius sebelum selfie masuk lewat PR #46 (di-merge 26 November). Pratinjau selfie dan keterangan ketepatan masuk ada di PR #47 (cabang `feature/absensi-pratinjau-keterangan`) dan belum dirilis. Langkah rilis setiap pembaruan ada di bagian **Rilis pembaruan**, cara kembalinya di bagian **Rollback**. Kebutuhan lengkap ada di PRD Absensi revisi 2 (Project `claude/prd-modul-absensi.md`).
 
 Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari HP, untuk pegawai kantor, petugas shift/lapangan, dan THL (guide tidak ikut). Hasilnya rekap untuk atasan dan SDM, belum untuk gaji atau sanksi. Ketepatan masuk dinilai untuk pegawai dengan jadwal tetap pada hari kerja. Hari tanpa absen tampil sebagai **"Tidak ada catatan"**. Ekspor data aplikasi absen lama ditunda sesuai keputusan pemilik.
 
@@ -12,7 +12,7 @@ Tahap 1 mencatat jam **MASUK** dan **PULANG** dengan selfie dan lokasi GPS dari 
    - **HP bersama** (HP koordinator/pos): diberi label dan unit. HP menampilkan daftar nama unit itu, dan nama lain bisa dicari (minimal 3 huruf).
    - **Sesi pendaftaran** (5–30 menit, misalnya sesudah briefing pagi): satu tautan dikirim ke grup WhatsApp unit. Setiap HP memilih nama pemiliknya lalu menunggu disetujui di portal. Nama yang dipilih lebih dari satu HP ditandai. Menutup sesi menolak HP yang belum disetujui.
    - QR hanya cara lain untuk membuka tautan yang sama di HP tersebut. **Absen harian tidak memakai QR.**
-3. Untuk **absen harian**, buka `https://bpbesakih.com/absen/`, pilih nama, lalu tekan **Masuk** atau **Pulang**. HP mencari lokasi GPS dan server memeriksa radius. Jika lokasinya diizinkan, kamera depan terbuka untuk selfie. Pegawai melihat foto, lalu memilih **Ambil ulang foto** atau **Kirim absen**. Tombol **Kembali** di pojok kanan atas pratinjau membuka kamera kembali. Server memeriksa kembali lokasi dan izin saat mencatat absen.
+3. Untuk **absen harian**, buka `https://bpbesakih.com/absen/`, pilih nama, lalu tekan **Masuk** atau **Pulang**. HP mencari lokasi GPS dan server memeriksa radius. Jika lokasinya diizinkan, kamera depan terbuka untuk selfie. Pegawai melihat foto, lalu memilih **Ambil ulang foto** atau **Kirim absen**. Tombol **Kembali** di pojok kanan atas pratinjau membuka kamera kembali (di layar di bawah 360 px tombolnya hanya panah ←). Server memeriksa kembali lokasi dan izin saat mencatat absen. Saat mengirim, HP memakai titik GPS paling akurat dalam 30 detik terakhir, bukan sekadar yang terbaru. Bila server tetap menolak karena di luar radius, tombol **Cek lokasi lagi** mencari lokasi ulang; foto yang sudah dikonfirmasi dikirim ulang dengan kunci kiriman yang sama, tanpa selfie baru, selama umurnya belum 4,5 menit.
 4. **Titik absen.** Pengelola mengatur radius per titik pada peta (bawaan 100 m, rentang 20–1000 m). Pegawai yang berada di luar semua titik aktif langsung mendapat pesan penolakan sebelum selfie. Di **Absensi → Titik Absen → Absen di luar area kantor**, pengelola dengan cakupan seluruh organisasi dapat memberi atau mencabut izin per pegawai. Izin mengikuti pegawai yang dipilih, termasuk di HP bersama. Pemegang izin cukup mengirim selfie dan lokasi. Rekap menandai catatannya sebagai **Izin absen di luar area kantor**. Saat semua titik nonaktif, hanya pegawai dengan izin tersebut yang dapat absen.
 5. **Perlu dicek.** Catatan yang memerlukan peninjauan meliputi absen luar area oleh pemegang akses, GPS kurang akurat (>100 m), lokasi melompat (>120 km/jam), banyak orang (≥4 dalam 10 menit) di satu HP pribadi, belum ada foto acuan, tanpa absen masuk/pulang, absen saat cuti, dan titik belum diatur. Atasan langsung atau Pengelola Absensi membandingkan selfie dengan **foto acuan**, lalu menilai *Sesuai* atau *Perlu klarifikasi*.
 6. **Status harian dihitung saat dibaca** dari catatan asli, koreksi, keterangan (Izin/Sakit/Dinas luar), dan cuti yang disetujui di modul Cuti. Pulang setelah tengah malam ikut tanggal kerja absen masuknya (shift malam, batas 16 jam).
@@ -72,11 +72,32 @@ PLAYWRIGHT_MODULE=<path playwright> node scripts/verify-attendance-ui.mjs [folde
 
 Akun pratinjau (password `Preview2026!`): `pengelola.absen`, `koordinator.absen`, `pegawai.absen`, `admin.preview`. Skrip mencetak tautan HP bersama contoh. Kamera dan lokasi hanya jalan di *secure context*: buka `/absen/` di laptop yang sama (Chrome DevTools → Toggle device toolbar, Sensors → Location), atau lewatkan port melalui tunnel HTTPS dan jalankan dengan `PREVIEW_ORIGIN=https://alamat-tunnel`. Di iPhone, ikon layar utama punya penyimpanan sendiri: pasang ikon dulu, buka dari ikon, lalu tempel tautan pendaftaran.
 
-Pengujian SQLite mencakup tanda tangan HP, pencatatan waktu aktual, pemberian akses, dan pencabutan izin saat selfie sedang diunggah. Pengujian PostgreSQL memakai seluruh migrasi, Edge terpaket, dan penyimpanan Drive tiruan. Pengujian browser mencakup peta, pendaftaran HP, absen di dalam dan di luar titik, pengelolaan akses, tinjauan selfie, dan ekspor Excel. Kamera dan GPS pada HP sungguhan, pemasangan ikon, serta sinyal lemah di lapangan diuji saat pilot.
+Pengujian SQLite mencakup tanda tangan HP, pencatatan waktu aktual, pemberian akses, dan pencabutan izin saat selfie sedang diunggah. Pengujian PostgreSQL memakai seluruh migrasi, Edge terpaket, dan penyimpanan Drive tiruan. Pengujian browser mencakup peta, pendaftaran HP, absen di dalam dan di luar titik, pratinjau selfie dan kirim ulang foto sesudah ditolak di luar radius, pengelolaan akses, tinjauan selfie, dan ekspor Excel. Kamera dan GPS pada HP sungguhan, pemasangan ikon, serta sinyal lemah di lapangan diuji saat pilot.
 
-## Pembaruan akses luar area pada instalasi yang sudah berjalan
+## Rilis pembaruan
 
-Untuk merilis pembaruan, terapkan migrasi `20261125132222_attendance_outside_access_basis.sql`, perbarui Edge Function `attendance-form` dan `portal-api`, lalu rilis aset dan gateway Pages. Pastikan titik kantor yang digunakan pegawai aktif. Daftar pengecualian awal kosong. Untuk membangun bundel `portal-api`, jalankan `scripts/build-attendance-deploy.mjs` terhadap snapshot yang sedang tayang beserta SHA-256 snapshot itu agar perubahan modul lain ikut dipertahankan.
+Berlaku untuk pembaruan sesudah pemasangan awal. Urutannya tetap migrasi → Edge Function → `portal-api` → merge (Pages).
+
+**`portal-api` selalu ditambal di atas versi yang sedang tayang.** Unduh versi aktif, simpan salinannya sebagai titik kembali, lalu hitung SHA-256-nya. Bila sama dengan snapshot dasar pembaruan itu, deploy `supabase/deploy/portal-api/index.ts` dari repo. Bila berbeda, jalankan `node scripts/build-attendance-deploy.mjs <berkas-aktif.ts> <sha256>` dan deploy hasilnya; skrip hanya membangkitkan ulang lingkup Absensi, sehingga tambalan modul lain tetap utuh. Jangan mendeploy berkas `portal-api` dari rilis atau cabang yang lebih lama, karena kode Absensi yang lebih baru ikut tercabut.
+
+### PR #46 — jadwal Sekretariat dan cek radius sebelum selfie (di-merge 26 November)
+
+1. Prasyarat: migrasi PR #43–#45 (`20261120090000`, `20261123100000`, `20261125090000`) sudah jalan, karena `portal-api` rilis ini ikut membawa backend ketiganya.
+2. Pra-cek: `SELECT id,code,name FROM portal.org_units WHERE code='BPB_S' AND is_active=1;` harus menghasilkan 1 baris. Bila kosong, migrasi tetap sukses tetapi jadwal Sekretariat tidak terisi.
+3. Migrasi berurutan: `20261125132221_attendance_fixed_schedules.sql`, lalu `20261125132222_attendance_outside_access_basis.sql`. Cek: `SELECT count(*) FROM portal.attendance_schedule_weekdays;` = 6 dan `SELECT count(*) FROM portal.attendance_schedule_holidays;` = 61. Daftar **Absen di luar area kantor** awalnya kosong.
+4. Edge `attendance-form` → SHA-256 `7ee11ac2482369a64388a5f40a26a0fe8ce6dae0fb2cd3cb6450461fdb81aabd`, `verify_jwt` tetap mati. HP versi ini memanggil aksi baru `check-location`, yang dijawab 404 oleh Edge lama; bila semua HP gagal sebelum kamera terbuka, periksa versi Edge ini.
+5. `portal-api`: snapshot dasar `94eaa33e088d10fdeeeac168739fecfcb2d3591e0285f07ce123fe7a8b35acae` → `d09d5a36e55660cad27684ee2099bc41286d23fa35efe8e50eff3d090cc4938b` (master `528c778`).
+6. Pastikan titik kantor yang dipakai pegawai aktif, lalu uji radiusnya dari dalam gedung dengan HP sungguhan. Di luar radius absen ditolak, kecuali untuk pegawai di daftar **Absen di luar area kantor**.
+7. Merge PR (cache `/absen/` `sph-absen-v1.3.0`).
+
+### PR #47 — pratinjau selfie dan keterangan ketepatan masuk
+
+Tanpa migrasi. HP dan portal lama mengabaikan field baru `timing`; HP dan portal baru tetap berjalan tanpa keterangan bila backend belum diperbarui. Jadi urutannya tidak kritis, tetapi backend sebaiknya didahulukan supaya keterangan langsung tampil.
+
+1. Edge `attendance-form` → SHA-256 `9c3db4bc787427dd79543f14cb561f048eaae807c0b990cf2165a8eb0c375507`, `verify_jwt` tetap mati.
+2. `portal-api`: snapshot dasar `d09d5a36…` (master `528c778`) → `62c82e429c2f21c1e13c826679de6d1669aaa9b09fa5148f7ca3429d5de633b4`.
+3. Uji di HP sungguhan (Android dan iPhone): pratinjau, **Ambil ulang foto**, **Kembali**, **Cek lokasi lagi**, dan keterangan ketepatan masuk untuk pegawai Sekretariat.
+4. Merge PR: cache `/absen/` `sph-absen-v1.4.1`, bundel `/app/` `portal-62b45ff2646d.js` + `portal-28cfaa1eaf72.css`.
 
 ## Riwayat pemasangan awal Tahap 1 (November 2026)
 
@@ -102,26 +123,22 @@ Urutan mengikuti kebiasaan proyek: migrasi → Edge Function → aset Pages → 
 
 ## Rollback
 
-**Titik kembali** (versi sebelum Absensi, 10 November 2026). Bila master bergerak sebelum PR ini di-merge, titik kembali Pages adalah parent pertama merge commit PR ini.
+Kembalikan per pembaruan, mulai dari yang terakhir dirilis. Migrasi Absensi aditif dan boleh dibiarkan; data absen tetap tersimpan.
 
-| Bagian | Versi sebelum Absensi | Cara kembali |
-|---|---|---|
-| Pages | master `187455b` (PR #30), bundel `portal-8448a95e95c8.js` + `portal-d51de915396d.css`; cabang `claude/rollback-sebelum-absensi-20261110` | Cepat: Cloudflare → Workers & Pages → sph-portal → Deployments → deployment produksi terakhir sebelum merge → *Rollback to this deployment* (sementara; deploy berikutnya dari master menimpanya). Permanen: tombol *Revert* di PR, lalu merge PR revert itu. |
-| `portal-api` | SHA-256 `e580bd6e…` (v30, dicocokkan saat langkah rilis 3) | Deploy ulang salinan versi aktif yang disimpan, atau `supabase/deploy/portal-api/index.ts` dari cabang titik kembali. |
-| Edge `attendance-form` | belum ada | Hapus fungsi, atau biarkan (tanpa HP terdaftar tidak dipanggil). |
-| Migrasi | belum ada | Tidak dibatalkan: aditif, tabel dan data pilot tetap tersimpan dan tidak dipakai versi lama. |
-| Jadwal retensi (bila dipasang) | belum ada | `SELECT cron.unschedule('attendance-selfie-retention');` |
+| Pembaruan | Edge `attendance-form` | `portal-api` | Pages |
+|---|---|---|---|
+| PR #47 | `7ee11ac2…` | salinan versi aktif sebelum deploy (`d09d5a36…` bila itu yang aktif) | revert PR #47 |
+| PR #46 | `5624a7c0…` | salinan versi aktif sebelum deploy (`94eaa33e…` bila itu yang aktif) | revert PR #46, sesudah PR #47 di-revert |
 
-**Pilih tingkatnya:**
-1. *Hanya Absensi bermasalah, modul lain normal*: deploy ulang `portal-api` versi sebelumnya; rute absensi kembali 404 dan menu hilang saat pengguna memuat ulang. Bila absen dari HP juga harus berhenti, hapus Edge `attendance-form`. Pages tidak perlu diubah.
-2. *Modul lain ikut bermasalah sesudah `portal-api` berganti*: langsung lakukan tingkat 1, lalu cek ulang Cuti, Kunjungan, Merchandise, dan Pengadaan.
-3. *Tampilan bermasalah, atau kembali penuh*: rollback deployment Pages di Cloudflare, lalu revert PR di GitHub, ditambah tingkat 1.
+- **Pages** cepat: Cloudflare → Workers & Pages → sph-portal → Deployments → deployment produksi terakhir sebelum merge → *Rollback to this deployment* (sementara; deploy berikutnya dari master menimpanya). Permanen: tombol *Revert* di PR, lalu merge PR revert itu.
+- **Menghentikan absen dari HP sementara** tanpa menyentuh modul lain: hapus Edge `attendance-form`. HP menampilkan pesan gagal saat dibuka, sedangkan data tetap bisa dibaca di portal. Deploy ulang berkas yang sama untuk menyalakannya lagi.
+- **Jadwal retensi** (bila dipasang): `SELECT cron.unschedule('attendance-selfie-retention');`
+- **Titik kembali sebelum Absensi** (master `187455b`, `portal-api` `e580bd6e…`, 10 November) kini hanya catatan sejarah. Jangan dipakai lagi: mengembalikan Pages atau `portal-api` ke versi itu ikut mencabut semua pembaruan sesudahnya, antara lain E-Arsip Humas, pembaruan Kunjungan, Merchandise, dan Barang Titipan UMKM.
 
 **Sesudah rollback:**
 - Periksa versi tayang lewat daftar Deployments Cloudflare atau nama bundel di sumber halaman `/app/`. Jangan mengandalkan `portal-static/manifest.json`: `/portal-static/*` di-cache 1 tahun, jadi manifest bisa menampilkan versi lama.
-- `/absen/` menjadi 404 bila Pages dikembalikan.
-- Beri tahu peserta pilot untuk kembali ke mesin/aplikasi lama.
-- Data absen pilot tetap di tabel. Selfie tetap di folder Drive SPH-Portal-Absensi dan tidak lagi terhapus otomatis bila Edge `attendance-form` dihapus; putuskan apakah disimpan untuk dipakai lagi atau folder dihapus manual.
+- Bila absen dari HP dihentikan, beri tahu pegawai untuk kembali ke mesin/aplikasi lama.
+- Data absen tetap di tabel. Selfie tetap di folder Drive SPH-Portal-Absensi dan tidak lagi terhapus otomatis bila Edge `attendance-form` dihapus; putuskan apakah disimpan untuk dipakai lagi atau folder dihapus manual.
 
 **Memasang lagi sesudah revert**: revert commit revert-nya (seperti pemasangan ulang 10 November), bangun ulang frontend bila master sudah bergerak (`node scripts/build-cloud-deploy.mjs --frontend-only`), lalu ulangi langkah rilis. Jangan merge ulang cabang lama, karena Git menganggapnya sudah masuk.
 
@@ -142,7 +159,7 @@ Migrasi `20261125132221_attendance_fixed_schedules.sql` memuat:
 - libur nasional dari SKB 2026–2027 (bagian A, tanpa cuti bersama);
 - hari raya Hindu Bali 2026–2027 dari daftar Ditjen Bimas Hindu Kemenag yang berlabel Libur Fakultatif, tanpa Deepavali: Siwaratri, Penampahan Galungan, Galungan, Umanis Galungan, Penampahan Kuningan, Kuningan, Tawur Agung Kesanga (2027), Ngembak Geni, Saraswati, dan Pagerwesi.
 
-Kalender hanya bisa diubah lewat SQL. Tahun di luar kalender tersebut menampilkan status **Kalender libur belum tersedia** pada hari dengan pola kerja. Kalender 2028 perlu ditambahkan sebelum akhir 2027, setelah SKB dan daftar Bimas Hindu 2028 terbit. Rekap masih memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Bukti absen masuk pertama dan riwayat di HP pribadi menampilkan ketepatan jam yang tercatat. Di portal, tab **Hari ini**, **Absen saya**, rincian rekap, dan ekspor harian memakai jam masuk setelah koreksi. Untuk Sekretariat, 08.15 WITA masih dalam toleransi. Mulai 08.16, durasi terlambat dihitung sejak jam masuk 08.00. Penilaian hanya berlaku jika jadwal kerja pegawai pada tanggal itu sudah pasti.
+Kalender hanya bisa diubah lewat SQL. Tahun di luar kalender tersebut menampilkan status **Kalender libur belum tersedia** pada hari dengan pola kerja. Kalender 2028 perlu ditambahkan sebelum akhir 2027, setelah SKB dan daftar Bimas Hindu 2028 terbit. Rekap masih memakai catatan absen, koreksi, keterangan, dan cuti yang disetujui. Bukti absen masuk pertama dan riwayat di HP pribadi menampilkan ketepatan jam yang tercatat. Di portal, tab **Hari ini**, **Absen saya**, rincian rekap, dan ekspor harian memakai jam masuk setelah koreksi. Untuk Sekretariat, 08.15 WITA masih dalam toleransi. Mulai 08.16, durasi terlambat dihitung sejak jam masuk 08.00. Keterangannya ditulis seperti **Terlambat 16 menit dari jam masuk 08.00 WITA**; 60 menit atau lebih ditulis dalam jam dan menit, misalnya **Terlambat 1 jam 5 menit**. Penilaian hanya berlaku jika jadwal kerja pegawai pada tanggal itu sudah pasti.
 
 ## Acuan shift per posisi
 

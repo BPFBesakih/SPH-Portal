@@ -265,9 +265,15 @@ function confirmPerson(person){
  </section>`,true,picker);
  S.candidate=person;
 }
+// Jam ditulis 08.00 seperti jam lain di halaman ini; 60 menit ke atas ditulis dalam jam dan menit.
+const clockText=value=>String(value||'').replace(':','.');
+function durationText(minutes){
+ const hours=Math.floor(minutes/60),rest=minutes%60;
+ return hours?`${hours} jam${rest?` ${rest} menit`:''}`:`${rest} menit`;
+}
 function timingText(timing){
  if(!timing)return '';
- return timing.late?`Terlambat ${timing.minutes} menit dari jam masuk ${timing.start_time} WITA`:'Tepat waktu';
+ return timing.late?`Terlambat ${durationText(timing.minutes)} dari jam masuk ${clockText(timing.start_time)} WITA`:'Tepat waktu';
 }
 function historyScreen(){
  const items=S.context.history||[];
@@ -310,7 +316,12 @@ async function locateAttempt(){
  camera.watch=navigator.geolocation.watchPosition(position=>{
   if(S.camera!==camera)return;
   const at=Number.isFinite(position.timestamp)?Math.min(position.timestamp,Date.now()):Date.now();
-  if(camera.position&&at<camera.position.at)return;
+  const best=camera.position;
+  if(best&&at<best.at)return;
+  // Simpan titik paling akurat dalam 30 detik terakhir, bukan sekadar yang terbaru. GPS tetap
+  // berjalan selama kamera dan pratinjau terbuka, dan di dalam gedung titik terbaru bisa melenceng
+  // ke luar radius padahal pemeriksaan sebelum selfie sudah lolos.
+  if(best&&position.coords.accuracy>best.accuracy&&at-best.at<=30000)return;
   camera.position={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy,at};
   const label=app.querySelector('[data-location]');if(label)label.textContent=gpsLabel(camera.position);
  },error=>{if(error.code===1)camera.denied=true;},{enableHighAccuracy:true,maximumAge:0,timeout:20000});
@@ -331,9 +342,14 @@ async function locateAttempt(){
 }
 function captureFailure(error){
  stopCapture();
- if(error.status===403&&['OUTSIDE_FORBIDDEN','NO_ACTIVE_POINT'].includes(error.details?.code)){
-  S.attempt=null;
-  message('Absen ditolak',error.message,{tone:'bad',back:home});return;
+ const code=error.details?.code;
+ if(error.status===403&&['OUTSIDE_FORBIDDEN','NO_ACTIVE_POINT'].includes(code)){
+  // Di luar radius bisa karena GPS melenceng sesaat. Pegawai boleh mengecek lokasi lagi tanpa
+  // mengulang dari awal; selfie yang sudah dikonfirmasi dikirim ulang dengan kunci yang sama.
+  const again=code==='OUTSIDE_FORBIDDEN'&&S.attempt?S.attempt:null;
+  if(!again)S.attempt=null;
+  const hint=again?`<p class="muted small">Bila Anda sudah berada di area kantor, tunggu sebentar lalu tekan Cek lokasi lagi.${again.photoConfirmed?' Foto tadi dikirim ulang.':''}</p><button class="primary wide" data-action="retry-location">Cek lokasi lagi</button>`:'';
+  message('Absen ditolak',error.message,{tone:'bad',back:home,actions:hint});return;
  }
  failure(error,error.status===0||error.status===503?locateAttempt:null);
 }

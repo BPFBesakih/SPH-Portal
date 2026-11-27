@@ -97,9 +97,14 @@ function afterRender(){
 }
 
 /* ---------- Hari ini ---------- */
+// Jam ditulis 08.00 seperti jam lain di portal; 60 menit ke atas ditulis dalam jam dan menit.
+function durationLabel(minutes){
+ const hours=Math.floor(minutes/60),rest=minutes%60;
+ return hours?`${hours} jam${rest?` ${rest} menit`:''}`:`${rest} menit`;
+}
 function timingLabel(timing){
  if(!timing)return '';
- return timing.late?`Terlambat ${timing.minutes} menit dari jam masuk ${timing.start_time} WITA`:'Tepat waktu';
+ return timing.late?`Terlambat ${durationLabel(timing.minutes)} dari jam masuk ${String(timing.start_time||'').replace(':','.')} WITA`:'Tepat waktu';
 }
 function checkInCell(inAt,timing){
  return time(inAt)+(timing?`<br>${pill(timingLabel(timing),timing.late?'warm':'positive')}`:'');

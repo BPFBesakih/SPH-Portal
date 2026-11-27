@@ -186,7 +186,11 @@ try{
   await hp.getByRole('button',{name:'Mulai absen'}).click();await screen('Siapa yang absen?');
   assert.deepEqual(await hp.locator('[data-lists] .group').allTextContents(),['Unit Pos Uji']);
   await shot(hp,'hp-pilih-nama');
+  const headerHeight=()=>hp.locator('header.top').evaluate(el=>Math.round(el.getBoundingClientRect().height));
+  assert(await hp.locator('#back').isHidden());const plainHeader=await headerHeight();
   await hp.locator('[data-action=choose]',{hasText:'Pekerja Harian Uji'}).click();await screen('Absen sebagai');
+  assert(await hp.locator('#back').isVisible());
+  assert.equal(await headerHeight(),plainHeader,'kepala halaman tidak berubah tinggi saat tombol Kembali tampil');
   await hp.getByRole('button',{name:'Ya, benar'}).click();
   await hp.locator('.status',{hasText:'Belum absen masuk hari ini.'}).waitFor();
   assert.match(await hp.locator('#device-label').textContent(),/HP bersama · HP Pos Uji/);
@@ -206,8 +210,30 @@ try{
   assert.equal(one(db,'SELECT count(*) n FROM attendance_events').n,0);
   await hp.locator('[data-action=shoot]:enabled').click();
   const preview=await hp.getByAltText('Selfie yang akan dikirim').getAttribute('src');
-  await hp.getByRole('button',{name:'Kirim absen'}).click();
+  // Selama pratinjau GPS masih berjalan. Titik baru yang lebih kasar dan jauh (±500 m, 2 km ke timur)
+  // tidak menggantikan titik akurat dalam 30 detik terakhir. Lalu kiriman ditolak sesudah foto
+  // dikonfirmasi (titik absen dipindah sementara 0,01° ke utara): jarak di pesan dihitung dari titik
+  // akurat (±1,1 km, bukan ±2,5 km), dan "Cek lokasi lagi" mengirim ulang foto yang sama dengan
+  // kunci kiriman yang sama, tanpa membuka kamera lagi.
+  await phone.setGeolocation({latitude:-8.37412,longitude:115.47121,accuracy:500});await hp.waitForTimeout(1000);
+  const sentKeys=[];const keepKey=req=>{if(req.url().endsWith('/api/attendance-form/submit'))sentKeys.push(JSON.parse(JSON.parse(req.postData()).payload).client_key);};
+  hp.on('request',keepKey);
+  await hp.evaluate(()=>{window.__resendCameraCalls=0;const devices=navigator.mediaDevices,open=devices.getUserMedia.bind(devices);window.__realGetUserMedia=open;devices.getUserMedia=constraints=>{window.__resendCameraCalls++;return open(constraints);};});
+  run(db,'UPDATE attendance_points SET latitude=latitude+0.01');
+  await hp.getByRole('button',{name:'Kirim absen'}).click();await screen('Absen ditolak');
+  const rejected=await hp.locator('.status.bad').textContent();
+  assert.match(rejected,/di luar radius absen/);
+  const distance=Number(rejected.match(/Lokasi Anda (\d+) m/)?.[1]);assert(distance>1000&&distance<1500,`jarak dari titik akurat: ${rejected}`);
+  assert.match(await hp.locator('#app').innerText(),/Foto tadi dikirim ulang\./);
+  assert.equal(one(db,'SELECT count(*) n FROM attendance_events').n,0);
+  run(db,'UPDATE attendance_points SET latitude=latitude-0.01');
+  await phone.setGeolocation({latitude:-8.37412,longitude:115.45121,accuracy:8});
+  await hp.getByRole('button',{name:'Cek lokasi lagi'}).click();
   await hp.locator('.success .kind',{hasText:'MASUK TERCATAT'}).waitFor({timeout:20000});
+  hp.off('request',keepKey);
+  assert.equal(sentKeys.length,2);assert.equal(sentKeys[0],sentKeys[1]);
+  assert.equal(await hp.evaluate(()=>window.__resendCameraCalls),0);
+  await hp.evaluate(()=>{navigator.mediaDevices.getUserMedia=window.__realGetUserMedia;});
   assert.match(await hp.locator('.success .where').textContent(),/^Kantor Uji \(\d+ m\)$/);
   assert.equal(await hp.locator('.success .who').textContent(),'Pekerja Harian Uji');
   await shot(hp,'hp-tercatat');
