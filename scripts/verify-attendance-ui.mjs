@@ -237,7 +237,7 @@ try{
   await shot(hp,'hp-masuk-pulang');
   await hp.locator('[data-action=kind][data-kind=IN]').click();await screen('Selfie untuk absen MASUK');
   await hp.locator('[data-action=shoot]:not([disabled])').waitFor({timeout:15000});
-  await hp.locator('[data-location]',{hasText:'Lokasi didapat'}).waitFor({timeout:15000});
+  await hp.locator('[data-location]',{hasText:/^Lokasi didapat$/}).waitFor({timeout:15000});
   await hp.locator('[data-action=shoot]').click();
   await screen('Periksa foto absen MASUK');
   assert(await hp.getByAltText('Selfie yang akan dikirim').evaluate(img=>img.decode().then(()=>img.naturalWidth>0)));
@@ -246,7 +246,7 @@ try{
   let locationChecks=0;const countCheck=req=>{if(req.url().endsWith('/api/attendance-form/check-location'))locationChecks++;};
   hp.on('request',countCheck);
   await hp.getByRole('button',{name:'Ambil ulang foto'}).click();
-  await screen('Selfie untuk absen MASUK');assert.match(await hp.locator('[data-location]').textContent(),/^Lokasi didapat/);
+  await screen('Selfie untuk absen MASUK');assert.equal(await hp.locator('[data-location]').textContent(),'Lokasi didapat');
   await hp.locator('[data-action=shoot]:enabled').click();
   await screen('Periksa foto absen MASUK');
   await hp.locator('header').getByRole('button',{name:'Kembali'}).click();

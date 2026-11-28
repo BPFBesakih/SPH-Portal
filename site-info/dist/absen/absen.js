@@ -322,7 +322,7 @@ async function capture(kind,confirmed){
  await locateAttempt();
 }
 const locationPayload=fix=>({latitude:fix.latitude,longitude:fix.longitude,accuracy:fix.accuracy,age_ms:Math.max(0,Date.now()-fix.at)});
-const gpsLabel=fix=>fix?`Lokasi didapat · akurasi ±${Math.round(fix.accuracy)} m`:'Menunggu lokasi terbaru.';
+const gpsLabel=fix=>fix?'Lokasi didapat':'Menunggu lokasi terbaru.';
 async function locateAttempt(){
  stopCapture();
  const attempt=S.attempt;if(!attempt)return;
